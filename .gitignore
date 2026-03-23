@@ -1,6 +1,5 @@
 # Automatically generated directories and files
 /output
-/plugins
 /cache
 /scenario/ic.scn
 /bluesky/resources/grib
@@ -94,3 +93,7 @@ ssd.obj
 *-checkpoint.py
 *-checkpoint.ipynb
 .ropeproject/config.py
+
+# Large meteorological data files
+data/NetCDF/
+data/grib/

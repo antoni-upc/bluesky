@@ -206,8 +206,9 @@ class Windfield():
 
         # Check if RGI functions are present, if so use them for interpolation
         if self.fe is not None and self.fn is not None:
-            vnorth = self.fn(concatenate((alt.reshape(1,-1), lat, lon), axis=0).T)
-            veast  = self.fe(concatenate((alt.reshape(1,-1), lat, lon), axis=0).T)
+            pts = concatenate((alt.reshape(1,-1), lat, lon), axis=0).T
+            vnorth = self.fn(pts)
+            veast  = self.fe(pts)
         else:
             # Check dimension of wind field
             if self.winddim == 0:   # None = no wind

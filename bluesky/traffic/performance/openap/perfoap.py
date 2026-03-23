@@ -198,7 +198,7 @@ class OpenAP(PerfBase):
         self.k[self.phase == ph.DE] = self.k_clean[self.phase == ph.DE]
         self.k[self.phase == ph.NA] = self.k_clean[self.phase == ph.NA]
 
-        rho = aero.vdensity(bs.traf.alt[idx_fixwing])
+        rho = bs.traf.rho[idx_fixwing]
         vtas = bs.traf.tas[idx_fixwing]
         rhovs = 0.5 * rho * vtas ** 2 * self.Sref[idx_fixwing]
         cl = self.mass[idx_fixwing] * aero.g0 / rhovs

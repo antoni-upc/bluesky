@@ -396,6 +396,12 @@ class Traffic(Entity):
         #---------- Atmosphere --------------------------------
         self.p, self.rho, self.Temp = vatmos(self.alt)
 
+        # Allow wind plugin to override with real-world atmospheric data
+        # (e.g. WindGFS injects GFS temperature, pressure, and density here,
+        #  before any performance calculations that depend on these values)
+        if hasattr(self.wind, 'apply_atmosphere'):
+            self.wind.apply_atmosphere()
+
         #---------- ADSB Update -------------------------------
         self.adsb.update()
 
