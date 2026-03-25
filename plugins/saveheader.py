@@ -62,6 +62,7 @@ class SaveHeader(core.Entity):
     def __init__(self):
         super().__init__()
         self.flight_data = []   # list of dicts, one per aircraft per second
+        self.last_phase = {}    # mapping from acid to last known phase
 
     def create(self, n=1):
         super().create(n)
@@ -119,7 +120,12 @@ class SaveHeader(core.Entity):
                 phase_int = int(traf.perf.phase[i])
                 phase_lbl = PHASE_LABEL.get(phase_int, 'NA')
             except Exception:
-                phase_lbl = ''
+                phase_lbl = 'NA'
+
+            if phase_lbl == 'NA':
+                phase_lbl = self.last_phase.get(acid, 'NA')
+            else:
+                self.last_phase[acid] = phase_lbl
 
             # Waypoints from active flight plan
             wp_prev = ''

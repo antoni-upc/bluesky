@@ -7,6 +7,8 @@ import netCDF4 as nc
 from bluesky import stack
 from bluesky.core import timed_function
 from bluesky.traffic.windsim import WindSim
+from bluesky.tools.aero import R
+from scipy.interpolate import RegularGridInterpolator
 
 
 datadir = Path('')
@@ -45,12 +47,24 @@ class WindECMWF(WindSim):
         self.lat1  = 90
         self.lon1  = 180
 
-        # Switch for periodic loading of new GFS data
+        # 3D atmosphere interpolators (same pattern as WindGFS)
+        self.temp_field = None
+        self.pres_field = None
+
+        # Switch for periodic loading of new ECMWF data
         self.autoload = True
+
+        # Current datetime cursor used by periodic updates.
+        # Advanced by 3h on each update instead of querying bs.sim.utc.
+        self._current_dt = None
         
     def fetch_nc(self, year, month, day):
         """
-        Retrieve weather data via the CDS API for multiple pressure levels
+        Retrieve weather data via the CDS API for multiple pressure levels.
+        The downloaded file contains all 3-hourly snapshots for the entire day,
+        so one download per day is sufficient.
+        Temperature ('t') is now also downloaded alongside wind components so
+        the atmosphere (Temp, p, rho) can be overridden for each aircraft.
         """
         
         ymd = "%04d%02d%02d" % (year, month, day)
@@ -65,70 +79,100 @@ class WindECMWF(WindSim):
             c = cdsapi.Client()
             
             # Retrieve data 
-            c.retrieve(
-                'reanalysis-era5-pressure-levels',
-                {
-                    'product_type': 'reanalysis',
-                    'format': 'netcdf',
-                    'pressure_level': [
-                        '100', '125', '150', 
-                        '175', '200', '225',
-                        '250', '300', '350',
-                        '400', '450', '500',
-                        '550', '600', '650', 
-                        '700', '750', '775',
-                        '800'
-                    ],
-                    'year': year,
-                    'month': month,
-                    'day': day,
-                    'time': [
-                        '00:00', '03:00', '06:00',
-                        '09:00', '12:00', '15:00',
-                        '18:00', '21:00',
-                    ],
-                    'variable': [
-                        'u_component_of_wind', 'v_component_of_wind'
-                    ],
-                },
-                fpath)
+            try:
+                c.retrieve(
+                    'reanalysis-era5-pressure-levels',
+                    {
+                        'product_type': 'reanalysis',
+                        'format': 'netcdf',
+                        'pressure_level': [
+                            '100', '125', '150', 
+                            '175', '200', '225',
+                            '250', '300', '350',
+                            '400', '450', '500',
+                            '550', '600', '650', 
+                            '700', '750', '775',
+                            '800'
+                        ],
+                        'year': year,
+                        'month': month,
+                        'day': day,
+                        'time': [
+                            '00:00', '03:00', '06:00',
+                            '09:00', '12:00', '15:00',
+                            '18:00', '21:00',
+                        ],
+                        'variable': [
+                            'u_component_of_wind',
+                            'v_component_of_wind',
+                            'temperature',          # ERA5 short name: 't'
+                        ],
+                    },
+                    fpath)
+            except Exception as e:
+                stack.echo(f"Failed to fetch ECMWF data: {e}")
+                if fpath.is_file():
+                    fpath.unlink()
+                return None
     
         stack.echo("Download completed.")
-        netcdf = nc.Dataset(fpath, mode='r')
+        try:
+            netcdf = nc.Dataset(fpath, mode='r')
+        except Exception as e:
+            stack.echo(f"Failed to open NetCDF file: {e}")
+            return None
     
         return netcdf
 
 
     def extract_wind(self, netcdf, lat0, lon0, lat1, lon1, hour):
+        """Extract wind (u, v), temperature (t) and pressure from ERA5 NetCDF.
 
-        # Load reanalysis data 
-        level = netcdf['level'][:].data
+        Returns a (5, N) array: [lat, lon, alt_m, u, v, temp_K, pres_Pa]
+        """
+        # Load variables
+        level = netcdf['pressure_level'][:].data   # hPa
         lats  = netcdf['latitude'][:].data
         lons  = netcdf['longitude'][:].data
-        vxs_  = netcdf['u'][:].squeeze().data
-        vys_  = netcdf['v'][:].squeeze().data
+        
+        # Time index (0-7 for 3-hourly snapshots in ERA5 day file)
+        hour_idx = round(hour / 3)
+
+        vxs_  = netcdf['u'][hour_idx, :, :, :].data   # (level, lat, lon)
+        vys_  = netcdf['v'][hour_idx, :, :, :].data
+
+        # Temperature [K] – variable name in ERA5 CDS netCDF is 't'
+        try:
+            ts_ = netcdf['t'][hour_idx, :, :, :].data
+        except Exception:
+            ts_ = np.full_like(vxs_, np.nan)
         
         # Close data for performance
         netcdf.close()   
         
-        # Transform pressure levels to altitude
-        p = level * 100
-        h = (1 - (p / 101325.0)**0.190264) * 44330.76923    # in meters
-        
-        # Set hour to rounded hour
-        hour = round(hour/3)
-        
-        # Construct 2D array of all data points
-        lats_ = np.tile(np.repeat(lats, len(lons)), len(level))
-        lons_ = np.tile(lons, len(lats)*len(level))
-        alts_ = np.repeat(h, len(lats)*len(lons))       
-        vxs_  = vxs_[hour,:,:,:].flatten()
-        vys_  = vys_[hour,:,:,:].flatten()
+        # Convert pressure levels: hPa → Pa; compute geopotential altitude [m] per level
+        p_pa = level * 100.0
+        h_m  = (1.0 - (p_pa / 101325.0) ** 0.190264) * 44330.76923   # metres
+
+        # Expand all fields into flat [N] arrays arranged as (level, lat, lon) → flat
+        nlev  = len(level)
+        nlat  = len(lats)
+        nlon  = len(lons)
+
+        # Build coordinate arrays
+        lats_ = np.tile(np.repeat(lats, nlon), nlev)        # (nlev*nlat*nlon,)
+        lons_ = np.tile(lons, nlat * nlev)
+        alts_ = np.repeat(h_m, nlat * nlon)
+        ps_   = np.repeat(p_pa, nlat * nlon)
+
+        vxs_  = vxs_.flatten()
+        vys_  = vys_.flatten()
+        ts_   = ts_.flatten()
             
-        # Convert longitudes
-        lons_ = (lons_ + 180) % 360.0 - 180.0     # convert range from 0~360 to -180~180
-        
-        # Reduce area based on lat lon limits
+        # Convert longitudes: 0→360  →  -180→180
+        lons_ = (lons_ + 180.0) % 360.0 - 180.0
+
+        # Spatial bounding box
         lat0_ = min(lat0, lat1)
         lat1_ = max(lat0, lat1)
         lon0_ = min(lon0, lon1)
@@ -136,74 +180,147 @@ class WindECMWF(WindSim):
 
         mask = (lats_ >= lat0_) & (lats_ <= lat1_) & (lons_ >= lon0_) & (lons_ <= lon1_)
 
-        data = np.array([lats_[mask], lons_[mask], alts_[mask], vxs_[mask], vys_[mask]])
+        # 7-row array: lat, lon, alt, u, v, temp_K, pres_Pa
+        data = np.array([
+            lats_[mask], lons_[mask], alts_[mask],
+            vxs_[mask],  vys_[mask],
+            ts_[mask],   ps_[mask],
+        ])
 
         return data
+
+    def _apply_wind(self, year, month, day, hour):
+        """Load (or reuse) the NetCDF for the given day, apply wind AND atmosphere
+        fields for the specified hour.  Returns a (success, message) tuple."""
+
+        txt = "Loading wind field for %04d-%02d-%02d %02d:00..." % (year, month, day, hour)
+        stack.echo(txt)
+
+        netcdf = self.fetch_nc(year, month, day)
+
+        if netcdf is None or self.lat0 == self.lat1 or self.lon0 == self.lon1:
+            return False, "Wind data non-existent in area [%d, %d], [%d, %d]. " \
+                % (self.lat0, self.lat1, self.lon0, self.lon1) \
+                + "time: %04d-%02d-%02d %02d:00" \
+                % (year, month, day, hour)
+
+        # First clear existing wind field
+        self.clear()
+        self.temp_field = None
+        self.pres_field = None
+
+        data = self.extract_wind(netcdf, self.lat0, self.lon0, self.lat1, self.lon1, hour).T
+
+        data = data[np.lexsort((data[:, 2], data[:, 1], data[:, 0]))]   # Sort by lat, lon, alt
+
+        lats_uniq = np.unique(data[:, 0])
+        lons_uniq = np.unique(data[:, 1])
+        reshapefactor = len(lats_uniq) * len(lons_uniq)
+
+        lat     = np.reshape(data[:, 0], (reshapefactor, -1)).T[0, :]
+        lon     = np.reshape(data[:, 1], (reshapefactor, -1)).T[0, :]
+        veast   = np.reshape(data[:, 3], (reshapefactor, -1)).T
+        vnorth  = np.reshape(data[:, 4], (reshapefactor, -1)).T
+        windalt = np.reshape(data[:, 2], (reshapefactor, -1)).T[:, 0]
+
+        temp_data = np.reshape(data[:, 5], (reshapefactor, -1)).T   # shape (nlev, nlat*nlon)
+        pres_data = np.reshape(data[:, 6], (reshapefactor, -1)).T
+
+        self.addpointvne(lat, lon, vnorth, veast, windalt)
+
+        # Build 3D atmosphere interpolators matching the WindGFS pattern
+        try:
+            t_values = temp_data.reshape((len(windalt), len(lats_uniq), len(lons_uniq)))
+            p_values = pres_data.reshape((len(windalt), len(lats_uniq), len(lons_uniq)))
+
+            self.temp_field = RegularGridInterpolator(
+                (windalt, lats_uniq, lons_uniq), t_values,
+                bounds_error=False, fill_value=None)
+            self.pres_field = RegularGridInterpolator(
+                (windalt, lats_uniq, lons_uniq), p_values,
+                bounds_error=False, fill_value=None)
+        except Exception as e:
+            stack.echo(f"Warning: Failed to build atmosphere interpolators: {e}")
+            self.temp_field = None
+            self.pres_field = None
+
+        return True, "Wind and Atmosphere fields updated in area [%d, %d], [%d, %d]. " \
+            % (self.lat0, self.lat1, self.lon0, self.lon1) \
+            + "time: %04d-%02d-%02d %02d:00" \
+            % (year, month, day, hour)
 
     @stack.command(name='WINDECMWF')
     def loadwind(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon',
                year: int=None, month: int=None, day: int=None, hour: int=None):
-        ''' WINDECMWF: Load a windfield directly from NOAA database.
+        ''' WINDECMWF: Load a windfield directly from ECMWF/ERA5 database.
 
             Arguments:
             - lat0, lon0, lat1, lon1 [deg]: Bounding box in which to generate wind field
             - year, month, day, hour: Date and time of wind data (optional, will use
               current simulation UTC if not specified).
         '''
-        self.lat0, self.lon0, self.lat1, self.lon1 =  min(lat0, lat1), \
+        self.lat0, self.lon0, self.lat1, self.lon1 = min(lat0, lat1), \
                               min(lon0, lon1), max(lat0, lat1), max(lon0, lon1)
-        self.year = year or bs.sim.utc.year
-        self.month = month or bs.sim.utc.month
-        self.day = day or bs.sim.utc.day
-        self.hour = hour or bs.sim.utc.hour
 
-        # round hour to 3 hours
-        self.hour  = round(self.hour/3) * 3
-        if self.hour == 24:
-            ymd0 = "%04d%02d%02d" % (self.year, self.month, self.day)
-            ymd1 = (datetime.datetime.strptime(ymd0, '%Y%m%d') + 
-                    datetime.timedelta(days=1))
-            self.year  = ymd1.year
-            self.month = ymd1.month
-            self.day   = ymd1.day
-            self.hour  = 0
+        # Determine the requested base datetime
+        req_year  = year  or bs.sim.utc.year
+        req_month = month or bs.sim.utc.month
+        req_day   = day   or bs.sim.utc.day
+        req_hour  = hour if hour is not None else bs.sim.utc.hour
 
-        txt = "Loading wind field for %s-%s-%s..." % (self.year, self.month, self.day)
-        stack.echo("%s" % txt)
+        # Round to the nearest 3-hour slot
+        req_hour = round(req_hour / 3) * 3
 
-        netcdf = self.fetch_nc(self.year, self.month, self.day)
+        base_dt = datetime.datetime(req_year, req_month, req_day, 0, 0) + \
+                  datetime.timedelta(hours=req_hour)
 
-        if netcdf is None or self.lat0 == self.lat1 or self.lon0 == self.lon1:
-            return False, "Wind data non-existend in area [%d, %d], [%d, %d]. " \
-                % (self.lat0, self.lat1, self.lon0, self.lon1) \
-                + "time: %04d-%02d-%02d" \
-                % (self.year, self.month, self.day)
+        # Rounding to hour 24 → roll over to next day at 00:00
+        if req_hour == 24:
+            base_dt = datetime.datetime(req_year, req_month, req_day) + \
+                      datetime.timedelta(days=1)
 
-        # first clear exisiting wind field
-        self.clear()
+        # Store the cursor so the periodic update knows where to start
+        self._current_dt = base_dt
 
-        # add new wind field
-        data = self.extract_wind(netcdf, self.lat0, self.lon0, self.lat1, self.lon1, self.hour).T
+        # Pre-fetch the NetCDF for the starting day (no-op if already on disk)
+        self.fetch_nc(base_dt.year, base_dt.month, base_dt.day)
 
-        data = data[np.lexsort((data[:, 2], data[:, 1], data[:, 0]))] # Sort by lat, lon, alt
-        reshapefactor = int((1 + (max(self.lat0, self.lat1) - min(self.lat0, self.lat1))*4) * \
-                            (1 + (max(self.lon0, self.lon1) - min(self.lon0, self.lon1))*4))
-
-        lat     = np.reshape(data[:,0], (reshapefactor, -1)).T[0,:]
-        lon     = np.reshape(data[:,1], (reshapefactor, -1)).T[0,:]
-        veast   = np.reshape(data[:,3], (reshapefactor, -1)).T
-        vnorth  = np.reshape(data[:,4], (reshapefactor, -1)).T
-        windalt = np.reshape(data[:,2], (reshapefactor, -1)).T[:,0]
-
-        self.addpointvne(lat, lon, vnorth, veast, windalt)        
-
-        return True, "Wind field updated in area [%d, %d], [%d, %d]. " \
-            % (self.lat0, self.lat1, self.lon0, self.lon1) \
-            + "time: %04d-%02d-%02d" \
-            % (self.year, self.month, self.day)
+        ok, msg = self._apply_wind(base_dt.year, base_dt.month, base_dt.day, base_dt.hour)
+        return ok, msg
 
     @timed_function(name='WINDECMWF_update', dt=3600)
     def update(self):
-        if self.autoload:
-            _, txt = self.loadwind(self.lat0, self.lon0, self.lat1, self.lon1)
-            stack.echo("%s" % txt)
+        if not self.autoload or self._current_dt is None:
+            return
+
+        # Advance the time cursor by 3 hours (ERA5 data resolution)
+        self._current_dt += datetime.timedelta(hours=3)
+
+        dt = self._current_dt
+        _, txt = self._apply_wind(dt.year, dt.month, dt.day, dt.hour)
+        stack.echo("%s" % txt)
+
+    def apply_atmosphere(self):
+        ''' Override ISA atmosphere with ERA5/ECMWF data.
+            Called synchronously by Traffic.update() right after vatmos(),
+            before any performance calculations.
+        '''
+        if self.temp_field is None or self.pres_field is None or bs.traf.ntraf == 0:
+            return
+
+        # Coordinate array [alt_m, lat, lon] for all aircraft
+        alts   = np.maximum(0, bs.traf.alt)
+        coords = np.vstack((alts, bs.traf.lat, bs.traf.lon)).T
+
+        try:
+            new_t = self.temp_field(coords)
+            new_p = self.pres_field(coords)
+
+            # Only override where the interpolated values are valid (within data bounds)
+            valid = ~np.isnan(new_t) & ~np.isnan(new_p)
+            if np.any(valid):
+                bs.traf.Temp[valid] = new_t[valid]
+                bs.traf.p[valid]    = new_p[valid]
+                bs.traf.rho[valid]  = new_p[valid] / (R * new_t[valid])
+        except Exception:
+            pass
