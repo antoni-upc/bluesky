@@ -281,6 +281,19 @@ class SaveHeader(core.Entity):
         except Exception as e:
             return False, f'Failed to save Excel file: {e}'
 
+        # Phase-based KML sampling intervals [simulated seconds]
+        # GD=ground, IC=initial climb (takeoff), CL=climb,
+        # CR=cruise, DE=descent, AP=approach, NA=unknown
+        KML_PHASE_DT = {
+            'GD': 3,
+            'IC': 3,
+            'CL': 7,
+            'CR': 30,
+            'DE': 15,
+            'AP': 7,
+            'NA': 30,   # fallback
+        }
+
         # Generate KML
         kml_path = os.path.join(out_dir, f'{filename}.kml')
         try:
@@ -290,24 +303,55 @@ class SaveHeader(core.Entity):
                 '  <Document>',
                 f'    <name>{filename}</name>'
             ]
-            
+
             for acid, group in df.groupby('FlightID'):
-                kml_lines.append(f'    <Folder><name>{acid} Route</name>')
-                
+
+                # ── "Trajectory" LineString Placemark ────────────────────────
+                # Lateral_Plot.py searches for a segment named "Trajectory"
+                # with a LineString geometry to draw the route and auto-zoom.
+                coord_parts = []
                 for _, row in group.iterrows():
-                    lon = row['Lon[deg]']
-                    lat = row['Lat[deg]']
+                    lon   = row['Lon[deg]']
+                    lat   = row['Lat[deg]']
                     alt_m = float(row['h[ft]']) * 0.3048
-                    sim_t = int(row['t[s]'])
-                    
+                    coord_parts.append(f'{lon},{lat},{alt_m}')
+                coord_str = ' '.join(coord_parts)
+
+                kml_lines.append('    <Placemark>')
+                kml_lines.append('      <name>Trajectory</name>')
+                kml_lines.append('      <LineString>')
+                kml_lines.append('        <altitudeMode>absolute</altitudeMode>')
+                kml_lines.append(f'        <coordinates>{coord_str}</coordinates>')
+                kml_lines.append('      </LineString>')
+                kml_lines.append('    </Placemark>')
+
+                # ── Per-aircraft phase-sampled Point folder ───────────────────
+                kml_lines.append(f'    <Folder><name>{acid} Route</name>')
+
+                last_kml_t = -9999.0   # force first point always included
+
+                for _, row in group.iterrows():
+                    sim_t   = float(row['t[s]'])
+                    phase   = str(row.get('Phase', 'NA'))
+                    dt_min  = KML_PHASE_DT.get(phase, 30)
+
+                    # Skip this row if not enough simulated time has elapsed
+                    if sim_t - last_kml_t < dt_min:
+                        continue
+                    last_kml_t = sim_t
+
+                    lon   = row['Lon[deg]']
+                    lat   = row['Lat[deg]']
+                    alt_m = float(row['h[ft]']) * 0.3048
+
                     kml_lines.append('      <Placemark>')
-                    kml_lines.append(f'        <name>{sim_t}s</name>') # Label the dot with the time
+                    kml_lines.append(f'        <name>{int(sim_t)}s [{phase}]</name>')
                     kml_lines.append('        <Point>')
                     kml_lines.append('          <altitudeMode>absolute</altitudeMode>')
                     kml_lines.append(f'          <coordinates>{lon},{lat},{alt_m}</coordinates>')
                     kml_lines.append('        </Point>')
                     kml_lines.append('      </Placemark>')
-                
+
                 kml_lines.append('    </Folder>')
                 
             kml_lines.append('  </Document>')
