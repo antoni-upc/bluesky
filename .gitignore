@@ -97,5 +97,6 @@ ssd.obj
 .ropeproject/config.py
 
 # Large meteorological data files
-data/NetCDF/
-data/grib/
+# Check before final merge
+data
+

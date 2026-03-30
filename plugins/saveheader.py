@@ -282,15 +282,19 @@ class SaveHeader(core.Entity):
             return False, f'Failed to save Excel file: {e}'
 
         # Phase-based KML sampling intervals [simulated seconds]
-        # GD=ground, IC=initial climb (takeoff), CL=climb,
-        # CR=cruise, DE=descent, AP=approach, NA=unknown
+        #   GD = ground (taxi turns)
+        #   IC = initial climb / takeoff SID (tight turns)
+        #   CL = climb
+        #   CR = cruise (mostly straight)
+        #   DE = descent / STAR (some turns)
+        #   AP = approach / final (many turns, precision needed)
         KML_PHASE_DT = {
             'GD': 3,
             'IC': 3,
-            'CL': 7,
+            'CL': 3,
             'CR': 30,
-            'DE': 15,
-            'AP': 7,
+            'DE': 7,
+            'AP': 3,
             'NA': 30,   # fallback
         }
 
@@ -309,8 +313,17 @@ class SaveHeader(core.Entity):
                 # ── "Trajectory" LineString Placemark ────────────────────────
                 # Lateral_Plot.py searches for a segment named "Trajectory"
                 # with a LineString geometry to draw the route and auto-zoom.
+                # Phase-based sampling keeps the line smooth where turns are
+                # frequent (takeoff, climb, approach) and sparse in cruise.
                 coord_parts = []
+                last_traj_t = -9999.0   # force first point always included
                 for _, row in group.iterrows():
+                    sim_t  = float(row['t[s]'])
+                    phase  = str(row.get('Phase', 'NA'))
+                    dt_min = KML_PHASE_DT.get(phase, 30)
+                    if sim_t - last_traj_t < dt_min:
+                        continue
+                    last_traj_t = sim_t
                     lon   = row['Lon[deg]']
                     lat   = row['Lat[deg]']
                     alt_m = float(row['h[ft]']) * 0.3048
