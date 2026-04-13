@@ -106,6 +106,7 @@ class WindECMWF(WindSim):
                             'u_component_of_wind',
                             'v_component_of_wind',
                             'temperature',          # ERA5 short name: 't'
+                            'geopotential',         # ERA5 short name: 'z' [m²/s²] – used for altitude
                         ],
                     },
                     fpath)
@@ -146,13 +147,28 @@ class WindECMWF(WindSim):
             ts_ = netcdf['t'][hour_idx, :, :, :].data
         except Exception:
             ts_ = np.full_like(vxs_, np.nan)
-        
+
+        # Geopotential [m²/s²] – kept for potential future use (e.g. Approach B remapping)
+        # but NO LONGER used to assign the altitude axis of the RGI.
+        # Reason: averaging z_ over (lat, lon) to get one altitude per level collapses
+        # the spatial dimension and makes all aircraft at the same FL see the same T.
+        # See implementation plan notes for full explanation.
+        try:
+            z_ = netcdf['z'][hour_idx, :, :, :].data   # (level, lat, lon)
+        except Exception:
+            z_ = None  # not available in all cached files; ignored below
+
         # Close data for performance
-        netcdf.close()   
-        
-        # Convert pressure levels: hPa → Pa; compute geopotential altitude [m] per level
+        netcdf.close()
+
+        # Convert pressure levels hPa → Pa.
+        # Altitude axis: ISA pressure-altitude (hp) — the altitude at which the
+        # standard atmosphere has the same pressure as each level.
+        # hp is unique per level by definition and requires no spatial averaging,
+        # so the lat/lon axes of the RGI retain the full spatial resolution of T.
+        # apply_atmosphere() must query with the same hp axis for consistency.
         p_pa = level * 100.0
-        h_m  = (1.0 - (p_pa / 101325.0) ** 0.190264) * 44330.76923   # metres
+        h_m = (1.0 - (p_pa / 101325.0) ** 0.190264) * 44330.76923   # ISA hp [m]
 
         # Expand all fields into flat [N] arrays arranged as (level, lat, lon) → flat
         nlev  = len(level)
@@ -226,18 +242,29 @@ class WindECMWF(WindSim):
         temp_data = np.reshape(data[:, 5], (reshapefactor, -1)).T   # shape (nlev, nlat*nlon)
         pres_data = np.reshape(data[:, 6], (reshapefactor, -1)).T
 
-        self.addpointvne(lat, lon, vnorth, veast, windalt)
+        # Append a high-altitude cap layer at 25 000 m mirroring the topmost data level.
+        # WindField's internal RGI uses fill_value=0.0, so queries above windalt[-1]
+        # would return zero wind. The cap ensures interp1d clamping takes effect
+        # before the RGI boundary is reached.
+        CAP_ALT = 25000.0
+        windalt_cap = np.append(windalt, CAP_ALT)
+        vnorth_cap  = np.vstack([vnorth,  vnorth[-1:, :]])
+        veast_cap   = np.vstack([veast,   veast[-1:, :]])
+        temp_cap    = np.vstack([temp_data, temp_data[-1:, :]])
+        pres_cap    = np.vstack([pres_data, pres_data[-1:, :]])
+
+        self.addpointvne(lat, lon, vnorth_cap, veast_cap, windalt_cap)
 
         # Build 3D atmosphere interpolators matching the WindGFS pattern
         try:
-            t_values = temp_data.reshape((len(windalt), len(lats_uniq), len(lons_uniq)))
-            p_values = pres_data.reshape((len(windalt), len(lats_uniq), len(lons_uniq)))
+            t_values = temp_cap.reshape((len(windalt_cap), len(lats_uniq), len(lons_uniq)))
+            p_values = pres_cap.reshape((len(windalt_cap), len(lats_uniq), len(lons_uniq)))
 
             self.temp_field = RegularGridInterpolator(
-                (windalt, lats_uniq, lons_uniq), t_values,
+                (windalt_cap, lats_uniq, lons_uniq), t_values,
                 bounds_error=False, fill_value=None)
             self.pres_field = RegularGridInterpolator(
-                (windalt, lats_uniq, lons_uniq), p_values,
+                (windalt_cap, lats_uniq, lons_uniq), p_values,
                 bounds_error=False, fill_value=None)
         except Exception as e:
             stack.echo(f"Warning: Failed to build atmosphere interpolators: {e}")
@@ -308,9 +335,16 @@ class WindECMWF(WindSim):
         if self.temp_field is None or self.pres_field is None or bs.traf.ntraf == 0:
             return
 
-        # Coordinate array [alt_m, lat, lon] for all aircraft
-        alts   = np.maximum(0, bs.traf.alt)
-        coords = np.vstack((alts, bs.traf.lat, bs.traf.lon)).T
+        # Coordinate array for interpolation.
+        # Use ISA pressure-altitude (hp) — the same axis used in extract_wind() —
+        # rather than geometric altitude. This ensures that the lat/lon dimensions
+        # of the RGI field are the only source of spatial variation, correctly
+        # returning different temperatures at the same FL for different positions.
+        # vatmos() has already computed bs.traf.p, so we derive hp from that.
+        p_now = np.maximum(1.0, bs.traf.p)          # Pa; guard against zero
+        hp_m  = (1.0 - (p_now / 101325.0) ** 0.190264) * 44330.76923
+        hp_m  = np.maximum(0.0, hp_m)
+        coords = np.vstack((hp_m, bs.traf.lat, bs.traf.lon)).T
 
         try:
             new_t = self.temp_field(coords)

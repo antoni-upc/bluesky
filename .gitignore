@@ -99,4 +99,8 @@ ssd.obj
 # Large meteorological data files
 # Check before final merge
 data
+plugins/windecac.py
+plugins/atmoscorrect.py
+analysis
+
 

@@ -6,7 +6,7 @@ Records per-aircraft state data every second in the exact column format:
     CAS[kt], mach[-], GS[kt], FlightID, Temp[degC], Lat[deg], Lon[deg],
     heading[deg], track[deg], WP_prev, WP_next, hp[ft], Thrust[daN],
     Tidle[daN], Tmax[daN], SB[%], mass[kg], FF[kg/h], phi[º], FPA_a[º],
-    nz[g], Ws[kt], Wx[kt]
+    nz[g], Ws[kt], Wx[kt], P[Pa]
 
 Use command SAVEHEADER [filename] to export the collected data.
 """
@@ -169,7 +169,7 @@ class SaveHeader(core.Entity):
                 except Exception: pass
 
             ff_kgh = ''
-            try: ff_kgh = round(float(traf.perf.ff[i]) * 3600.0, 2) 
+            try: ff_kgh = round(float(traf.perf.fuelflow[i]) * 3600.0, 2) 
             except Exception: pass
 
             phi_deg = ''
@@ -207,6 +207,13 @@ class SaveHeader(core.Entity):
                 wx_kt = round(wx * MPS_TO_KT, 2)
             except Exception: pass
 
+            # Pressure [Pa] – overridden by meteo plugins (WINDECMWF / WINDGFS / WINDECAC)
+            # via apply_atmosphere(); falls back to the ISA value stored in traf.p
+            p_pa = ''
+            try:
+                p_pa = round(float(traf.p[i]), 2)
+            except Exception: pass
+
             self.flight_data.append({
                 'Phase':          phase_lbl,
                 'UTC':            utc_now,
@@ -220,7 +227,7 @@ class SaveHeader(core.Entity):
                 'mach[-]':        round(mach, 4),
                 'GS[kt]':         round(gs_kt, 2),
                 'FlightID':       acid,
-                'Temp[degC]':     round(temp_c, 2),
+                'Temp[degC]':     round(temp_c, 10),
                 'Lat[deg]':       lat,
                 'Lon[deg]':       lon,
                 'heading[deg]':   round(hdg, 2),
@@ -239,6 +246,7 @@ class SaveHeader(core.Entity):
                 'nz[g]':          nz_g,
                 'Ws[kt]':         ws_kt,
                 'Wx[kt]':         wx_kt,
+                'P[Pa]':          p_pa,
             })
 
     # ------------------------------------------------------------------ #

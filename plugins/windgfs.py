@@ -108,7 +108,16 @@ class WindGFS(WindSim):
         
         # Extract temperature for Atmosphere simulation
         grb_t = grb.select(shortName="t", typeOfLevel=['isobaricInhPa'])
-        
+
+        # NOTE: geopotential is intentionally NOT extracted here.
+        # Previously we used mean(geopotential)/g0 as the altitude axis, which
+        # collapsed the spatial dimension and caused all aircraft at the same FL
+        # to receive the same temperature regardless of lat/lon position.
+        # Instead we index by ISA pressure-altitude (hp): a unique, monotonic
+        # value per pressure level that preserves the lat/lon spatial structure
+        # of the temperature field. apply_atmosphere() queries with the same hp
+        # axis so the interpolation is fully consistent.
+
         # Ensure we have matching levels
         levels_wind = [g.level for g in grb_wind_u]
         levels_t = {g.level: g for g in grb_t}
@@ -124,7 +133,7 @@ class WindGFS(WindSim):
         for grbu, grbv in zip(grb_wind_u, grb_wind_v):
             level = grbu.level
 
-            if level < 100 or level not in levels_t:  # lesss than 100 hPa, above about 54 k ft, or missing T
+            if level < 100 or level not in levels_t:  # less than 100 hPa, above about 54 k ft, or missing T
                 continue
             else:
                 vxs_ = grbu.values
@@ -132,8 +141,12 @@ class WindGFS(WindSim):
                 ts_ = levels_t[level].values
 
                 p = level * 100  # Pressure in Pa
-                # Approximate geopotential height based on ISA (similarly done in old parsing)
-                h = (1 - (p / 101325.0)**0.190264) * 44330.76923    # in meters
+
+                # ISA pressure-altitude: the altitude at which ISA pressure equals p.
+                # Using this instead of mean geopotential ensures each pressure level
+                # maps to a unique, spatially-uniform altitude on the RGI axis, while
+                # the lat/lon axes retain full spatial resolution of T and p.
+                h = (1.0 - (p / 101325.0) ** 0.190264) * 44330.76923   # metres (ISA hp)
 
                 lats_ = grbu.latlons()[0].flatten()
                 lons_ = grbu.latlons()[1].flatten()
@@ -227,25 +240,37 @@ class WindGFS(WindSim):
         veast   = np.reshape(data[:,3], (reshapefactor, -1)).T
         vnorth  = np.reshape(data[:,4], (reshapefactor, -1)).T
         windalt = np.reshape(data[:,2], (reshapefactor, -1)).T[:,0]
-        
+
         temp_data = np.reshape(data[:,5], (reshapefactor, -1)).T
         pres_data = np.reshape(data[:,6], (reshapefactor, -1)).T
 
-        self.addpointvne(lat, lon, vnorth, veast, windalt)
+        # Append a high-altitude cap layer at 25 000 m mirroring the topmost data level.
+        # WindField's internal RGI uses fill_value=0.0, so queries above windalt[-1]
+        # would return zero wind. The cap ensures interp1d clamping takes effect
+        # before the RGI boundary is reached.
+        CAP_ALT = 25000.0
+        windalt_cap = np.append(windalt, CAP_ALT)
+        vnorth_cap  = np.vstack([vnorth,  vnorth[-1:, :]])
+        veast_cap   = np.vstack([veast,   veast[-1:, :]])
+        temp_cap    = np.vstack([temp_data, temp_data[-1:, :]])
+        pres_cap    = np.vstack([pres_data, pres_data[-1:, :]])
+
+        self.addpointvne(lat, lon, vnorth_cap, veast_cap, windalt_cap)
 
         # Build 3D Atmospheric interpolators
         try:
-            # We assume regular grid from pygrib output
             lats_uniq = np.unique(lat)
             lons_uniq = np.unique(lon)
-            
-            # Reshape temp & pres back into 3D structure: (len(windalt), len(lats_uniq), len(lons_uniq))
-            t_values = temp_data.reshape((len(windalt), len(lats_uniq), len(lons_uniq)))
-            p_values = pres_data.reshape((len(windalt), len(lats_uniq), len(lons_uniq)))
-            
-            # Create interpolators (they match the regular grid built by windsim later)
-            self.temp_field = RegularGridInterpolator((windalt, lats_uniq, lons_uniq), t_values, bounds_error=False, fill_value=None)
-            self.pres_field = RegularGridInterpolator((windalt, lats_uniq, lons_uniq), p_values, bounds_error=False, fill_value=None)
+
+            t_values = temp_cap.reshape((len(windalt_cap), len(lats_uniq), len(lons_uniq)))
+            p_values = pres_cap.reshape((len(windalt_cap), len(lats_uniq), len(lons_uniq)))
+
+            self.temp_field = RegularGridInterpolator(
+                (windalt_cap, lats_uniq, lons_uniq), t_values,
+                bounds_error=False, fill_value=None)
+            self.pres_field = RegularGridInterpolator(
+                (windalt_cap, lats_uniq, lons_uniq), p_values,
+                bounds_error=False, fill_value=None)
         except Exception as e:
             print(f"Failed to build Atmosphere interpolators: {e}")
             self.temp_field = None
@@ -269,9 +294,16 @@ class WindGFS(WindSim):
         if self.temp_field is None or self.pres_field is None or bs.traf.ntraf == 0:
             return
 
-        # Prepare coordinate grid [alt, lat, lon] for all aircraft
-        alts = np.maximum(0, bs.traf.alt)
-        coords = np.vstack((alts, bs.traf.lat, bs.traf.lon)).T
+        # Query the interpolator using ISA pressure-altitude (hp), which is the same
+        # axis used when building temp_field/pres_field in extract_wind().
+        # This ensures that two aircraft at the same FL but different lat/lon
+        # correctly sample different temperatures from the GFS field.
+        # vatmos() has already run this step and stored p in bs.traf.p, so we
+        # re-derive hp from that pressure using the inverse ISA formula.
+        p_now = np.maximum(1.0, bs.traf.p)          # avoid log(0); Pa
+        hp_m  = (1.0 - (p_now / 101325.0) ** 0.190264) * 44330.76923
+        hp_m  = np.maximum(0.0, hp_m)
+        coords = np.vstack((hp_m, bs.traf.lat, bs.traf.lon)).T
 
         try:
             new_t = self.temp_field(coords)
@@ -284,4 +316,4 @@ class WindGFS(WindSim):
                 bs.traf.p[valid]    = new_p[valid]
                 bs.traf.rho[valid]  = new_p[valid] / (R * new_t[valid])
         except Exception:
-            pass
+            pass
