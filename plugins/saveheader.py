@@ -151,9 +151,9 @@ class SaveHeader(core.Entity):
                 except Exception: pass
 
             tmax_dan = ''
-            try: tmax_dan = round(float(traf.perf.thr_max[i]) / 10.0, 2)
+            try: tmax_dan = round(float(traf.perf.max_thrust[i]) / 10.0, 2)
             except Exception:
-                try: tmax_dan = round(float(traf.perf.Tmax[i]) / 10.0, 2)
+                try: tmax_dan = round(float(traf.perf.max_thrust[i]) / 10.0, 2)
                 except Exception: pass
 
             sb_pct = ''
@@ -162,16 +162,17 @@ class SaveHeader(core.Entity):
                 try: sb_pct = round(float(traf.perf.sb[i]) * 100.0, 1)
                 except Exception: pass
 
+            ff_kgh = ''
+            try: ff_kgh = round(float(traf.perf.fuelflow[i]) * 3600.0, 2) 
+            except Exception: pass
+
             mass_kg = ''
             try: mass_kg = round(float(traf.mass[i]), 1)
             except Exception:
                 try: mass_kg = round(float(traf.perf.mass[i]), 1)
                 except Exception: pass
 
-            ff_kgh = ''
-            try: ff_kgh = round(float(traf.perf.fuelflow[i]) * 3600.0, 2) 
-            except Exception: pass
-
+            
             phi_deg = ''
             try: phi_deg = round(math.degrees(float(traf.phi[i])), 2)
             except Exception:
