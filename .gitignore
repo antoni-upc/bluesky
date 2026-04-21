@@ -1,6 +1,9 @@
 # Automatically generated directories and files
 /output
-/plugins
+/plugins/atmoscorrect.py
+/plugins/saveheader.py
+/plugins/windecac.py
+
 /cache
 /scenario/ic.scn
 /bluesky/resources/grib
@@ -15,6 +18,7 @@
 
 # virtual environment
 venv
+.venv
 
 # PyBuilder
 target/
@@ -94,3 +98,10 @@ ssd.obj
 *-checkpoint.py
 *-checkpoint.ipynb
 .ropeproject/config.py
+
+# Data
+analysis
+data
+
+# Performance (per assegurar q funciona amb pyBada he borrat fitxers de BADA a performance)
+bluesky/traffic/performance/bada/
