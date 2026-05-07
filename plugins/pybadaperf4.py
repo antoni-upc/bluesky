@@ -252,6 +252,10 @@ class PyBada4(PerfBase):
 
                 self.thrust[i] = T
 
+                # throttle normalitzat: 0 = idle, 1 = max
+                dT = T_max - T_idle
+                bs.traf.thr[i] = float(np.clip((T - T_idle) / dT, 0.0, 1.0)) if dT > 0 else 0.0
+
                 # Energy share factor & ROCD 
                 ESF = ac.flightEnvelope.esf(
                     h=alt_m, deltaTemp=deltaTemp,

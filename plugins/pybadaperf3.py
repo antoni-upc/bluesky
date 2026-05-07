@@ -189,7 +189,10 @@ class PyBada3(PerfBase):
 
                 self.thrust[i] = T
 
-                # ── Energy share factor & ROCD (diagnostic) ────────
+                # throttle normalitzat: 0 = idle, 1 = max
+                dT = T_max - T_idle
+                bs.traf.thr[i] = float(np.clip((T - T_idle) / dT, 0.0, 1.0)) if dT > 0 else 0.0
+
                 ESF = ac.esf(
                     h=alt_m, deltaTemp=deltaTemp,
                     flightEvolution="constCAS",
