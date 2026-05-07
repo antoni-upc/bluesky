@@ -41,7 +41,7 @@ class PyBada3(PerfBase):
             self.thr_idle   = np.array([])    # LIDL thrust  
             self.thr_max    = np.array([])    # MCMB thrust  
             self.lift       = np.array([])    # Lift force   
-            self.vs_bada    = np.array([])    # BADA ROCD    (diagnostic)
+            self.vs_bada    = np.array([])    # BADA ROCD   
             self.vmin       = np.array([])    # Min CAS 
             self.vmax       = np.array([])    # Max CAS 
             self.vstall     = np.array([])    # Stall CAS   
@@ -220,7 +220,6 @@ class PyBada3(PerfBase):
                 self.vstall[i] = vstall
 
             except Exception as exc:
-                # On any BADA calculation error, zero out outputs gracefully
                 self.thrust[i]   = 0.0
                 self.drag[i]     = 0.0
                 self.fuelflow[i] = 0.0
