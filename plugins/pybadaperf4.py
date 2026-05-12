@@ -70,6 +70,10 @@ class PyBada4(PerfBase):
 
             ac = self.model_refs[i]
             if ac is not None:
+                # Si la massa no s'ha inicialitzat (val 0 per defecte de PerfBase),
+                # usem la massa de referència del model BADA 4 com a valor inicial
+                if self.mass[i] <= 0.0:
+                    self.mass[i] = ac.AC.MREF
                 mass = self.mass[i]
                 try:
                     self._init_envelope(i, ac, mass)
@@ -111,7 +115,7 @@ class PyBada4(PerfBase):
                     print(f"[PyBada4] Loaded BADA 4 model for {actype}")
                 elif name in ci_names:
                     # trobat al directori amb diferent capitalització, no és error
-                    print(f"[PyBada4] Loaded {actype} as '{name}' (case corrected)")
+                    print(f"[PyBada4] Loaded {actype} as '{name}'")
                 else:
                     print(f"[PyBada4] {actype} not found — using fallback {self.FALLBACK_TYPE}")
                 return model
@@ -217,50 +221,50 @@ class PyBada4(PerfBase):
                 self.drag[i] = D
                 self.lift[i] = L
 
-                # coeficients de thrust i límits de cada rating:
-                # CT_nonLIDL és per MCMB (pujada màxima) i MCRZ (creuer)
-                # CT_LIDL és per flight-idle (baixada sense potència)
-                # Thrust [N] = CT * delta * p0 * S_ref
-                CT_max  = ac.flightEnvelope.CT_nonLIDL(
-                    theta=theta_val, delta=delta_val, M=M, rating="MCMB"
+                # Thrust limits usant l'API oficial de BADA 4:
+                # Thrust(delta, theta, M, deltaTemp, rating) és la crida idiomàtica
+                T_max  = ac.flightEnvelope.Thrust(
+                    delta=delta_val, theta=theta_val, M=M, deltaTemp=deltaTemp, rating="MCMB"
                 )
-                CT_idle = ac.flightEnvelope.CT_LIDL(
-                    delta=delta_val, theta=theta_val, M=M
+                T_idle = ac.flightEnvelope.Thrust(
+                    delta=delta_val, theta=theta_val, M=M, deltaTemp=deltaTemp, rating="LIDL"
                 )
-                T_max  = ac.flightEnvelope.Thrust(delta=delta_val, CT=CT_max)
-                T_idle = ac.flightEnvelope.Thrust(delta=delta_val, CT=CT_idle)
+                # Assegurem que T_idle no és negatiu (a baixa velocitat LIDL pot ser negatiu)
+                T_idle = max(T_idle, 0.0)
                 self.thr_max[i]  = T_max
                 self.thr_idle[i] = T_idle
 
-                # selecció del thrust depenent de la fase
+                # Selecció del thrust i rating per al fuel flow, depenent de la fase
                 if phase == "Climb":
-                    CT = CT_max
-                    T  = T_max
+                    T      = T_max
+                    ff_rating = "MCMB"
+                    CT     = None   # no cal per al ff amb rating
 
                 elif phase == "Descent":
-                    CT = CT_idle
-                    T  = T_idle
+                    T      = T_idle
+                    ff_rating = "LIDL"
+                    CT     = None
 
-                else:
-                    CT_mcrz = ac.flightEnvelope.CT_nonLIDL(
-                        theta=theta_val, delta=delta_val, M=M, rating="MCRZ"
+                else:  # Cruise: thrust = drag + inertència, limitat a MCRZ
+                    T_mcrz = ac.flightEnvelope.Thrust(
+                        delta=delta_val, theta=theta_val, M=M, deltaTemp=deltaTemp, rating="MCRZ"
                     )
-                    T_mcrz = ac.flightEnvelope.Thrust(delta=delta_val, CT=CT_mcrz)
                     T = min(D + mass * ax, T_mcrz)
-                    # CT per calcular el consum
+                    # Per al fuel flow a creuer necessitem CT (no disposem de rating intermedi)
                     CT = ac.flightEnvelope.CT(delta=delta_val, Thrust=T)
+                    ff_rating = None   # usarem CT directament
 
                 self.thrust[i] = T
 
-                # throttle normalitzat: 0 = idle, 1 = max
+                # Throttle normalitzat: 0 = idle, 1 = max
                 dT = T_max - T_idle
                 bs.traf.thr[i] = float(np.clip((T - T_idle) / dT, 0.0, 1.0)) if dT > 0 else 0.0
 
-                # Energy share factor & ROCD 
+                # Energy share factor & ROCD
                 ESF = ac.flightEnvelope.esf(
                     h=alt_m, deltaTemp=deltaTemp,
                     flightEvolution="constCAS",
-                    phase=phase, v=tas, vdes=None
+                    M=M, phase=phase, v=tas, vdes=None
                 )
                 rocd = ac.flightEnvelope.ROCD(
                     T=T, D=D, v=tas, mass=mass,
@@ -268,24 +272,25 @@ class PyBada4(PerfBase):
                 )
                 self.vs_bada[i] = rocd
 
-                # BADA 4 calcula el fuel flow amb CT i M (no TAS) i els inputs atmosfèrics
-                ff = ac.flightEnvelope.ff(
-                    delta=delta_val,
-                    theta=theta_val,
-                    deltaTemp=deltaTemp,
-                    CT=CT,
-                    M=M,
-                    config=config
-                )
-                # consum mínim 
-                ff_idle = ac.flightEnvelope.ff(
-                    delta=delta_val,
-                    theta=theta_val,
-                    deltaTemp=deltaTemp,
-                    CT=CT_idle,
-                    M=M,
-                    config=config
-                )
+                # Fuel flow: usem rating si és disponible, CT directament per a creuer
+                if ff_rating is not None:
+                    ff = ac.flightEnvelope.ff(
+                        delta=delta_val, theta=theta_val, deltaTemp=deltaTemp,
+                        rating=ff_rating, M=M, config=config
+                    )
+                    ff_idle = ac.flightEnvelope.ff(
+                        delta=delta_val, theta=theta_val, deltaTemp=deltaTemp,
+                        rating="LIDL", M=M, config=config
+                    )
+                else:
+                    ff = ac.flightEnvelope.ff(
+                        delta=delta_val, theta=theta_val, deltaTemp=deltaTemp,
+                        CT=CT, M=M, config=config
+                    )
+                    ff_idle = ac.flightEnvelope.ff(
+                        delta=delta_val, theta=theta_val, deltaTemp=deltaTemp,
+                        rating="LIDL", M=M, config=config
+                    )
                 self.fuelflow[i] = max(ff, ff_idle)
 
                 # update de les velocitats
