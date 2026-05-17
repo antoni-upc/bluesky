@@ -27,9 +27,6 @@ def init_plugin():
 
     global windgfs
     windgfs = WindGFS()
-    
-    # Crucial: Must select this implementation to replace the default WindSim singleton
-    # and properly bind the @timed_function and @stack.command methods!
     windgfs.select()
 
     config = {
@@ -257,24 +254,50 @@ class WindGFS(WindSim):
 
         self.addpointvne(lat, lon, vnorth_cap, veast_cap, windalt_cap)
 
-        # Build 3D Atmospheric interpolators
+        # Build 3D interpolators for wind and atmosphere
         try:
             lats_uniq = np.unique(lat)
             lons_uniq = np.unique(lon)
+            n_alt = len(windalt_cap)
+            n_lat = len(lats_uniq)
+            n_lon = len(lons_uniq)
 
-            t_values = temp_cap.reshape((len(windalt_cap), len(lats_uniq), len(lons_uniq)))
-            p_values = pres_cap.reshape((len(windalt_cap), len(lats_uniq), len(lons_uniq)))
+            # builds internally (windfield.py line 88).
+            from scipy.interpolate import interp1d as _interp1d
+            _fnorth = _interp1d(windalt_cap, vnorth_cap.T, bounds_error=False,
+                                fill_value=(vnorth_cap[0], vnorth_cap[-1]),
+                                assume_sorted=True)
+            _feast  = _interp1d(windalt_cap, veast_cap.T,  bounds_error=False,
+                                fill_value=(veast_cap[0],  veast_cap[-1]),
+                                assume_sorted=True)
+            _altaxis_rgi = np.concatenate((np.array([0.]), windalt_cap))
+            _vnaxis = _fnorth(_altaxis_rgi).T   # shape (n_alt+1, n_lat*n_lon)
+            _veaxis = _feast(_altaxis_rgi).T
 
+            vn_values = _vnaxis.reshape((len(_altaxis_rgi), n_lat, n_lon))
+            ve_values = _veaxis.reshape((len(_altaxis_rgi), n_lat, n_lon))
+            self.fn = RegularGridInterpolator(
+                (_altaxis_rgi, lats_uniq, lons_uniq), vn_values,
+                bounds_error=False, fill_value=0.)
+            self.fe = RegularGridInterpolator(
+                (_altaxis_rgi, lats_uniq, lons_uniq), ve_values,
+                bounds_error=False, fill_value=0.)
+            print(f"[WindGFS] Wind RGI built: {n_alt} levels × {n_lat} lats × {n_lon} lons")
+
+            # Temperature and pressure RGI
+            t_values = temp_cap.reshape((n_alt, n_lat, n_lon))
+            p_values = pres_cap.reshape((n_alt, n_lat, n_lon))
             self.temp_field = RegularGridInterpolator(
                 (windalt_cap, lats_uniq, lons_uniq), t_values,
                 bounds_error=False, fill_value=None)
             self.pres_field = RegularGridInterpolator(
                 (windalt_cap, lats_uniq, lons_uniq), p_values,
                 bounds_error=False, fill_value=None)
+            print(f"[WindGFS] Temp/Pres RGI built OK")
         except Exception as e:
-            print(f"Failed to build Atmosphere interpolators: {e}")
-            self.temp_field = None
-            self.pres_field = None
+            print(f"[WindGFS] Failed to build interpolators: {e}")
+            self.fe = self.fn = None
+            self.temp_field = self.pres_field = None
 
         return True, "Wind and Atmosphere fields updated in area [%d, %d], [%d, %d]. " \
             % (self.lat0, self.lat1, self.lon0, self.lon1) \
@@ -294,12 +317,7 @@ class WindGFS(WindSim):
         if self.temp_field is None or self.pres_field is None or bs.traf.ntraf == 0:
             return
 
-        # Query the interpolator using ISA pressure-altitude (hp), which is the same
-        # axis used when building temp_field/pres_field in extract_wind().
-        # This ensures that two aircraft at the same FL but different lat/lon
-        # correctly sample different temperatures from the GFS field.
-        # vatmos() has already run this step and stored p in bs.traf.p, so we
-        # re-derive hp from that pressure using the inverse ISA formula.
+        # Query the interpolator using ISA pressure-altitude (hp)
         p_now = np.maximum(1.0, bs.traf.p)          # avoid log(0); Pa
         hp_m  = (1.0 - (p_now / 101325.0) ** 0.190264) * 44330.76923
         hp_m  = np.maximum(0.0, hp_m)

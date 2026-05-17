@@ -133,10 +133,14 @@ class SaveMeteo(core.Entity):
                 col = f'FL{fl}'
 
                 # ── Wind at this FL ─────────────────────────────────────
+                # Pass lat/lon as 1-element arrays so windfield.getdata returns
+                # ndarray (skipping its float() cast, which breaks on NumPy 2.x
+                # when the RGI result has shape (1,) instead of being 0-d).
                 try:
-                    vn, ve = traf.wind.getdata(lat, lon, alt_m)
-                    vn = float(vn)
-                    ve = float(ve)
+                    vn_arr, ve_arr = traf.wind.getdata(
+                        np.array([lat]), np.array([lon]), alt_m)
+                    vn = float(vn_arr[0])
+                    ve = float(ve_arr[0])
                 except Exception:
                     vn, ve = 0.0, 0.0
 
