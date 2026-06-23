@@ -3,6 +3,22 @@
 /plugins/atmoscorrect.py
 /plugins/saveheader.py
 /plugins/windecac.py
+/plugins/savemeteo.py
+/plugins/windecmwf.py
+/plugins/windgfs.py
+/compare_bada.py
+/run_all_scenarios.py
+/run_fast.py
+/plot_*.py
+/plot_*
+/docs/migration_section.tex
+/docs/thesis_section_3_2.tex
+/docs/Complete_section.tex
+/modify_scenarios_time.py
+/modify_scenarios.py
+/docs/*.png
+/analyze_dyn0_vs_dyn1.py
+
 
 /cache
 /scenario/ic.scn

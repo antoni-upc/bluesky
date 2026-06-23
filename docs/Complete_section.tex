@@ -312,7 +312,12 @@ The 27 evaluation flights are selected from the standard flight testing suite to
     \item \textbf{Category 5: Complex Scenarios and Edge Cases:} Geographically demanding flight paths designed to challenge the limits of the plugin. This includes steep initial climb profiles out of high-altitude alpine terrain (LOWI), severe oceanic windshear and remote overwater tracking (LPMA), entry into Eurocontrol space from third-country boundaries (GMMN), and transoceanic oceanic control zones (BIKF).
 \end{itemize}
 
-\todo{add plot of all the flight routes}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{dyn_fig00_flight_routes.png}
+    \caption{Geographical overview of the 27 evaluation flight routes across Europe.}
+    \label{fig:flight_routes}
+\end{figure}
 
 Each of the 27~scenarios was executed under four different performance configurations, yielding a total of $27 \times 4 = 108$ simulation runs:
 
@@ -391,7 +396,7 @@ The altitude and vertical speed profiles are visualised in Figure~\ref{fig:altit
 All four models show broadly consistent altitude profiles during the initial climb phase, reaching the assigned cruise flight level within a comparable distance. This is expected: both BADA~3 and BADA~4 apply maximum climb thrust (MCMB) during the climb phase, which forces the aircraft to follow the geometric altitude constraints of the waypoint route. The Dynamo reference also shows a typical commercial climb profile with a constant-CAS/constant-Mach speed schedule and a progressive altitude gain. Minor differences in the Top-of-Climb (TOC) distance arise from different fuel-mass feedback loops: in the pyBADA models, the aircraft mass continuously decreases due to fuel burn, reducing the thrust-to-weight ratio and slightly lengthening the climb. For a representative A320 flight (Munich--Stockholm, EDDM--ESSA, $774$\,NM), all models reach FL370 within approximately 15\% of total flight progress, consistent with standard commercial operating procedures.
 
 \paragraph{Cruise phase.}
-During cruise, the altitude profiles are nominally aligned across all models, as the autopilot holds the assigned flight level. The most significant kinematic differences in cruise are related to vertical speed oscillations: BlueSky's kinematic autopilot exhibits non-zero vertical speed residuals (of the order of $\pm 100$--$200$\,ft/min) due to proportional altitude control laws, whereas Dynamo maintains cruise altitude with sub-10\,ft/min precision. The pyBADA models fall between these extremes, with BADA~4 showing slightly smoother altitude tracking than BADA~3 due to its more refined thrust-clamping formulation during cruise. The global VS MAE across the entire flight is $311.31 \pm 311.41$\,ft/min for BlueSky, $303.77 \pm 295.03$\,ft/min for BADA~3, and $304.24 \pm 296.17$\,ft/min for BADA~4 (Figure~\ref{fig:mae_boxplots}). The comparable vertical speed errors across all models confirm that they share the same kinematic autopilot, with only minor differences arising from speed envelope transitions and differences in the detected flight phase triggers.
+During cruise, the altitude profiles are nominally aligned across all models, as the autopilot holds the assigned flight level. The most significant kinematic differences in cruise are related to vertical speed oscillations: BlueSky's kinematic autopilot exhibits non-zero vertical speed residuals (of the order of $\pm 100$--$200$\,ft/min) due to proportional altitude control laws, whereas Dynamo maintains cruise altitude with sub-10\,ft/min precision. The pyBADA models fall between these extremes, with BADA~4 showing slightly smoother altitude tracking than BADA~3 due to its more refined thrust-clamping formulation during cruise. The global VS MAE across the entire flight is $311.31 \pm 311.41$\,ft/min for BlueSky, $302.19 \pm 290.38$\,ft/min for BADA~3, and $304.24 \pm 296.17$\,ft/min for BADA~4 (Figure~\ref{fig:mae_stripplots}). The comparable vertical speed errors across all models confirm that they share the same kinematic autopilot, with only minor differences arising from speed envelope transitions and differences in the detected flight phase triggers.
 
 \paragraph{Descent phase.}
 The descent phase is where the most significant structural difference in autopilot architecture between the four configurations manifests. It is important to clarify a key architectural constraint that applies to \emph{all three BlueSky-based configurations in MODE~0}: BlueSky's kinematic autopilot drives the trajectory in all cases. It projects the required altitude loss over the remaining waypoint distance to compute a commanded vertical speed, without applying any aerodynamic force balance. This means that none of the performance models in MODE~0 --- native BlueSky BADA~3, \texttt{DYNAMIC\_BADA} BADA~3, or \texttt{DYNAMIC\_BADA} BADA~4 --- compute ROCD from the Total Energy Model and write it back to the trajectory integrator.
@@ -400,7 +405,7 @@ The \texttt{DYNAMIC\_BADA} plugin in MODE~0 operates as a \emph{passive performa
 
 The differences in altitude profiles between models are therefore driven by two factors acting through the autopilot's \emph{speed} input, not its vertical speed input. First, the \texttt{DYNAMIC\_BADA} plugin enforces strict per-aircraft speed envelope limits (Vmin, Vmax, and the below-10{,}000\,ft limit of 250\,kt) via its \texttt{limits()} hook. Since the geometric autopilot computes the required descent gradient as a function of current speed, a lower commanded speed produces a shallower geometric descent slope. The native BlueSky BADA~3 model enforces a broader speed envelope that allows higher descent speeds. Second, the three-phase persistence-filter state machine in \texttt{DYNAMIC\_BADA} transitions to Descent (and the associated idle thrust computation) at a different point along the route than the six-phase instantaneous FSM in the native BADA~3 model, producing differences in the logged thrust and fuel flow profiles without directly affecting the trajectory shape.
 
-The global altitude MAE values against Dynamo --- $611.83 \pm 596.81$\,ft for BlueSky (native), $669.34 \pm 640.52$\,ft for BADA~3 (pyBADA), and $671.89 \pm 643.29$\,ft for BADA~4 (pyBADA) --- primarily reflect the mismatch between BlueSky's geometric waypoint-following autopilot and Dynamo's VNAV-optimised trajectory computation, not differences between the performance models themselves. The slightly lower altitude MAE achieved by the native model is a geometric artefact: without speed envelope enforcement, the native model allows higher speeds and steeper descent gradients, which happen to match Dynamo's altitude profile more closely in the distance domain.
+The global altitude MAE values against Dynamo --- $611.83 \pm 596.81$\,ft for BlueSky (native), $664.42 \pm 637.07$\,ft for BADA~3 (pyBADA), and $671.89 \pm 643.29$\,ft for BADA~4 (pyBADA) --- primarily reflect the mismatch between BlueSky's geometric waypoint-following autopilot and Dynamo's VNAV-optimised trajectory computation, not differences between the performance models themselves. The slightly lower altitude MAE achieved by the native model is a geometric artefact: without speed envelope enforcement, the native model allows higher speeds and steeper descent gradients, which happen to match Dynamo's altitude profile more closely in the distance domain.
 
 
 \subsubsection{Speed and envelope enforcement}
@@ -413,7 +418,7 @@ In the base BlueSky model, no maximum operational Mach limit is imposed during c
 The \texttt{DYNAMIC\_BADA} plugin enforces BADA's per-aircraft maximum and minimum speed envelope at every tick via the \texttt{limits()} hook. This clamps the Mach number at approximately $M = 0.82$ during cruise. Both pyBADA sub-models successfully enforce these bounds, which is confirmed by the fact that neither BADA~3 nor BADA~4 produces Mach values exceeding the representative $M_{\text{mo}}$ in any of the 26 retained flights. The Dynamo reference consistently produces cruise Mach values of $0.78$--$0.78$, reflecting its use of cost-index-based optimal cruise speeds that are typically below the maximum Mach limit.
 
 \paragraph{Speed MAE analysis.}
-The global TAS MAE across the 26 retained flights is $12.58 \pm 11.79$\,kt for BlueSky, $16.56 \pm 15.30$\,kt for BADA~3, and $16.10 \pm 14.85$\,kt for BADA~4. The higher TAS MAE of the pyBADA models compared to BlueSky arises primarily from differences in the climb and descent speed schedules: while BlueSky follows a single geometric speed target, the pyBADA models implement the full BADA constant-CAS/constant-Mach crossover schedule during climb and descent, which can differ from Dynamo's cost-index-optimised speed profile. Despite this, BADA~4 shows an improvement over BADA~3 (a reduction of approximately $0.46$\,kt in mean TAS MAE), reflecting BADA~4's more accurate speed crossover altitudes and refined aerodynamic polars. In terms of Mach number, the MAE follows a similar ranking: $0.021 \pm 0.020$ for BlueSky, $0.028 \pm 0.025$ for BADA~3, and $0.028 \pm 0.024$ for BADA~4.
+The global TAS MAE across the 26 retained flights is $12.58 \pm 11.79$\,kt for BlueSky, $17.38 \pm 16.96$\,kt for BADA~3, and $16.10 \pm 14.85$\,kt for BADA~4. The higher TAS MAE of the pyBADA models compared to BlueSky arises primarily from differences in the climb and descent speed schedules: while BlueSky follows a single geometric speed target, the pyBADA models implement the full BADA constant-CAS/constant-Mach crossover schedule during climb and descent, which can differ from Dynamo's cost-index-optimised speed profile. Despite this, BADA~4 shows an improvement over BADA~3 (a reduction of approximately $1.28$\,kt in mean TAS MAE), reflecting BADA~4's more accurate speed crossover altitudes and refined aerodynamic polars. In terms of Mach number, the MAE follows a similar ranking: $0.021 \pm 0.020$ for BlueSky, $0.030 \pm 0.027$ for BADA~3, and $0.028 \pm 0.024$ for BADA~4.
 
 \paragraph{Below-10,000~ft speed compliance.}
 An important operational capability that distinguishes the pyBADA integration from the baseline is the enforcement of the below-$10{,}000$\,ft speed limit of $250$\,kt~IAS. The \texttt{limits()} function enforces CAS-based speed limits as a function of altitude, automatically restricting the autopilot's commanded speed during initial climb and final approach. This constraint is absent in the base BlueSky model, which can consequently accelerate to cruise speeds immediately after departure, producing unrealistically high approach speeds in the speed profiles.
@@ -425,14 +430,14 @@ The most diagnostic capability of the \texttt{DYNAMIC\_BADA} integration, and th
 \paragraph{Thrust profile and phase transitions.}
 During the climb phase, the pyBADA models apply MCMB (maximum climb) thrust, which in BADA~3 is parameterised by altitude-dependent thrust coefficients ($C_{Tc,1}$, $C_{Tc,2}$, $C_{Tc,3}$) and a temperature correction factor. In BADA~4, thrust ratings are encoded as multi-dimensional lookup tables indexed by Mach number, altitude, and ISA temperature deviation, yielding a more physically complete representation of turbofan thrust lapse with altitude. As a result, the BADA~4 thrust profile during climb decays more smoothly with altitude and agrees better with the Dynamo reference than the BADA~3 curve.
 
-During cruise, the pyBADA models apply a drag-balanced thrust, computed as $T = D + m \cdot a_x$. As aircraft mass decreases due to fuel burn, the required cruise thrust decreases progressively, producing the characteristic thrust-step-down observed in Figure~\ref{fig:thrust_fuel_profiles}. This mass-feedback effect is entirely absent in the base BlueSky model, which maintains a constant thrust regardless of fuel state, as it does not track fuel consumption. The global thrust MAE against Dynamo is $15{,}322.84 \pm 2{,}494.29$\,daN for BlueSky, $4{,}482.42 \pm 1{,}661.08$\,daN for BADA~3, and $662.96 \pm 840.57$\,daN for BADA~4 (Figure~\ref{fig:global_summary}). The dramatic reduction in both mean and standard deviation from BlueSky to BADA~4 reflects the progressive improvement in physical fidelity: BADA~4 reduces the mean thrust error by $95.7\%$ relative to BlueSky and by $85.2\%$ relative to BADA~3.
+During cruise, the pyBADA models apply a drag-balanced thrust, computed as $T = D + m \cdot a_x$. As aircraft mass decreases due to fuel burn, the required cruise thrust decreases progressively, producing the characteristic thrust-step-down observed in Figure~\ref{fig:thrust_fuel_profiles}. This mass-feedback effect is entirely absent in the base BlueSky model, which maintains a constant thrust regardless of fuel state, as it does not track fuel consumption. The global thrust MAE against Dynamo is $15{,}322.84 \pm 2{,}494.29$\,daN for BlueSky, $3{,}945.22 \pm 1{,}957.47$\,daN for BADA~3, and $662.96 \pm 840.57$\,daN for BADA~4 (Figure~\ref{fig:global_summary}). The dramatic reduction in both mean and standard deviation from BlueSky to BADA~4 reflects the progressive improvement in physical fidelity: BADA~4 reduces the mean thrust error by $95.7\%$ relative to BlueSky and by $83.2\%$ relative to BADA~3.
 
 \paragraph{Fuel flow and mass depletion.}
 The base BlueSky model does not compute fuel flow and treats aircraft mass as constant throughout the flight. This is a fundamental limitation for trajectory optimisation and emissions estimation applications. The \texttt{DYNAMIC\_BADA} integration rectifies this by computing a time-varying fuel flow based on the engine thrust model: in BADA~3, the fuel flow is computed via phase-based specific fuel consumption polynomials ($C_{f1}$, $C_{f2}$, $C_{f3}$, $C_{f4}$), while in BADA~4 it is derived from thrust-specific fuel consumption (TSFC) lookup tables that account for Mach number and altitude.
 
 Figure~\ref{fig:thrust_fuel_profiles} shows that BADA~3 consistently produces higher fuel flow values than both Dynamo and BADA~4, particularly during the climb and initial cruise phases. The BADA~3 phase-based SFC polynomials systematically overpredict fuel consumption because they are calibrated to match average fuel flow across a range of conditions, rather than the specific operating point of a given flight. BADA~4's TSFC-based formulation, being a function of actual thrust and Mach number, produces fuel flows that are much closer to the Dynamo reference throughout the flight.
 
-This is confirmed by the global fuel flow MAE: $7{,}284.15 \pm 1{,}167.60$\,kg/h for BlueSky, $2{,}075.78 \pm 774.68$\,kg/h for BADA~3, and $294.37 \pm 349.27$\,kg/h for BADA~4. Even relative to BADA~3, BADA~4 achieves an $85.8\%$ reduction in fuel flow MAE.
+This is confirmed by the global fuel flow MAE: $7{,}284.15 \pm 1{,}167.60$\,kg/h for BlueSky, $1{,}783.46 \pm 932.76$\,kg/h for BADA~3, and $294.37 \pm 349.27$\,kg/h for BADA~4. Even relative to BADA~3, BADA~4 achieves an $83.5\%$ reduction in fuel flow MAE.
 
 \subsubsection{Fuel burn validation}
 
@@ -440,13 +445,13 @@ The cumulative effect of the fuel flow differences is quantified by the total fu
 
 \paragraph{Global fleet.}
 
-Across all 26 retained flights, BADA~3 (pyBADA) overestimates fuel consumption by a mean of $+86.42\% \pm 16.44\%$ relative to Dynamo. This large and consistent overestimation reflects the systematic nature of BADA~3's SFC polynomial formulation, which does not accurately capture the thrust-dependent fuel flow reduction at lower throttle settings. BADA~4 (pyBADA) corrects this bias almost entirely: the mean fuel burn error is $-1.05\% \pm 6.37\%$ relative to Dynamo, representing near-perfect agreement across a wide range of European routes and operating conditions. The small negative sign indicates a very slight systematic underestimation, well within acceptable operational margins ($\pm 5\%$) for ATM planning and emissions reporting applications. The base BlueSky model reports a fuel burn that is $+333.35\% \pm 27.69\%$ in excess of the Dynamo reference, reflecting its unphysical fuel flow formulation that is not calibrated against the BADA aerodynamic model.
+Across all 26 retained flights, BADA~3 (pyBADA) overestimates fuel consumption by a mean of $+76.61\% \pm 22.33\%$ relative to Dynamo. This large and consistent overestimation reflects the systematic nature of BADA~3's SFC polynomial formulation, which does not accurately capture the thrust-dependent fuel flow reduction at lower throttle settings. BADA~4 (pyBADA) corrects this bias almost entirely: the mean fuel burn error is $-1.05\% \pm 6.37\%$ relative to Dynamo, representing near-perfect agreement across a wide range of European routes and operating conditions. The small negative sign indicates a very slight systematic underestimation, well within acceptable operational margins ($\pm 5\%$) for ATM planning and emissions reporting applications. The base BlueSky model reports a fuel burn that is $+333.35\% \pm 27.69\%$ in excess of the Dynamo reference, reflecting its unphysical fuel flow formulation that is not calibrated against the BADA aerodynamic model.
 
 \paragraph{Fuel error scaling with flight duration.}
 Figure~\ref{fig:fuel_error_vs_duration} plots the fuel burn relative error versus flight duration for all models. A clear trend is visible: for BADA~3 (pyBADA), the fuel error percentage remains consistently elevated across all durations, confirming the systematic nature of the SFC overestimation. For BADA~4 (pyBADA), the error is distributed around zero for all flight durations, demonstrating that the TSFC-based formulation does not accumulate systematic error over time.
 
 \paragraph{Mass tracking.}
-The mass MAE reflects the integrated fuel burn error. BlueSky's mass is constant throughout the flight (no fuel depletion), resulting in a mean mass MAE of $218{,}998.07 \pm 7{,}876.98$\,kg relative to Dynamo --- this large value is entirely due to the initial mass offset and zero fuel depletion, since BlueSky neither depletes fuel nor initialises mass from the BADA reference weight. BADA~3 (pyBADA) tracks mass depletion but overestimates fuel flow, yielding a mass MAE of $28{,}318.53 \pm 1{,}408.82$\,kg. BADA~4 (pyBADA) achieves a mass MAE of only $154.09 \pm 168.39$\,kg, confirming that its fuel flow model is accurate enough for the mass state to remain almost perfectly synchronised with the Dynamo reference throughout the flight. The fuel flow MAE is therefore the most informative physical metric, and it consistently shows BADA~4 as overwhelmingly superior.
+The mass MAE reflects the integrated fuel burn error. BlueSky's mass is constant throughout the flight (no fuel depletion), resulting in a mean mass MAE of $218{,}998.07 \pm 7{,}876.98$\,kg relative to Dynamo --- this large value is entirely due to the initial mass offset and zero fuel depletion, since BlueSky neither depletes fuel nor initialises mass from the BADA reference weight. BADA~3 (pyBADA) tracks mass depletion but overestimates fuel flow, yielding a mass MAE of $1{,}936.57 \pm 823.02$\,kg. BADA~4 (pyBADA) achieves a mass MAE of only $154.09 \pm 168.39$\,kg, confirming that its fuel flow model is accurate enough for the mass state to remain almost perfectly synchronised with the Dynamo reference throughout the flight. The fuel flow MAE is therefore the most informative physical metric, and it consistently shows BADA~4 as overwhelmingly superior.
 
 \subsubsection{Quantitative validation summary}
 
@@ -455,15 +460,15 @@ The per-flight normalised MAE heatmap (Figure~\ref{fig:mae_heatmap}) provides a 
 The global mean absolute error campaign summary (Figure~\ref{fig:global_summary}) consolidates these findings. Across all 26 retained flights and six primary variables, BADA~4 (pyBADA) demonstrates consistent and dramatic superiority over both BlueSky and BADA~3 (pyBADA):
 
 \begin{enumerate}
-    \item \textbf{Altitude}: BlueSky achieves $611.83 \pm 596.81$\,ft, BADA~3 (pyBADA) $669.34 \pm 640.52$\,ft, and BADA~4 (pyBADA) $671.89 \pm 643.29$\,ft. The comparable values across all models confirm the passive-observer nature of MODE~0: trajectory is effectively identical regardless of the performance model.
-    \item \textbf{Vertical speed}: BlueSky $311.31 \pm 311.41$\,ft/min, BADA~3 (pyBADA) $303.77 \pm 295.03$\,ft/min, BADA~4 (pyBADA) $304.24 \pm 296.17$\,ft/min. All comparable, confirming shared kinematic autopilot.
-    \item \textbf{True airspeed}: BlueSky $12.58 \pm 11.79$\,kt, BADA~3 (pyBADA) $16.56 \pm 15.30$\,kt, BADA~4 (pyBADA) $16.10 \pm 14.85$\,kt. The slightly higher pyBADA errors reflect stricter speed schedule enforcement.
-    \item \textbf{Thrust}: The most significant improvement --- BlueSky $15{,}322.84 \pm 2{,}494.29$\,daN, BADA~3 (pyBADA) $4{,}482.42 \pm 1{,}661.08$\,daN, BADA~4 (pyBADA) $662.96 \pm 840.57$\,daN. BADA~4 (pyBADA) reduces thrust MAE by $96\%$ vs BlueSky and by $85\%$ vs BADA~3 (pyBADA).
-    \item \textbf{Fuel flow}: BlueSky $7{,}284.15 \pm 1{,}167.60$\,kg/h, BADA~3 (pyBADA) $2{,}075.78 \pm 774.68$\,kg/h, BADA~4 (pyBADA) $294.37 \pm 349.27$\,kg/h. BADA~4 achieves a $96\%$ reduction vs BlueSky and an $86\%$ reduction vs BADA~3 (pyBADA).
-    \item \textbf{Mass}: BlueSky $218{,}998 \pm 7{,}877$\,kg (dominated by zero fuel depletion and initial mass mismatch), BADA~3 (pyBADA) $28{,}319 \pm 1{,}409$\,kg, BADA~4 (pyBADA) $154 \pm 168$\,kg. BADA~4 (pyBADA) reduces mass MAE by $>99\%$ vs BlueSky.
+    \item \textbf{Altitude}: BlueSky achieves $611.83 \pm 596.81$\,ft, BADA~3 (pyBADA) $664.42 \pm 637.07$\,ft, and BADA~4 (pyBADA) $671.89 \pm 643.29$\,ft. The comparable values across all models confirm the passive-observer nature of MODE~0: trajectory is effectively identical regardless of the performance model.
+    \item \textbf{Vertical speed}: BlueSky $311.31 \pm 311.41$\,ft/min, BADA~3 (pyBADA) $302.19 \pm 290.38$\,ft/min, BADA~4 (pyBADA) $304.24 \pm 296.17$\,ft/min. All comparable, confirming shared kinematic autopilot.
+    \item \textbf{True airspeed}: BlueSky $12.58 \pm 11.79$\,kt, BADA~3 (pyBADA) $17.38 \pm 16.96$\,kt, BADA~4 (pyBADA) $16.10 \pm 14.85$\,kt. The slightly higher pyBADA errors reflect stricter speed schedule enforcement.
+    \item \textbf{Thrust}: The most significant improvement --- BlueSky $15{,}322.84 \pm 2{,}494.29$\,daN, BADA~3 (pyBADA) $3{,}945.22 \pm 1{,}957.47$\,daN, BADA~4 (pyBADA) $662.96 \pm 840.57$\,daN. BADA~4 (pyBADA) reduces thrust MAE by $95.7\%$ vs BlueSky and by $83.2\%$ vs BADA~3 (pyBADA).
+    \item \textbf{Fuel flow}: BlueSky $7{,}284.15 \pm 1{,}167.60$\,kg/h, BADA~3 (pyBADA) $1{,}783.46 \pm 932.76$\,kg/h, BADA~4 (pyBADA) $294.37 \pm 349.27$\,kg/h. BADA~4 achieves a $96\%$ reduction vs BlueSky and an $83.5\%$ reduction vs BADA~3 (pyBADA).
+    \item \textbf{Mass}: BlueSky $218{,}998.07 \pm 7{,}876.98$\,kg (dominated by zero fuel depletion and initial mass mismatch), BADA~3 (pyBADA) $1{,}936.57 \pm 823.02$\,kg, BADA~4 (pyBADA) $154.09 \pm 168.39$\,kg. BADA~4 (pyBADA) reduces mass MAE by $>99\%$ vs BlueSky.
 \end{enumerate}
 
-Overall, the \texttt{DYNAMIC\_BADA} integration in MODE~0 successfully resolves the fundamental thermodynamic limitations of the baseline BlueSky simulator for all engine performance variables. By implementing the BADA aerodynamic and engine performance models within BlueSky's performance interface, the plugin enforces physically realistic speed envelopes, computes physically consistent thrust and fuel flow for each flight phase, models fuel depletion with mass feedback, and exposes performance coefficients for external analysis. As a passive observer in MODE~0, the plugin does not override BlueSky's geometric trajectory computation; the trajectory continues to be driven by BlueSky's kinematic autopilot, which explains why altitude and vertical speed errors are similar across all three BlueSky-based configurations. BADA~4 is the clear recommended model for applications requiring accurate fuel burn and emissions estimation, as it eliminates BADA~3's systematic overestimation of fuel flow ($+86\%$ error reduced to $-1\%$), reduces thrust prediction errors by $85\%$ relative to BADA~3 (pyBADA), and achieves near-perfect mass tracking ($154$\,kg vs $28{,}319$\,kg MAE). The \texttt{MASS} stack command provides a mechanism to mitigate initial mass offset by allowing the user to initialise aircraft at the exact operating mass assumed by the reference tool.
+Overall, the \texttt{DYNAMIC\_BADA} integration in MODE~0 successfully resolves the fundamental thermodynamic limitations of the baseline BlueSky simulator for all engine performance variables. By implementing the BADA aerodynamic and engine performance models within BlueSky's performance interface, the plugin enforces physically realistic speed envelopes, computes physically consistent thrust and fuel flow for each flight phase, models fuel depletion with mass feedback, and exposes performance coefficients for external analysis. As a passive observer in MODE~0, the plugin does not override BlueSky's geometric trajectory computation; the trajectory continues to be driven by BlueSky's kinematic autopilot, which explains why altitude and vertical speed errors are similar across all three BlueSky-based configurations. BADA~4 is the clear recommended model for applications requiring accurate fuel burn and emissions estimation, as it eliminates BADA~3's systematic overestimation of fuel flow ($+77\%$ error reduced to $-1\%$), reduces thrust prediction errors by $83\%$ relative to BADA~3 (pyBADA), and achieves near-perfect mass tracking ($154$\,kg vs $1{,}937$\,kg MAE). The \texttt{MASS} stack command provides a mechanism to mitigate initial mass offset by allowing the user to initialise aircraft at the exact operating mass assumed by the reference tool.
 
 % ════════════════════════════════════════════════════════════════════════════
 % LaTeX figures definition
@@ -499,9 +504,9 @@ Overall, the \texttt{DYNAMIC\_BADA} integration in MODE~0 successfully resolves 
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=0.9\textwidth]{dyn_fig05_mae_boxplots.png}
-    \caption{Mean Absolute Error (MAE) distribution boxplots vs.\ Dynamo reference across all 26 retained flights, for altitude, VS, TAS, Mach, thrust, FF, and mass. Each box shows the interquartile range; whiskers extend to $1.5 \times \text{IQR}$. The dramatic reduction in thrust and fuel flow error from BlueSky to BADA~4 (pyBADA) is clearly visible.}
-    \label{fig:mae_boxplots}
+    \includegraphics[width=0.9\textwidth]{dyn_fig05_mae_stripplots.png}
+    \caption{Mean Absolute Error (MAE) distribution strip plots (with horizontal jitter) vs.\ Dynamo reference across all 26 retained flights, for altitude, VS, TAS, Mach, thrust, FF, and mass. Each point represents an individual flight; the horizontal dark bars show the median value for each model. The dramatic reduction in thrust and fuel flow error from BlueSky to BADA~4 (pyBADA) is clearly visible.}
+    \label{fig:mae_stripplots}
 \end{figure}
 
 \begin{figure}[H]
@@ -514,14 +519,14 @@ Overall, the \texttt{DYNAMIC\_BADA} integration in MODE~0 successfully resolves 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.95\textwidth]{dyn_fig07_fuel_burn_bars.png}
-    \caption{(Top) Total fuel burn per flight for all four models and the Dynamo reference. (Bottom) Relative fuel burn error percentage vs.\ Dynamo reference. BADA~3 overestimates by $+86.42\%$ on average; BADA~4 achieves a mean error of $-1.05\%$.}
+    \caption{(Top) Total fuel burn per flight for all four models and the Dynamo reference. (Bottom) Relative fuel burn error percentage vs.\ Dynamo reference. BADA~3 overestimates by $+76.61\%$ on average; BADA~4 achieves a mean error of $-1.05\%$.}
     \label{fig:fuel_burn_bars}
 \end{figure}
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.85\textwidth]{dyn_fig08_global_summary.png}
-    \caption{Global campaign MAE summary: mean absolute error vs.\ Dynamo reference across all six primary variables, averaged over the 26 retained flights. Error bars represent one standard deviation. BADA~4 (pyBADA) achieves the lowest mean and standard deviation for thrust, fuel flow, and mass, confirming its superiority as an engine performance model.}
+    \caption{Global campaign MAE summary: mean absolute error vs.\ Dynamo reference across all six primary variables plotted in individual subplots to handle differing scales, averaged over the 26 retained flights. Error bars represent one standard deviation. BADA~4 (pyBADA) achieves the lowest mean and standard deviation for thrust, fuel flow, and mass, confirming its superiority as an engine performance model.}
     \label{fig:global_summary}
 \end{figure}
 
@@ -660,7 +665,6 @@ The plugin supports three runtime fidelity modes, selectable globally or per-air
 Without intervention, even after writing \texttt{bs.traf.ax[i]}, BlueSky's kinematic \texttt{update\_airspeed()} method recalculates TAS using its own speed-error control law, the autopilot's target speed minus the current speed divided by a time constant, overwriting the force-derived value.  The longitudinal dynamics would only appear to be force-driven, while the actual speed integration would remain kinematic and $a_x$ would have no physical effect on the aircraft's motion.
 
 The monkey-patch resolves this for both Mode~1 and Mode~2: in Mode~1 it ensures the point-mass force balance genuinely controls TAS; in Mode~2 the same mechanism applies, additionally carrying the elevated $a_x$ that results from the turn-induced drag penalty back into the speed evolution.  At plugin initialisation, \texttt{plugin.py} applies the patch to \texttt{bs.traf.update\_airspeed}:
-\todo{fix the lines format}
 \begin{enumerate}
     \item The original \texttt{update\_airspeed} method is captured as a closure: \texttt{original\_update\_airspeed}.
     \item A replacement function, \texttt{dynamic\_update\_airspeed}, is bound in its place via \texttt{types.MethodType}.
@@ -681,10 +685,12 @@ This approach is chosen over a BlueSky API hook because BlueSky's public plugin 
     \label{fig:placeholder}
 \end{figure}
 
-\subsubsection{State override mechanism and integration loop}
-\label{sec:integration_loop}
-
-\todo{insert flowchart}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{Flowchart_dynamic_plugin_loop.png}
+    \caption{Flowchart of the per-tick update loop and state override sequence.}
+    \label{fig:update_loop}
+\end{figure}
 
 At each performance tick (interval $\Delta t$, configurable via \texttt{config.yaml}, default~1\,s), the \texttt{update()} method of \texttt{DynamicBada} iterates over all aircraft.  For each aircraft~$i$, the following sequence is executed.  Steps~1-3 are shared with Mode~0 (the passive performance observer); steps~4-6 constitute the Mode~1 dynamic override; steps~7-9 extend Mode~1 to Mode~2.
 
@@ -836,3 +842,138 @@ The dynamic model shares several constraints with \texttt{PYBADAPERF} (see Secti
 
     \item \textbf{Heading management in Mode~1:} Lateral guidance remains entirely managed by BlueSky's autopilot in Mode~1.  The plugin does not override \texttt{bs.traf.hdg[i]} in this mode.
 \end{itemize}
+
+\subsection{Validation of Point-Mass Dynamics (DYNMODE 1)}
+\label{sec:validation_dynmode1}
+
+Following the verification and analysis of the passive observer mode, this section evaluates the performance and trajectory fidelity of the plugin under active state overrides, specifically within \texttt{DYNAMIC\_BADA} Mode~1 (Point-Mass Dynamics). In this mode, the simulated flight path is no longer kinematically clamped to the waypoint constraints. Instead, the rate of climb or descent (ROCD) derived from pyBADA's energy equation is actively written back to \texttt{bs.traf.vs[i]}, and the longitudinal acceleration ($a_x$) obtained from the force balance is written to \texttt{bs.traf.ax[i]} to drive speed integration via the patched \texttt{update\_airspeed()} function. 
+
+Evaluating the plugin in Mode~1 is essential to understand the physical and logical couplings introduced by closing the loop between the performance equations and the aircraft state vector. As established in the simulation setup, the campaign comprises the same representative European routes, with the focus set on comparing the pyBADA models against the Dynamo reference, as the baseline kinematic model deviations have already been documented in Section~\ref{sec:phase_detection}.
+
+\subsubsection{Simulation Setup and Retained Flights}
+
+The validation campaign under DYNMODE~1 was conducted using the same 27 gate-to-gate scenarios. However, the closed-loop dynamic integration increases the system's sensitivity to model mismatch and state machine thresholds, leading to the following outlier filtering results:
+\begin{itemize}
+    \item \textbf{\texttt{LEIB-LEPA} Outlier:} Discarded due to a range shortfall in the baseline BlueSky model (simulated range is less than 85\% of the Dynamo reference), identical to the MODE~0 case.
+    \item \textbf{\texttt{EGHI-EGJA} Outlier:} Discarded because the BADA~4 (pyBADA) configuration produced a True Airspeed (TAS) Mean Absolute Error (MAE) exceeding 100\,kt. 
+\end{itemize}
+Removing these two flights leaves 25 retained scenarios for the global campaign statistics, ensuring a consistent and representative fleet comparison.
+
+\subsubsection{Vertical Profile and Speed Divergence}
+
+The altitude and vertical speed profiles for representative routes under DYNMODE~1 are presented in Figure~\ref{fig:altitude_profiles_dyn1}, and the corresponding airspeed profiles are shown in Figure~\ref{fig:speed_profiles_dyn1}. These profiles reveal significant vertical path divergence and speed mismatches compared to the geometry-bound MODE~0 results.
+
+\paragraph{Steep Climb and Altitude Capture Mismatch.}
+During the Climb phase, pyBADA commands maximum climb thrust (MCMB) and applies the BADA Energy Share Factor (ESF) to split excess engine power between climb rate and acceleration. In DYNMODE~1, this computed ROCD directly drives the vertical trajectory. Because there are no intermediate altitude restrictions or VNAV vertical paths in the simulator's climb autopilot, the aircraft climbs at its maximum physical performance. This results in a much steeper climb gradient and higher rate of climb compared to the Dynamo reference, which employs a VNAV-optimised cost-index profile with reduced climb thrust settings.
+
+This steep climb introduces a critical logical coupling with the three-phase persistence-filter state machine. A transition from Climb to Cruise requires the aircraft to enter the altitude capture band ($|h - h_{\text{AP}}| \le 500$\,ft) and maintain a low vertical rate ($|VS| \le 150$\,ft/min) for a sustained window ($\tau_{\text{cruise}} = 90$\,s). However, because the aircraft climbs so rapidly under MCMB thrust (often exceeding 3,000--4,000\,ft/min), it shoots through the altitude capture band extremely fast. Before the autopilot can decelerate or stabilize the aircraft, the altitude frequently overshoots the target $h_{\text{AP}}$ by more than 500\,ft. Once the aircraft is above the capture band ($h - h_{\text{AP}} > 500$\,ft), it can no longer satisfy the cruise transition criteria and remains locked in the Climb phase. As a consequence, it continues climbing at maximum climb thrust, reaching unphysically high altitudes (up to 46,254\,ft for BADA~4) before the thrust decays and the aircraft stabilizes. This vertical path divergence explains the large altitude MAEs observed: $8{,}306.52 \pm 8{,}029.73$\,ft for BADA~3 and $6{,}857.91 \pm 7{,}339.67$\,ft for BADA~4, compared to the geometry-clamped base model ($599.02 \pm 605.12$\,ft).
+
+\paragraph{Longitudinal Force-Balance Coupling.}
+The active override of longitudinal acceleration ($a_x = \frac{T - D - W \sin \gamma}{m}$) and its integration into the airspeed state introduces additional speed errors. As the vertical profile diverges, the flight path angle ($\gamma$) also deviates. This feeds back into the longitudinal force balance via the gravitational component ($W \sin \gamma$). A steeper climb increases the gravity contribution, decelerating the aircraft, while an overshoot reduces it, coupling the speed and altitude errors. The resulting TAS MAE increases to $29.96 \pm 12.61$\,kt for BADA~3 and $24.97 \pm 23.83$\,kt for BADA~4, whereas the base BlueSky model (which does not override speed) maintains a low error of $11.85 \pm 11.44$\,kt. The Mach MAE follows a similar trend, reaching $0.049 \pm 0.023$ for BADA~3 and $0.046 \pm 0.050$ for BADA~4.
+
+\subsubsection{Thrust and Fuel Consumption}
+
+The thrust and fuel flow profiles are visualised in Figure~\ref{fig:thrust_fuel_profiles_dyn1}, and the mass depletion curves are shown in Figure~\ref{fig:mass_profiles_dyn1}. 
+
+Despite the trajectory and speed divergence, BADA~4 (pyBADA) continues to demonstrate superior physical representation of engine performance compared to BADA~3 and the baseline model. The global thrust MAE is $15{,}073.69 \pm 2{,}203.71$\,daN for BlueSky base, $5{,}658.32 \pm 762.08$\,daN for BADA~3 (pyBADA), and $1{,}714.10 \pm 626.07$\,daN for BADA~4 (pyBADA) (Figure~\ref{fig:global_summary_dyn1}). BADA~4 achieves a $69.7\%$ error reduction relative to BADA~3. The fuel flow MAE shows a similar trend: $7{,}187.04 \pm 1{,}082.88$\,kg/h for BlueSky base, $2{,}768.30 \pm 531.14$\,kg/h for BADA~3, and $964.63 \pm 221.45$\,kg/h for BADA~4, representing a $65.2\%$ improvement of BADA~4 over BADA~3. This is further reflected in mass tracking, where BADA~4 achieves a mass MAE of $1{,}259.56 \pm 599.85$\,kg vs. BADA~3's $4{,}292.85 \pm 2{,}774.34$\,kg.
+
+\subsubsection{Fuel Burn and Cumulative Error Bias}
+
+The cumulative fuel burn per flight is plotted in Figure~\ref{fig:fuel_burn_bars_dyn1}, and the scatter and relative error scaling plots are shown in Figures~\ref{fig:fuel_scatter_dyn1} and~\ref{fig:fuel_error_vs_duration_dyn1}.
+
+Across the 25 retained flights, the mean fuel burn errors relative to Dynamo are:
+\begin{itemize}
+    \item \textbf{BlueSky (base):} $+332.03\% \pm 27.41\%$
+    \item \textbf{BADA~3 (pyBADA):} $+157.92\% \pm 13.14\%$
+    \item \textbf{BADA~4 (pyBADA):} $+57.63\% \pm 23.04\%$
+\end{itemize}
+
+While BADA~4 remains significantly more accurate than BADA~3 and the baseline, its mean fuel burn error increased from $-1.05\%$ in MODE~0 to $+57.63\%$ in MODE~1. This positive fuel burn bias is a direct consequence of the vertical path divergence: because the aircraft climbs under maximum climb thrust (MCMB) and overshoots the target altitude, it spends a much larger fraction of the flight in the high-fuel-flow Climb phase. The lack of a refined VNAV climb schedule and the absence of a robust altitude-capture controller in the simulator's autopilot prevent the aircraft from transitioning to the low-fuel-flow Cruise phase at the correct time, accumulating a substantial positive fuel burn offset.
+
+\subsubsection{Quantitative Validation Summary}
+
+The per-flight normalised MAE heatmap is shown in Figure~\ref{fig:mae_heatmap_dyn1}, and the campaign-level MAE summary is consolidated in Figure~\ref{fig:global_summary_dyn1}. The main quantitative findings from the 25 retained flights are:
+\begin{enumerate}
+    \item \textbf{Altitude}: BlueSky (base) achieves $599.02 \pm 605.12$\,ft, BADA~3 (pyBADA) $8{,}306.52 \pm 8{,}029.73$\,ft, and BADA~4 (pyBADA) $6{,}857.91 \pm 7{,}339.67$\,ft. While the base model remains kinematically constrained to the geometric waypoint altitude targets, the pyBADA implementations diverge significantly because their ROCD is derived from BADA's physical Energy Share Factor and climb power settings.
+    \item \textbf{Vertical speed}: BlueSky (base) $290.91 \pm 300.05$\,ft/min, BADA~3 (pyBADA) $2{,}443.96 \pm 411.21$\,ft/min, BADA~4 (pyBADA) $892.09 \pm 321.65$\,ft/min. The much higher errors in pyBADA models reflect the maximum-climb thrust acceleration profiles, with BADA~4 demonstrating a more stable climb profile compared to BADA~3.
+    \item \textbf{True airspeed}: BlueSky (base) $11.85 \pm 11.44$\,kt, BADA~3 (pyBADA) $29.96 \pm 12.61$\,kt, BADA~4 (pyBADA) $24.97 \pm 23.83$\,kt. This speed mismatch in the pyBADA integrations is a direct consequence of the force-driven acceleration override, which propagates trajectory and flight phase discrepancies into the velocity state.
+    \item \textbf{Thrust}: BlueSky (base) $15{,}073.69 \pm 2{,}203.71$\,daN, BADA~3 (pyBADA) $5{,}658.32 \pm 762.08$\,daN, BADA~4 (pyBADA) $1{,}714.10 \pm 626.07$\,daN. BADA~4 remains significantly more representative of the Dynamo reference, yielding a $69.7\%$ reduction in error relative to BADA~3.
+    \item \textbf{Fuel flow}: BlueSky (base) $7{,}187.04 \pm 1{,}082.88$\,kg/h, BADA~3 (pyBADA) $2{,}768.30 \pm 531.14$\,kg/h, BADA~4 (pyBADA) $964.63 \pm 221.45$\,kg/h. BADA~4 achieves a $65.2\%$ reduction in fuel flow error vs BADA~3, reflecting the superior physics of the TSFC-based fuel flow formulation even under path-deviated conditions.
+    \item \textbf{Mass}: BlueSky (base) $218{,}608.84 \pm 7{,}783.93$\,kg, BADA~3 (pyBADA) $4{,}292.85 \pm 2{,}774.34$\,kg, BADA~4 (pyBADA) $1{,}259.56 \pm 599.85$\,kg. BADA~4 maintains a more precise mass depletion profile, reducing mass tracking error by $70.7\%$ vs BADA~3.
+\end{enumerate}
+
+In conclusion, while the active point-mass dynamic override in DYNMODE~1 increases physical consistency by coupling thrust and aerodynamic drag to the trajectory integration, it highlights a critical limitation of the simulator's guidance system. Without a VNAV flight path calculator and an altitude-capture control law that adjusts climb thrust ratings dynamically as the aircraft approaches cruise flight levels, the closed-loop system is highly susceptible to trajectory and speed deviations. Despite these guidance limitations, BADA~4 (pyBADA) remains consistently superior to BADA~3 (pyBADA) and the base model, achieving a $69.7\%$ reduction in thrust error and a $65.2\%$ reduction in fuel flow error under dynamic conditions.
+
+% ════════════════════════════════════════════════════════════════════════════
+% DYNMODE 1 LaTeX figures definition
+% ════════════════════════════════════════════════════════════════════════════
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{dyn1_fig01_altitude_profiles.png}
+    \caption{Altitude [kft] and Vertical Speed (VS) profiles vs.\ flight progress for representative routes under DYNMODE~1 (ISA conditions). The active ROCD override causes the aircraft to climb under maximum climb thrust, resulting in a much steeper vertical path than the Dynamo cost-index reference and significant altitude overshoots.}
+    \label{fig:altitude_profiles_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{dyn1_fig02_speed_profiles.png}
+    \caption{TAS and Mach profiles vs.\ flight progress for representative routes under DYNMODE~1. The active longitudinal acceleration override couples the speed integration to the flight path angle deviations, leading to increased speed mismatches relative to the reference.}
+    \label{fig:speed_profiles_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{dyn1_fig03_thrust_fuel_profiles.png}
+    \caption{Thrust and Fuel Flow (FF) profiles vs.\ flight progress for representative routes under DYNMODE~1. BADA~4's TSFC-based fuel flow model remains physically consistent with the reference, but shows extended climb thrust peaks due to the prolonged climb phase.}
+    \label{fig:thrust_fuel_profiles_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{dyn1_fig04_mass_profiles.png}
+    \caption{Aircraft mass depletion profiles vs.\ flight progress under DYNMODE~1. The excessive fuel flow and prolonged climb in BADA~3 lead to rapid mass depletion, while BADA~4 tracks the Dynamo reference trend more closely.}
+    \label{fig:mass_profiles_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{dyn1_fig05_mae_stripplots.png}
+    \caption{Mean Absolute Error (MAE) distribution strip plots (with horizontal jitter) vs.\ Dynamo reference across all 25 retained flights under DYNMODE~1. The vertical and speed errors are visibly higher than the kinematic MODE~0 counterparts, but BADA~4 retains its engine performance model superiority.}
+    \label{fig:mae_stripplots_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{dyn1_fig06_mae_heatmap.png}
+    \caption{Per-flight normalised MAE heatmap vs.\ Dynamo reference under DYNMODE~1. The BADA~4 (pyBADA) configuration exhibits consistently lower error entries for thrust, fuel flow, and mass across the fleet.}
+    \label{fig:mae_heatmap_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\textwidth]{dyn1_fig07_fuel_burn_bars.png}
+    \caption{(Top) Total fuel burn per flight for all four models and the Dynamo reference under DYNMODE~1. (Bottom) Relative fuel burn error percentage vs.\ Dynamo reference. The vertical path divergence shifts the BADA~4 mean error to $+57.63\%$, while BADA~3 overpredicts by $+157.92\%$.}
+    \label{fig:fuel_burn_bars_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{dyn1_fig08_global_summary.png}
+    \caption{Global campaign MAE summary vs.\ Dynamo reference across the 25 retained flights under DYNMODE~1. BADA~4 (pyBADA) achieves the lowest errors for engine performance variables (thrust, fuel flow, mass) under active feedback.}
+    \label{fig:global_summary_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{dyn1_fig09_fuel_scatter.png}
+    \caption{Scatter plot of simulated fuel burn vs.\ Dynamo reference under DYNMODE~1. All models show a positive bias relative to the Dynamo reference due to the path divergence during climb.}
+    \label{fig:fuel_scatter_dyn1}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.85\textwidth]{dyn1_fig10_fuel_error_vs_duration.png}
+    \caption{Fuel burn relative error vs.\ flight duration for all models under DYNMODE~1. The positive bias remains persistent across all route lengths, demonstrating the systematic impact of the guidance system limitations.}
+    \label{fig:fuel_error_vs_duration_dyn1}
+\end{figure}
