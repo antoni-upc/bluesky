@@ -17,7 +17,15 @@
 /modify_scenarios_time.py
 /modify_scenarios.py
 /docs/*.png
+/docs
 /analyze_dyn0_vs_dyn1.py
+/plugins/GOOD_METEO
+/plugins/saveatmos.py
+/plugins/savetraj.py
+/inspect_isa.py
+/analyze_vs.py
+/check_first_steps.py
+/check_rocd_units.py
 
 
 /cache
