@@ -303,7 +303,12 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
                                    v=tas_ms, config=config)
             T_idle_raw = ac.Thrust(h=hp_m, deltaTemp=deltaTemp, rating="LIDL",
                                    v=tas_ms, config=config)
-            T_idle = max(float(np.nan_to_num(T_idle_raw, nan=0.0)), 0.0)
+            # NOTE: do NOT clamp T_idle to >= 0 here.  BADA 3 LIDL thrust can
+            # be legitimately near-zero or slightly negative at high altitude /
+            # high Mach (net aerodynamic deceleration at flight idle).
+            # Clamping to 0 zeroes T for the entire descent (T = T_idle in the
+            # des branch) and corrupts ROCD and fuel flow (Bug #1).
+            T_idle = float(np.nan_to_num(T_idle_raw, nan=0.0))
             T_max  = float(np.nan_to_num(T_max, nan=T_idle))
 
             if bada_phase == "cl":
@@ -314,7 +319,8 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
                 # the BADA 4 adapter and to simplify the implementation.
                 T, ff_phase = T_max, "Climb"
             elif bada_phase == "des":
-                # Descent: idle thrust (LIDL) already clamped to >= 0 above.
+                # Descent: idle thrust (LIDL). May be slightly negative at high altitude /
+                # high Mach — this is physically correct and must NOT be clamped.
                 T, ff_phase = T_idle, "Descent"
             else:
                 # Cruise: drag-balanced thrust clamped to [T_idle, T_mcrz].

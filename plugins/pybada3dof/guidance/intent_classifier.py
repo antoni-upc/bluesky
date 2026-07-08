@@ -66,10 +66,20 @@ TRANSITION_ACCUM_THRESHOLD_S  = 10.0
 PERFORMANCE_CEILING_ACCUM_S   = 30.0
 
 # Speed-mode dead-bands [m/s].
-# Entry: start ACCELERATE/DECELERATE when |target - current TAS| > 2 m/s (~4 kt)
+# Entry: start ACCELERATE/DECELERATE when |target - current TAS| > 5 m/s (~10 kt)
 # Exit:  revert to CRUISE (hold speed) when |target - current TAS| <= 0.5 m/s (~1 kt)
 # The asymmetric entry/exit prevents rapid mode oscillation at the boundary.
-ACCEL_ENTRY_DEADBAND_MS = 2.0
+#
+# WHY 5 m/s and not 2 m/s?
+# At 2 m/s the ACCEL/DECEL mode fires every 3–5 ticks during normal speed-
+# schedule flight (e.g. TAS drifts ±2 kt as the aircraft decelerates along the
+# CAS→Mach schedule).  This makes the reference generator toggle between the
+# acc/dec ESF (0.3 or 1.7) and constM/constCAS ESF (~1.0) on alternate ticks,
+# producing large VS oscillations (+500 ↔ +2200 fpm in climb; −770 ↔ −2540 fpm
+# in descent).  At 5 m/s only genuinely commanded off-schedule speed changes
+# (ATC restriction, level-off acceleration) trigger the acc/dec branch; normal
+# schedule tracking remains in constM/constCAS for stable, smooth VS.
+ACCEL_ENTRY_DEADBAND_MS = 5.0
 ACCEL_EXIT_DEADBAND_MS  = 0.5
 
 # Heading dead-band [deg]: below this, the aircraft is considered "on heading"

@@ -113,10 +113,15 @@ class ReferenceGenerator:
             esf  = 0.0
 
         # -- Accelerating / decelerating while climbing or descending ----------
-        # The aircraft has not yet reached its target speed.  The acc/dec ESF
-        # branches split excess power between altitude gain and speed change:
-        #   acc (climbing or descending):  ESF = 0.3  -> 30% climb, 70% accel
-        #   dec (climbing or descending):  ESF = 1.7  -> 170% climb (trades KE)
+        # The aircraft has a commanded speed change large enough to trigger
+        # ACCEL or DECEL (|TAS_error| > ACCEL_ENTRY_DEADBAND_MS = 5 m/s).
+        # The acc/dec ESF branches split excess power between altitude change
+        # and speed change:
+        #   acc + cl/des (ESF=0.3): 30% to altitude, 70% to acceleration
+        #   dec + cl/des (ESF=1.7): 170% to altitude (trading KE for PE)
+        # Note: with the 5 m/s dead-band in intent_classifier.py, this branch
+        # only fires for genuine off-schedule speed steps, NOT for the small
+        # ±2 kt speed-schedule fluctuations that previously caused VS oscillation.
         elif bada_phase is not None and intent.speed_mode in (FlightMode.ACCELERATE, FlightMode.DECELERATE):
             evo = "acc" if intent.speed_mode == FlightMode.ACCELERATE else "dec"
             terms = perf.compute(idx, alt_m, tas_ms, mass_kg, temp_actual_k, ax_ms2,

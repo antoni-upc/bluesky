@@ -253,10 +253,18 @@ class PyBada3DOFPerf(PerfBase):
                 i, state, targets, dt)
             bada_phase = _BADA_PHASE.get(intent.vertical_mode)
 
-            # Select the ESF flight_evolution for the ICAO speed schedule:
-            #   above the crossover altitude -> constM
-            #   below the crossover altitude -> constCAS
-            #   cruise or level -> constTAS
+            # Select the ESF flight_evolution for MODE 0 (passive logging).
+            # In MODE 0, BlueSky's kinematic autopilot controls aircraft speed —
+            # our plugin has no authority over thrust.  The acc/dec ESF branches
+            # (ESF=0.3 / ESF=1.7) are only meaningful in MODE 1 (guided), where
+            # the guidance layer actually modulates thrust to achieve the speed
+            # change.  In MODE 0, the speed classifier's acc/dec mode fires every
+            # few ticks as TAS oscillates ±1–2 m/s around the target, toggling
+            # ESF between 0.3 and 1.0 every second and causing VS spikes.
+            # Therefore, always use the steady-state ICAO schedule ESF:
+            #   above crossover altitude: constM
+            #   below crossover altitude: constCAS
+            #   cruise or level:          constTAS
             if bada_phase is not None:
                 xover = self._perf_model.crossover_altitude_m(i)
                 flight_evo = "constM" if bs.traf.alt[i] > xover else "constCAS"
@@ -285,6 +293,24 @@ class PyBada3DOFPerf(PerfBase):
             self.trk[i]      = (bs.traf.trk[i]
                                 if hasattr(bs.traf, 'trk') and i < len(bs.traf.trk)
                                 else bs.traf.hdg[i])
+
+            # Write BADA physics ROCD back to traf.vs so that SAVEHEADER logs
+            # the physically meaningful vertical speed (from the TEM energy
+            # balance) rather than BlueSky's kinematic autopilot VS.
+            #
+            # Without this write-back, traf.vs in MODE 0 comes from BlueSky's
+            # VNAV, which alternates between the normal steepness formula and
+            # unconstrained "catch-up" bursts (e.g. -(alt_error/t_remaining))
+            # whenever the aircraft is "late" on its descent profile.  Because
+            # our BADA ROCD is never used to drive the trajectory in MODE 0,
+            # the aircraft drifts off the BADA profile every tick, making the
+            # autopilot issue large catch-up VS commands and producing the
+            # oscillating VS spikes seen in the logged CSV.
+            #
+            # Also store in vs_phys so the MODE 1 guidance layer always has a
+            # valid physical VS as its initial condition on the next tick.
+            bs.traf.vs[i]  = float(terms.rocd_ms)
+            self.vs_phys[i] = float(terms.rocd_ms)
 
             # Normalised throttle: 0.0 = idle, 1.0 = max-continuous/max-climb.
             # Written to bs.traf.thr[i] for SAVEHEADER logging and screen readouts.
