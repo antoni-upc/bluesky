@@ -38,7 +38,12 @@ TOD_ALT_BAND_FT            = 500.0    # DES -> CR capture band
 # This asymmetry prevents minor altitude oscillations near the aircraft's
 # performance ceiling from repeatedly bouncing it back into Climb mode.
 # Only a genuine commanded step-climb (target >> current altitude) exits Cruise.
-STEP_CLIMB_ALT_BAND_FT     = 2000.0   # CR -> CL exit band
+#
+# IMPORTANT: must be strictly LESS THAN 2000 ft so that a standard RVSM
+# step-climb of exactly +2000 ft (e.g. FL370 -> FL390) satisfies the strict
+# '>' condition (2000 > 1500 = True).  At 2000 ft the boundary case
+# 2000 > 2000 is False and the climb is silently suppressed.
+STEP_CLIMB_ALT_BAND_FT     = 1500.0   # CR -> CL exit band (must be < 2000 ft)
 
 # Vertical speed thresholds [ft/min] for phase classification.
 CLIMB_VS_FPM               = 300.0    # minimum VS to confirm active climb

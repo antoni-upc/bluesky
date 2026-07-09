@@ -13,14 +13,14 @@ which calls the instance method ac.esf(**kwargs).  Unlike BADA 3, the BADA 4
 XML object does populate the instance esf() method, so no override is needed.
 
 Fallback strategy for unknown aircraft types:
-  When the requested ICAO type is not in the BADA 4 data directory,
-  _load_fallback() first tries to load the ``Dummy-TWIN`` model (a generic
-  twin-engine narrowbody), then falls back to the first loadable model in the
-  BADA_DIR sorted alphabetically.  The loaded slot is flagged is_dummy=True.
-  The crossover_altitude_m() method is not available for BADA 4 because
-  pyBADA's BADA 4 objects do not expose climb CAS / Mach speed tables in the
-  same way as BADA 3 OPF files; the crossover computation in the ICAO speed
-  schedule is handled entirely in the BADA 3 adapter.
+  1. Prefix match: scan all model subdirectories in BADA_DIR and pick the one
+     that shares the longest common leading substring with the requested ICAO
+     type.  E.g. 'A320' matches 'A320-200' before 'A330-200'.  Ties broken by
+     alphabetical order of the candidate name.
+  2. Generic DUMMY: if no prefix match is found (zero common characters),
+     _load_fallback() first tries Dummy-TWIN (preferred — best stand-in for
+     commercial narrowbody), then falls back to the first loadable directory in
+     BADA_DIR sorted alphabetically.  The loaded slot is flagged is_dummy=True.
 """
 
 import numpy as np
@@ -49,22 +49,53 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
         self.is_dummy   = np.ones(0, dtype=bool)     # True if model is a fallback
 
     # ------------------------------------------------------------------
-    def _load_fallback(self):
-        """Load a generic BADA 4 Dummy model as a fallback for unknown types.
-
-        Tries Dummy-TWIN first (preferred — best stand-in for commercial
-        narrowbody), then falls back to the first loadable directory in
-        BADA_DIR (sorted alphabetically).  Returns None if the directory is
-        completely empty or all candidates raise exceptions.
-        """
+    def _available_model_dirs(self):
+        """Return the sorted list of model subdirectory names in BADA_DIR."""
         import os
         try:
-            all_dirs = sorted([
+            return sorted([
                 d for d in os.listdir(self.BADA_DIR)
                 if os.path.isdir(os.path.join(self.BADA_DIR, d))
             ])
         except OSError:
-            return None
+            return []
+
+    # ------------------------------------------------------------------
+    def _find_best_match(self, actype: str, candidates: list) -> str | None:
+        """Return the model directory name that best matches *actype* by longest
+        common prefix.
+
+        Compares *actype* (upper-cased) against every entry in *candidates*.
+        The candidate with the most leading characters in common with *actype*
+        wins; ties are broken by the alphabetical order already present in
+        *candidates* (pass a sorted list).  Returns None when no candidate
+        shares even a single leading character.
+        """
+        actype_up = actype.upper()
+        best_name, best_len = None, 0
+        for name in candidates:
+            name_up = name.upper()
+            common = 0
+            for a, b in zip(actype_up, name_up):
+                if a == b:
+                    common += 1
+                else:
+                    break
+            if common > best_len:
+                best_len, best_name = common, name
+        return best_name if best_len > 0 else None
+
+    # ------------------------------------------------------------------
+    def _load_fallback(self):
+        """Load a generic BADA 4 Dummy model as a last-resort fallback.
+
+        Only called when no prefix match was found in BADA_DIR.  Tries
+        Dummy-TWIN first (preferred — best stand-in for commercial
+        narrowbody), then falls back to the first loadable directory
+        alphabetically.  Returns None if the directory is completely empty
+        or all candidates raise exceptions.
+        """
+        all_dirs = self._available_model_dirs()
         # Prefer Dummy-TWIN; fall back to alphabetical order
         preferred = [n for n in all_dirs if n.upper() == "DUMMY-TWIN"]
         names     = preferred + [n for n in all_dirs if n.upper() != "DUMMY-TWIN"]
@@ -87,6 +118,7 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
             actype = self._actype_lookup(i).upper()
 
             if actype not in self._cached_models and actype not in self._failed_models:
+                # --- 1. Try exact match ------------------------------------------
                 try:
                     model = Bada4Aircraft(
                         badaVersion=self.BADA_VER, acName=actype, filePath=self.BADA_DIR,
@@ -98,11 +130,31 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
                               f"DUMMY aircraft '{resolved_name}'. Envelope limits relaxed. "
                               f"Install licensed BADA 4 data for accurate results.")
                     self._cached_models[actype] = (model, is_fallback)
-                except Exception as exc:
-                    print(f"[Bada4Adapter] Failed to load BADA 4 model for {actype}: {exc}")
-                    self._failed_models.add(actype)
-                    fallback = self._load_fallback()
-                    self._cached_models[actype] = (fallback, True)
+                except Exception:
+                    # --- 2. Try best-prefix match among available model dirs -------
+                    all_dirs = self._available_model_dirs()
+                    best = self._find_best_match(actype, all_dirs)
+                    if best is not None:
+                        try:
+                            model = Bada4Aircraft(
+                                badaVersion=self.BADA_VER, acName=best,
+                                filePath=self.BADA_DIR,
+                            )
+                            print(f"[Bada4Adapter] '{actype}' not found - "
+                                  f"using best prefix match: '{best}'")
+                            self._cached_models[actype] = (model, True)
+                        except Exception as exc:
+                            print(f"[Bada4Adapter] Prefix match '{best}' for '{actype}' "
+                                  f"failed to load: {exc}")
+                            best = None   # fall through to generic dummy
+
+                    if best is None:
+                        # --- 3. Last resort: generic DUMMY model ------------------
+                        print(f"[Bada4Adapter] No prefix match for '{actype}' - "
+                              f"falling back to generic DUMMY model.")
+                        self._failed_models.add(actype)
+                        fallback = self._load_fallback()
+                        self._cached_models[actype] = (fallback, True)
 
             ac, is_dummy = self._cached_models.get(actype, (None, True))
             self.model_refs[i] = ac

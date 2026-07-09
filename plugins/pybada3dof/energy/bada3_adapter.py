@@ -17,16 +17,19 @@ This is why Bada3PerformanceAdapter overrides _select_esf() to call the static
 Airplane.esf() class method directly.
 
 Fallback strategy for unknown aircraft types:
-  BADA 3 dummy data ships as flat OPF/APF files (J2M___.OPF, J4H___.OPF, etc.)
-  inside the DUMMY sub-directory of the BADA 3 data folder.  When the requested
-  ICAO type is not found, _load_fallback() tries the following preference-ordered
-  list and uses the first one available:
-      J2M___ (medium twin-jet)  -> preferred, best stand-in for narrow-body
-      J2H___ (heavy twin-jet)
-      J4H___ (heavy quad-jet)
-      BZJT__ (generic business jet)
-      TP2M__ (twin turboprop)
-      GA____ (general aviation)
+  1. Prefix match: scan all OPF file stems in BADA_DIR and pick the candidate
+     that shares the longest common leading substring with the requested ICAO
+     type.  E.g. 'A320' matches 'A320-200' before 'A330-200'.  Ties broken by
+     alphabetical order of the candidate name.
+  2. Generic DUMMY: if no prefix match is found (zero common characters),
+     _load_fallback() tries the preference-ordered list below and uses the first
+     one available:
+         J2M___ (medium twin-jet)  -> preferred, best stand-in for narrow-body
+         J2H___ (heavy twin-jet)
+         J4H___ (heavy quad-jet)
+         BZJT__ (generic business jet)
+         TP2M__ (twin turboprop)
+         GA____ (general aviation)
 """
 
 import numpy as np
@@ -63,24 +66,50 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
         self.is_dummy   = np.ones(0, dtype=bool)     # True if model is a fallback
 
     # ------------------------------------------------------------------
-    def _load_fallback(self):
-        """Load the best available BADA 3 OPF dummy model as a fallback.
-
-        BADA 3 dummy data ships as flat OPF/APF files (e.g. J2M___.OPF) in
-        the BADA_DIR.  pyBADA's Bada3Aircraft loads them by file stem (acName).
-        We try the preference-ordered list and return the first one that loads.
-        Returns None if the directory is empty or all candidates fail.
-        """
+    def _available_opf_stems(self):
+        """Return the set of OPF file stems present in BADA_DIR."""
         import os
         try:
-            available = set(
+            return set(
                 os.path.splitext(f)[0]
                 for f in os.listdir(self.BADA_DIR)
                 if f.upper().endswith(".OPF")
             )
         except OSError:
-            available = set()
+            return set()
 
+    # ------------------------------------------------------------------
+    def _find_best_match(self, actype: str, available: set) -> str | None:
+        """Return the OPF stem that best matches *actype* by longest common prefix.
+
+        Compares *actype* (upper-cased) against every stem in *available*.
+        The candidate with the most leading characters in common with *actype*
+        wins; ties are broken alphabetically.  Returns None when no candidate
+        shares even a single leading character.
+        """
+        actype_up = actype.upper()
+        best_name, best_len = None, 0
+        for stem in sorted(available):          # sorted for deterministic tie-break
+            stem_up = stem.upper()
+            common = 0
+            for a, b in zip(actype_up, stem_up):
+                if a == b:
+                    common += 1
+                else:
+                    break
+            if common > best_len:
+                best_len, best_name = common, stem
+        return best_name if best_len > 0 else None
+
+    # ------------------------------------------------------------------
+    def _load_fallback(self):
+        """Load the best available BADA 3 OPF dummy model as a last-resort fallback.
+
+        Only called when no prefix match was found in BADA_DIR.  Tries the
+        preference-ordered list and returns the first one that loads.
+        Returns None if the directory is empty or all candidates fail.
+        """
+        available = self._available_opf_stems()
         for name in self._OPF_FALLBACK_NAMES:
             if name not in available:
                 continue
@@ -143,15 +172,34 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
             actype = self._actype_lookup(i).upper()
 
             if actype not in self._cached_models and actype not in self._failed_models:
+                # --- 1. Try exact match ------------------------------------------
                 try:
                     m = Bada3Aircraft(badaVersion=self.BADA_VER, acName=actype,
                                       filePath=self.BADA_DIR)
                     self._cached_models[actype] = (m, False)
-                except Exception as exc:
-                    print(f"[Bada3Adapter] Failed to load BADA 3 model for {actype}: {exc}")
-                    self._failed_models.add(actype)
-                    fallback = self._load_fallback()
-                    self._cached_models[actype] = (fallback, True)
+                except Exception:
+                    # --- 2. Try best-prefix match among available OPF files -------
+                    available = self._available_opf_stems()
+                    best = self._find_best_match(actype, available)
+                    if best is not None:
+                        try:
+                            m = Bada3Aircraft(badaVersion=self.BADA_VER, acName=best,
+                                              filePath=self.BADA_DIR)
+                            print(f"[Bada3Adapter] '{actype}' not found - "
+                                  f"using best prefix match: '{best}'")
+                            self._cached_models[actype] = (m, True)
+                        except Exception as exc:
+                            print(f"[Bada3Adapter] Prefix match '{best}' for '{actype}' "
+                                  f"failed to load: {exc}")
+                            best = None   # fall through to generic dummy
+
+                    if best is None:
+                        # --- 3. Last resort: generic DUMMY model ------------------
+                        print(f"[Bada3Adapter] No prefix match for '{actype}' - "
+                              f"falling back to generic DUMMY model.")
+                        self._failed_models.add(actype)
+                        fallback = self._load_fallback()
+                        self._cached_models[actype] = (fallback, True)
 
             ac, is_dummy = self._cached_models.get(actype, (None, True))
             self.model_refs[i] = ac
