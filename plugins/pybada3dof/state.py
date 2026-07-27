@@ -3,12 +3,12 @@ state.py
 
 Data Transfer Objects (DTOs) that flow between the plugin layers:
 
-    BlueSkyBridge    -> BlueSkyTargets        (read from bs.traf)
-    IntentClassifier -> FlightIntent          (what the aircraft intends to do)
-    FeasibilityFilter-> FlightIntent          (intent after envelope clamping)
-    ReferenceGenerator-> GuidanceReference    (TEM-derived kinematic targets)
-    FlightPathAngleController -> ForceCommand (rate-limited actuation)
-    IAircraftDynamics -> AircraftState        (integrated state)
+    BlueSkyBridge     -> BlueSkyTargets     (read from bs.traf)
+    IntentClassifier  -> FlightIntent       (what the aircraft intends to do)
+    FeasibilityFilter -> FlightIntent       (intent after envelope clamping)
+    ReferenceGenerator-> GuidanceReference  (TEM-derived kinematic targets)
+    GuidanceLayer     -> ForceCommand       (passthrough — no rate limiting)
+    IAircraftDynamics -> AircraftState      (integrated state)
 
 All DTOs are plain Python dataclasses — no NumPy arrays, no BlueSky imports.
 This design keeps every layer above `bridge.py` testable with plain objects
@@ -23,7 +23,6 @@ angular-rate fields without touching any existing method signatures
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +172,10 @@ class EnergyTerms:
     (BADA 3 or BADA 4, selected via the PERFMODEL stack command) for one
     aircraft at the current timestep.
 
-    This is the sole hand-off point between the Energy Management layer
-    (bada3_adapter / bada4_adapter) and the Guidance/Control layers.
-    Neither of those layers ever touches a Bada3Aircraft or Bada4Aircraft
-    object directly, keeping the model-family swap entirely transparent.
+    This is the sole hand-off point between the Energy layer
+    (bada3_adapter / bada4_adapter) and the Guidance layer.
+    Neither layer ever touches a Bada3Aircraft or Bada4Aircraft object
+    directly, keeping the model-family swap entirely transparent.
     """
     thrust_n:       float   # net engine thrust at current rating [N]
     drag_n:         float   # total aerodynamic drag [N]
@@ -190,7 +189,7 @@ class EnergyTerms:
 
 
 # ---------------------------------------------------------------------------
-# Guidance reference (output of ReferenceGenerator, input to the Controller)
+# Guidance reference (output of ReferenceGenerator, input to GuidanceLayer)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -199,8 +198,8 @@ class GuidanceReference:
     TEM + ESF split inside ReferenceGenerator.
 
     These are *kinematic* targets (rates and angles), not forces.
-    The FlightPathAngleController translates them into a ForceCommand by
-    applying actuator rate limits (e.g. roll rate) before handing off to
+    GuidanceLayer translates them into a ForceCommand by passing all fields
+    through directly (no actuator rate limiting) before handing off to
     the Dynamics integrator.
     """
     rocd_ms:       float   # target rate of climb/descent [m/s], signed
@@ -219,24 +218,22 @@ class GuidanceReference:
 
 
 # ---------------------------------------------------------------------------
-# Force command (output of FlightPathAngleController, input to Dynamics)
+# Force command (output of GuidanceLayer, input to Dynamics)
 # ---------------------------------------------------------------------------
 
 @dataclass
 class ForceCommand:
-    """Rate-limited actuation command forwarded to the Dynamics integrator.
+    """Actuation command forwarded to the Dynamics integrator.
 
-    vs_ms and bank_deg have been passed through the rate limiters of
-    EnergyRateController and BankController respectively.  tas_rate_ms2
-    is passed through unchanged because there is no physical actuator model
-    for longitudinal acceleration (the engine spool rate is not modelled).
+    All fields are passed through directly from GuidanceReference without
+    rate limiting.  vs_ms and bank_deg are the raw TEM/ESF outputs;
+    tas_rate_ms2 is the longitudinal acceleration from the Energy layer.
     """
     thrust_n:       float   # net thrust [N] — forwarded for logging
     drag_n:         float   # aerodynamic drag [N] — forwarded for logging
-    bank_deg:       float   # bank angle after roll-rate limiting [deg]
+    bank_deg:       float   # bank angle commanded to the dynamics integrator [deg]
     vs_ms:          float   # vertical speed reference (ROCD) [m/s]
-                            # passed through from GuidanceReference without
-                            # rate limiting (see EnergyRateController)
+                            # passed through directly from GuidanceReference
     tas_rate_ms2:   float   # longitudinal TAS acceleration [m/s²] — pass-through
     fuel_flow_kgps: float   # fuel flow [kg/s] — used for mass depletion
     thrust_max_n:   float = 0.0   # MCMB thrust [N] — forwarded for logging

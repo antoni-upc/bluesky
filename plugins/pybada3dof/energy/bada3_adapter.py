@@ -32,8 +32,11 @@ Fallback strategy for unknown aircraft types:
          GA____ (general aviation)
 """
 
-import numpy as np
+import os
 import math
+from pathlib import Path
+
+import numpy as np
 
 from pyBADA.bada3 import Bada3Aircraft
 from pyBADA.aircraft import Airplane
@@ -46,7 +49,14 @@ from .performance_model import BadaPerformanceModelMixin, IPerformanceModel
 class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
 
     BADA_VER = "3.15"
-    BADA_DIR = "/home/paucr/bluesky/.venv/lib/python3.12/site-packages/pyBADA/aircraft/BADA3/DUMMY"
+    # Path to the BADA 3 OPF/APF data directory.
+    # pyBADA ships a DUMMY subset under its own package directory; update
+    # BADA_DIR to point to a licensed BADA 3.x dataset for real-aircraft types.
+    BADA_DIR = str(
+        Path(__file__).parent.parent.parent.parent  # repo root
+        / ".venv" / "lib" / "python3.12" / "site-packages"
+        / "pyBADA" / "aircraft" / "BADA3" / "DUMMY"
+    )
 
     # OPF-format DUMMY names tried in order of suitability for generic
     # commercial twin-jet scenarios.  The list is exhausted until a loadable
@@ -68,7 +78,6 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
     # ------------------------------------------------------------------
     def _available_opf_stems(self):
         """Return the set of OPF file stems present in BADA_DIR."""
-        import os
         try:
             return set(
                 os.path.splitext(f)[0]
@@ -124,13 +133,12 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
 
     # ------------------------------------------------------------------
     def _select_esf(self, ac, alt_m, mach, deltaTemp, bada_phase, flight_evolution):
-        """Override: use pyBADA's static Airplane.esf() instead of the
-        instance method.
+        """Override: call pyBADA's static Airplane.esf() class method.
 
         BADA 3 OPF objects do not have an instance esf() method (that is an
-        XML-only attribute of BADA 4 objects).  We call the static class method
-        Airplane.esf() directly with the correct arguments for each
-        flight_evolution mode.
+        XML-only attribute of BADA 4 objects).  The BADA 3 ESF is computed
+        via the static class method Airplane.esf(), called with explicitly
+        named arguments for each flight_evolution mode.
 
         Returns 1.0 as a safe fallback if pyBADA raises or returns a non-finite
         value (e.g. for an unrecognised evolution string or edge-case altitude).
@@ -311,6 +319,8 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
         if ac is None:
             return EnergyTerms(0, 0, 0, 0, 0, "CR", 0, 0)
 
+        self._sanitize_inputs(alt_m, tas_ms, mass_kg, temp_actual_k)
+
         try:
             # --- Atmosphere --------------------------------------------------
             # Use pressure altitude (hp_m) when available for correct deltaTemp.
@@ -361,10 +371,25 @@ class Bada3PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
 
             if bada_phase == "cl":
                 # Climb: full MCMB thrust.
-                # NOTE: BADA 3 defines a reduced-climb-power coefficient C_red
-                # to account for below-MTOW operations.  It is intentionally
-                # NOT applied here (always full MCMB) for consistency with
-                # the BADA 4 adapter and to simplify the implementation.
+                #
+                # BADA 3 (Section 3.7) defines a reduced-climb-power coefficient
+                # C_red that scales T_max downward for below-MTOW operations,
+                # reducing engine wear.  It is intentionally NOT applied here so
+                # that the BADA 3 output is consistent with the BADA 4 adapter
+                # (which has no equivalent C_red parameter) and to keep the climb
+                # model deterministic regardless of the current aircraft mass.
+                #
+                # To enable power reduction for BADA 3, replace the line below with:
+                #
+                #   mass_ratio = min(self.mass[idx] / ac.MTOW, 1.0)
+                #   # C_red [0, 0.25]: scales with MTOW–OEW margin (BADA 3 Table 3-10)
+                #   c_red = ac.C_red * (1.0 - mass_ratio)
+                #   T = T_max * (1.0 - c_red)
+                #
+                # where idx is the aircraft index, ac.MTOW is the maximum
+                # take-off weight [kg], and ac.C_red is the coefficient from the
+                # BADA 3 OPF file.  The variable T_max in the line after this
+                # block can then be removed (replaced by T above).
                 T, ff_phase = T_max, "Climb"
             elif bada_phase == "des":
                 # Descent: idle thrust (LIDL). May be slightly negative at high altitude /

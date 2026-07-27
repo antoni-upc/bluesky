@@ -62,6 +62,11 @@ _ORIGINAL_UPDATE_AIRSPEED = None
 # expects in traf.perf.phase: 3=climb, 4=cruise, 5=descent.
 _PHASE_CODE = {"cl": 3, "cruise": 4, "des": 5}
 
+# Module-level constants shared by _update_mode0() — avoids recreating these
+# dicts on every call (which happens every simulation tick).
+_BADA_PHASE_M0    = {FlightMode.CLIMB: "cl", FlightMode.DESCENT: "des"}
+_PHASE_FROM_MODE  = {FlightMode.CLIMB: 3, FlightMode.DESCENT: 5}
+
 
 class PyBada3DOFPerf(PerfBase):
     """PerfBase-facing entry point.  See module docstring.
@@ -89,6 +94,20 @@ class PyBada3DOFPerf(PerfBase):
             self.vs_phys  = np.array([])
             self.hdg      = np.array([])           # heading [deg] — read by SAVEHEADER
             self.trk      = np.array([])           # track angle [deg] — read by SAVEHEADER
+            # Per-aircraft CAS/Mach crossover altitude [m].  This is a static
+            # property of the BADA OPF/XML speed schedule (never changes during
+            # a flight), so it is computed once at create() time and cached here
+            # rather than being recomputed every tick in _update_mode0().
+            self.xover_alt_m = np.array([])
+            # True when the user has explicitly overridden aircraft mass via the
+            # MASS stack command.  When set, limits() skips the BADA-derived
+            # hmax ceiling clamp so that above-MTOW masses do not cause pyBADA's
+            # mass-buffet ceiling to truncate the commanded cruise altitude.
+            self.mass_override = np.array([], dtype=bool)
+
+        # Default dynamic mode applied when new aircraft are created via create().
+        # Can be modified globally via stack command: DYNMODE 0|1
+        self.default_dyn_mode = 1
 
         self._perf_model = PerformanceModelFactory.create(default_model, self._actype_lookup)
         # GuidanceLayer holds a callable, not a direct reference, so that a
@@ -139,18 +158,22 @@ class PyBada3DOFPerf(PerfBase):
         """Allocate per-aircraft state for `n` newly created aircraft.
 
         super().create(n) zero-initialises all traf-arrays, so dyn_mode must
-        be explicitly set to 1 (3-DOF physics) after the parent call — the
-        default of 0 from zero-initialisation is incorrect for new aircraft.
+        be explicitly set to default_dyn_mode after the parent call — the
+        default of 0 from zero-initialisation is incorrect for new aircraft
+        unless default_dyn_mode == 0 was explicitly selected via DYNMODE 0.
         """
         super().create(n)
         self._perf_model.create(n)
-        # New aircraft default to DYNMODE 1 (3-DOF physics)
-        self.dyn_mode[-n:] = 1
+        # New aircraft default to default_dyn_mode (typically 1 unless DYNMODE 0 ran first)
+        self.dyn_mode[-n:] = self.default_dyn_mode
         start = bs.traf.ntraf - n
         for i in range(start, bs.traf.ntraf):
             # Seed mass from the BADA MREF so fuel depletion starts at a
             # physically realistic operating weight.
-            self.mass[i]    = self._perf_model.initial_mass_kg(i)
+            self.mass[i]          = self._perf_model.initial_mass_kg(i)
+            # New aircraft start without a user mass override; the MASS command
+            # sets this flag to True, after which limits() will not clip hmax.
+            self.mass_override[i] = False
             # Seed vs_phys from the kinematic VS so the first BADA physics
             # call starts from a consistent initial condition.
             self.vs_phys[i] = bs.traf.vs[i]
@@ -158,6 +181,9 @@ class PyBada3DOFPerf(PerfBase):
             self.trk[i]     = (bs.traf.trk[i]
                                if hasattr(bs.traf, 'trk') and i < len(bs.traf.trk)
                                else bs.traf.hdg[i])
+            # Cache the crossover altitude: this is a static function of the
+            # aircraft type's OPF/XML speed schedule and never changes in flight.
+            self.xover_alt_m[i] = self._perf_model.crossover_altitude_m(i)
             # Reset the intent-classifier hysteresis so the aircraft starts in Climb.
             self._guidance_layer.reset(i)
             if not self._perf_model.has_model(i):
@@ -200,8 +226,8 @@ class PyBada3DOFPerf(PerfBase):
         No trajectory write-back is performed: BlueSky's kinematic autopilot
         continues to drive the aircraft's position, altitude, and speed.
         """
-        _BADA_PHASE   = {FlightMode.CLIMB: "cl", FlightMode.DESCENT: "des"}
-        _PHASE_FROM_MODE = {FlightMode.CLIMB: 3, FlightMode.DESCENT: 5}
+        # Check once per call rather than once per aircraft in the loop.
+        has_trk = hasattr(bs.traf, 'trk')
 
         for i in range(bs.traf.ntraf):
             if i >= len(self.dyn_mode) or self.dyn_mode[i] != 0:
@@ -213,19 +239,20 @@ class PyBada3DOFPerf(PerfBase):
                        if bs.traf.ap.turnphi[i] > 1e-9
                        else bs.traf.ap.bankdef[i])
 
-            # Route altitude scan: find the highest and lowest altitudes
-            # remaining in the route (from the current active waypoint forward).
+            # Route altitude scan using NumPy: avoids constructing a Python
+            # list; np.asarray handles both list and ndarray wpalt types.
             try:
                 rte = bs.traf.ap.route[i]
                 iac = rte.iactwp
-                remaining_alts = [a for a in rte.wpalt[iac:] if a >= 0]
-                route_alt_m     = float(max(remaining_alts)) \
-                                  if remaining_alts else float(bs.traf.aporasas.alt[i])
-                route_min_alt_m = float(min(remaining_alts)) \
-                                  if remaining_alts else float(bs.traf.aporasas.alt[i])
+                remaining = np.asarray(rte.wpalt[iac:], dtype=float)
+                pos_mask = remaining >= 0
+                if pos_mask.any():
+                    route_alt_m     = float(remaining[pos_mask].max())
+                    route_min_alt_m = float(remaining[pos_mask].min())
+                else:
+                    route_alt_m = route_min_alt_m = float(bs.traf.aporasas.alt[i])
             except Exception:
-                route_alt_m     = float(bs.traf.aporasas.alt[i])
-                route_min_alt_m = float(bs.traf.aporasas.alt[i])
+                route_alt_m = route_min_alt_m = float(bs.traf.aporasas.alt[i])
 
             targets = BlueSkyTargets(
                 target_alt_m=bs.traf.aporasas.alt[i],
@@ -251,7 +278,7 @@ class PyBada3DOFPerf(PerfBase):
             # MODE 1 so that logged phase codes are mode-agnostic).
             intent    = self._guidance_layer._intent_classifier.classify(
                 i, state, targets, dt)
-            bada_phase = _BADA_PHASE.get(intent.vertical_mode)
+            bada_phase = _BADA_PHASE_M0.get(intent.vertical_mode)
 
             # Select the ESF flight_evolution for MODE 0 (passive logging).
             # In MODE 0, BlueSky's kinematic autopilot controls aircraft speed —
@@ -266,8 +293,8 @@ class PyBada3DOFPerf(PerfBase):
             #   below crossover altitude: constCAS
             #   cruise or level:          constTAS
             if bada_phase is not None:
-                xover = self._perf_model.crossover_altitude_m(i)
-                flight_evo = "constM" if bs.traf.alt[i] > xover else "constCAS"
+                # Use the cached crossover altitude (static per aircraft type).
+                flight_evo = "constM" if bs.traf.alt[i] > self.xover_alt_m[i] else "constCAS"
             else:
                 flight_evo = "constTAS"
 
@@ -291,25 +318,13 @@ class PyBada3DOFPerf(PerfBase):
             self.thr_idle[i] = terms.thrust_idle_n
             self.hdg[i]      = bs.traf.hdg[i]
             self.trk[i]      = (bs.traf.trk[i]
-                                if hasattr(bs.traf, 'trk') and i < len(bs.traf.trk)
+                                if has_trk and i < len(bs.traf.trk)
                                 else bs.traf.hdg[i])
 
-            # Write BADA physics ROCD back to traf.vs so that SAVEHEADER logs
-            # the physically meaningful vertical speed (from the TEM energy
-            # balance) rather than BlueSky's kinematic autopilot VS.
-            #
-            # Without this write-back, traf.vs in MODE 0 comes from BlueSky's
-            # VNAV, which alternates between the normal steepness formula and
-            # unconstrained "catch-up" bursts (e.g. -(alt_error/t_remaining))
-            # whenever the aircraft is "late" on its descent profile.  Because
-            # our BADA ROCD is never used to drive the trajectory in MODE 0,
-            # the aircraft drifts off the BADA profile every tick, making the
-            # autopilot issue large catch-up VS commands and producing the
-            # oscillating VS spikes seen in the logged CSV.
-            #
-            # Also store in vs_phys so the MODE 1 guidance layer always has a
-            # valid physical VS as its initial condition on the next tick.
-            bs.traf.vs[i]  = float(terms.rocd_ms)
+            # store physical BADA ROCD in vs_phys so the MODE 1 guidance layer
+            # always has a valid physical VS as its initial condition on the next
+            # tick, but DO NOT overwrite bs.traf.vs[i] so MODE 0 remains purely
+            # kinematic (behaving identically to the native kinematic autopilot).
             self.vs_phys[i] = float(terms.rocd_ms)
 
             # Normalised throttle: 0.0 = idle, 1.0 = max-continuous/max-climb.
@@ -335,7 +350,22 @@ class PyBada3DOFPerf(PerfBase):
             return intent_v_tas, intent_vs, intent_h
         v = np.clip(intent_v_tas, self.vmin,
                     np.where(self.vmax > 0, self.vmax, intent_v_tas))
-        h = np.where(self.hmax > 0, np.minimum(intent_h, self.hmax), intent_h)
+        is_dummy = (self._perf_model.is_dummy[:bs.traf.ntraf]
+                    if hasattr(self._perf_model, 'is_dummy')
+                    else np.zeros(bs.traf.ntraf, dtype=bool))
+        # Skip the BADA ceiling clamp when:
+        #   - hmax <= 0 (envelope query failed / no data)
+        #   - aircraft uses a generic dummy model (uncertified envelope)
+        #   - the user has explicitly set a mass above MTOW via the MASS command
+        #     (mass_override=True).  In that case pyBADA's maxAltitude() internally
+        #     clamps mass to MTOW and would return a ceiling below the commanded
+        #     cruise altitude, incorrectly preventing the aircraft from climbing.
+        mass_ovr = self.mass_override[:bs.traf.ntraf]
+        h = np.where(
+            (self.hmax > 0) & ~is_dummy & ~mass_ovr,
+            np.minimum(intent_h, self.hmax),
+            intent_h,
+        )
         return v, intent_vs, h
 
     # ------------------------------------------------------------------
@@ -359,6 +389,8 @@ class PyBada3DOFPerf(PerfBase):
         """
         dt = bs.sim.simdt
         has_dyn1 = False
+        # Check once per call rather than once per aircraft in the loop.
+        has_trk = hasattr(traf, 'trk')
 
         for i in range(traf.ntraf):
             if i >= len(self.dyn_mode) or self.dyn_mode[i] != 1:
@@ -369,24 +401,20 @@ class PyBada3DOFPerf(PerfBase):
                        if traf.ap.turnphi[i] > 1e-9
                        else traf.ap.bankdef[i])
 
-            # Route altitude scan: scan traf.ap.route[i].wpalt from the current
-            # active waypoint index (iactwp) forward.  Only positive entries
-            # are considered (negative = unconstrained waypoint).  This provides:
-            #   route_alt_m     = highest altitude still committed in the route,
-            #                     used as a step-climb guard in IntentClassifier.
-            #   route_min_alt_m = lowest altitude still committed in the route,
-            #                     used as a step-descent guard in IntentClassifier.
+            # Route altitude scan using NumPy: avoids constructing a Python
+            # list; np.asarray handles both list and ndarray wpalt types.
             try:
                 rte = traf.ap.route[i]
                 iac = rte.iactwp
-                remaining_alts  = [a for a in rte.wpalt[iac:] if a >= 0]
-                route_alt_m     = float(max(remaining_alts)) \
-                                  if remaining_alts else float(traf.aporasas.alt[i])
-                route_min_alt_m = float(min(remaining_alts)) \
-                                  if remaining_alts else float(traf.aporasas.alt[i])
+                remaining = np.asarray(rte.wpalt[iac:], dtype=float)
+                pos_mask = remaining >= 0
+                if pos_mask.any():
+                    route_alt_m     = float(remaining[pos_mask].max())
+                    route_min_alt_m = float(remaining[pos_mask].min())
+                else:
+                    route_alt_m = route_min_alt_m = float(traf.aporasas.alt[i])
             except Exception:
-                route_alt_m     = float(traf.aporasas.alt[i])
-                route_min_alt_m = float(traf.aporasas.alt[i])
+                route_alt_m = route_min_alt_m = float(traf.aporasas.alt[i])
 
             targets = BlueSkyTargets(
                 target_alt_m=traf.aporasas.alt[i],
@@ -420,18 +448,45 @@ class PyBada3DOFPerf(PerfBase):
             )
 
             try:
+                # Compute the flight envelope once using pre-kinematic state.
+                # This result is passed directly to GuidanceLayer.step(), which
+                # would otherwise call get_envelope() again with identical inputs,
+                # doubling the per-aircraft BADA atmosphere computation cost.
+                p_pa_i = float(traf.p[i])
+                pre_envelope = self._perf_model.get_envelope(
+                    i, pre_alt[i], pre_tas[i], self.mass[i], traf.Temp[i],
+                    p_pa=p_pa_i
+                )
                 new_state = self._guidance_layer.step(
-                    i, targets, state, traf.Temp[i], dt, p_pa=float(traf.p[i])
+                    i, targets, state, traf.Temp[i], dt, p_pa=p_pa_i,
+                    envelope=pre_envelope
                 )
             except Exception as exc:
                 print(f"[PyBada3DOFPerf] {bs.traf.id[i]}: MODE 1 GuidanceLayer "
-                      f"failed ({exc}), falling back to kinematic autopilot "
-                      f"for this tick.")
-                continue   # kinematic values from original update_airspeed kept
-
-            # Write BADA physics results back to BlueSky's traf arrays.
+                      f"failed ({exc}) — "
+                      f"tas={pre_tas[i]:.2f}m/s alt={pre_alt[i]:.1f}m "
+                      f"vs={self.vs_phys[i]:.2f}m/s mass={self.mass[i]:.1f}kg; "
+                      f"falling back to kinematic autopilot for this tick.")
+                # Reset vs_phys to the kinematic autopilot's VS so that the
+                # corrupted BADA ROCD does not feed back into next tick's state.
+                self.vs_phys[i] = float(traf.vs[i])
+                # Hard rescue: if BlueSky's own traf arrays have gone non-physical
+                # (e.g. alt deep underground, or VS in the thousands of m/s from a
+                # previous bad BADA tick that was integrated by update_pos), snap
+                # them back to sane values so the kinematic autopilot can recover.
+                _alt_bad = pre_alt[i] < -500.0 or pre_alt[i] > 20_000.0
+                _vs_bad  = abs(self.vs_phys[i]) > 50.0   # >~10 000 ft/min
+                if _alt_bad or _vs_bad:
+                    _rescue_alt = float(traf.aporasas.alt[i])
+                    print(f"[PyBada3DOFPerf] {bs.traf.id[i]}: RESCUING corrupted "
+                          f"traf state — snapping alt {pre_alt[i]:.1f}m→{_rescue_alt:.1f}m, "
+                          f"vs {self.vs_phys[i]:.2f}→0.0 m/s")
+                    traf.alt[i] = _rescue_alt
+                    traf.vs[i]  = 0.0
+                continue   # kinematic autopilot result kept for this tick
+            # Write BADA 3-DOF physics results back to BlueSky's traf arrays.
             # Heading is also written so it stays consistent with the bank
-            # angle evolution computed by BankController.
+            # angle set by GuidanceLayer.
             traf.tas[i] = new_state.tas_ms
             traf.vs[i]  = new_state.vs_ms
             traf.ax[i]  = new_state.ax_ms2
@@ -444,7 +499,7 @@ class PyBada3DOFPerf(PerfBase):
             self.bank[i]      = new_state.bank_deg
             self.hdg[i]       = new_state.hdg_deg
             self.trk[i]       = (traf.trk[i]
-                                 if hasattr(traf, 'trk') and i < len(traf.trk)
+                                 if has_trk and i < len(traf.trk)
                                  else new_state.hdg_deg)
             self.phase[i]     = _PHASE_CODE.get(new_state.phase, 4)
             self.thrust[i]    = new_state.extra.get("thrust_n",        0.0)

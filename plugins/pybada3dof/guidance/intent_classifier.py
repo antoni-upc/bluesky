@@ -3,17 +3,13 @@ guidance/intent_classifier.py
 
 Single source of truth for "what is this aircraft currently trying to do".
 
-Phase detection is an exact port of the validated get_phase() function from
-``dynamic_bada/bada_interface.py`` (itself a copy of pybadaperf.py's
-_get_phase()).  The critical difference from naive vertical-speed-based
-classifiers is that phase transitions are driven by **altitude error**
-(target_alt - current_alt), NOT by the aircraft's current VS.  Using VS
-directly is circular: VS is always zero on initialisation, so a VS-based
-classifier always returns Cruise, ROCD stays zero, and VS never changes.
-
-Any changes to the numeric thresholds below must be mirrored in
-``dynamic_bada/bada_interface.py`` and vice-versa, since both modules must
-produce identical phase sequences for the same trajectory.
+Phase detection is altitude-error driven: transitions are triggered by
+``target_alt - current_alt``, NOT by the aircraft's current vertical speed.
+Using VS directly is circular: VS is always zero on initialisation, so a
+VS-based classifier always returns Cruise, ROCD stays zero, and VS never
+changes.  VS is used only as a secondary confirmation gate for the CL->CR
+and DES->CR transitions, where it serves as a proxy for "has the BADA
+energy balance driven VS to zero".
 """
 
 from dataclasses import dataclass
@@ -22,7 +18,7 @@ from typing import Dict
 from ..state import AircraftState, BlueSkyTargets, FlightIntent, FlightMode
 
 # ---------------------------------------------------------------------------
-# Transition thresholds (identical to bada_interface.py)
+# Transition thresholds
 # ---------------------------------------------------------------------------
 
 # Minimum altitude [ft] below which the Cruise phase is never declared.

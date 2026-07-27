@@ -2,7 +2,7 @@
 energy/performance_model.py
 
 ``IPerformanceModel`` is the Strategy interface that decouples the rest of
-the plugin (GuidanceLayer, Controllers) from which BADA family is active.
+the plugin (GuidanceLayer) from which BADA family is active.
 The ``PERFMODEL BADA3|BADA4`` stack command swaps the concrete adapter
 behind this interface at runtime; no other module needs to be modified.
 
@@ -16,6 +16,7 @@ computation, ESF wrapper, array growth) that both BADA 3 and BADA 4 adapters
 need, avoiding near-duplicate code between them.
 """
 
+import math
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -115,6 +116,42 @@ class BadaPerformanceModelMixin:
     array growth utility without code duplication.
     """
 
+    @staticmethod
+    def _sanitize_inputs(alt_m: float, tas_ms: float, mass_kg: float,
+                         temp_actual_k: float) -> None:
+        """Raise ValueError if any core input is NaN, inf, or physically impossible.
+
+        Called at the top of compute() and get_envelope() in both adapters so
+        that corrupted BlueSky state values produce a clear diagnostic instead
+        of the opaque numpy 'Array must not contain infs or NaNs' error.
+        """
+        checks = {
+            "tas_ms":       tas_ms,
+            "alt_m":        alt_m,
+            "mass_kg":      mass_kg,
+            "temp_actual_k": temp_actual_k,
+        }
+        for name, val in checks.items():
+            if not math.isfinite(val):
+                raise ValueError(
+                    f"non-finite input {name}={val!r} — "
+                    f"state: alt={alt_m:.1f}m tas={tas_ms:.2f}m/s "
+                    f"mass={mass_kg:.1f}kg T={temp_actual_k:.2f}K"
+                )
+        if tas_ms <= 0:
+            raise ValueError(
+                f"non-positive TAS={tas_ms:.2f}m/s — state: alt={alt_m:.1f}m mass={mass_kg:.1f}kg"
+            )
+        if not (-500.0 <= alt_m <= 15_000.0):
+            raise ValueError(
+                f"altitude out of bounds alt_m={alt_m:.1f}m (valid: -500..15000 m, ~FL492) — "
+                f"tas={tas_ms:.2f}m/s mass={mass_kg:.1f}kg"
+            )
+        if mass_kg <= 0:
+            raise ValueError(
+                f"non-positive mass={mass_kg:.1f}kg — state: alt={alt_m:.1f}m tas={tas_ms:.2f}m/s"
+            )
+
     def _atmosphere(self, alt_m: float, tas_ms: float, temp_actual_k: float,
                     p_pa: float = None):
         """Compute dimensionless ISA atmospheric ratios and Mach number.
@@ -166,9 +203,10 @@ class BadaPerformanceModelMixin:
         flight_evolution mode (including constTAS and acc/dec), so they are
         always passed.
 
-        For BADA 3, this method is overridden in Bada3PerformanceAdapter to
-        call the static ``Airplane.esf()`` class method instead, because
-        BADA 3 OPF objects do not populate the instance esf() method.
+        For BADA 3, Bada3PerformanceAdapter overrides this method to call the
+        static ``Airplane.esf()`` class method instead, because BADA 3 OPF
+        objects do not populate the instance esf() method (which is an XML-only
+        attribute of BADA 4 objects).
         """
         kwargs = dict(h=alt_m, M=mach, deltaTemp=deltaTemp,
                       flightEvolution=flight_evolution)

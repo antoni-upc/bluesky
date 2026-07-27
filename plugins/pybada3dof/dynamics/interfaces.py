@@ -1,12 +1,12 @@
 """
 dynamics/interfaces.py
 
-`IAircraftDynamics` is the one interface that must stay stable for a
+``IAircraftDynamics`` is the one interface that must stay stable for a
 future 3-DOF -> 6-DOF migration. Everything above this layer (Guidance,
-Energy, Control) speaks only in terms of `GuidanceReference`/`ForceCommand`
-- concepts that remain meaningful regardless of how many degrees of
-freedom the integrator below actually uses. Swapping the model is meant
-to be a one-line change in guidance_layer.py, nothing else.
+Energy) speaks only in terms of ``GuidanceReference`` / ``ForceCommand`` —
+concepts that remain meaningful regardless of how many degrees of freedom
+the integrator below actually uses. Swapping the model is meant to be a
+one-line change in guidance_layer.py, nothing else.
 """
 
 from abc import ABC, abstractmethod

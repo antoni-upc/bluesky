@@ -6,9 +6,10 @@ using the Total Energy Model (TEM) of the active BADA adapter.  This is
 the module that answers: "given what the aircraft is trying to do, what
 rate of climb, acceleration, and bank angle can it achieve right now?"
 
-It never computes thrust or pitch directly — those are the Controller's
-job.  Instead it uses the thrust/drag numbers returned by the BADA adapter
-to derive the kinematic targets (ROCD, TAS rate) via the ESF split.
+It never computes thrust or pitch directly — those are resolved by the
+BADA adapter above.  Instead it uses the thrust/drag numbers returned by
+the BADA adapter to derive the kinematic targets (ROCD, TAS rate) via
+the ESF split.
 
 ------------------------------------------------------------------
 ESF (Energy Share Factor) selection
@@ -37,6 +38,8 @@ the crossover the aircraft climbs at constant CAS; above it at constant
 Mach.  Use `SPDSCHED CONSCAS` to force constant-CAS throughout.
 ------------------------------------------------------------------
 """
+
+import math
 
 from ..energy.performance_model import IPerformanceModel
 from ..state import EnergyTerms, FlightIntent, FlightMode, GuidanceReference
@@ -77,8 +80,12 @@ class ReferenceGenerator:
         :param temp_actual_k:  Actual static air temperature [K].
         :param ax_ms2:         Previous-tick longitudinal acceleration [m/s²],
                                used for the cruise thrust balance T = D + m*ax.
-        :param bank_limit_deg: Maximum allowable bank angle [deg].
+        :param bank_limit_deg: Maximum allowable bank angle [deg].  Currently
+                               unused — retained for future lateral-guidance
+                               extensions (e.g. TEM-derived bank scheduling).
         :param turn_sign:      +1.0 for a right turn, -1.0 for a left turn.
+                               Currently unused — retained alongside
+                               bank_limit_deg for the same future extensions.
         :param route_alt_m:    Highest altitude remaining in the flight plan [m];
                                passed through but not used here (used by the
                                IntentClassifier for the step-climb guard).
@@ -86,6 +93,8 @@ class ReferenceGenerator:
                                used for accurate pressure-altitude computation.
                                Falls back to geometric alt_m if None.
         :returns: GuidanceReference with ROCD, TAS acceleration, and bank targets.
+                  bank_ref_deg is always 0.0: lateral guidance (bank angle,
+                  heading) is delegated entirely to BlueSky's kinematic autopilot.
         """
         perf: IPerformanceModel = self._perf_provider()
         # None if cruise/level (no BADA phase string needed for thrust selection)
@@ -165,7 +174,29 @@ class ReferenceGenerator:
             esf      = terms.esf
             rating   = "MCRZ (bounded)"
 
+        # -- Physical sanity check on pyBADA outputs --------------------------
+        # Maximum realistic ROCD: ~6 000 ft/min = ~30 m/s.  We use a generous
+        # 100 m/s bound (~20 000 ft/min) so only clearly pathological pyBADA
+        # outputs are caught.  A ValueError here is caught by the bridge's
+        # try/except, which resets vs_phys to the kinematic VS and skips the
+        # tick — preventing the -13 000 m/s → underground runaway.
+        _ROCD_LIMIT_MS   = 100.0   # ~20 000 ft/min — unambiguously non-physical
+        _ACCEL_LIMIT_MS2 = 50.0    # 5g longitudinal — equally non-physical
+        if not math.isfinite(rocd) or abs(rocd) > _ROCD_LIMIT_MS:
+            raise ValueError(
+                f"pyBADA ROCD out of physical bounds: {rocd:.2f} m/s "
+                f"(limit ±{_ROCD_LIMIT_MS} m/s) — "
+                f"alt={alt_m:.1f}m tas={tas_ms:.2f}m/s phase={bada_phase}"
+            )
+        if not math.isfinite(tas_rate) or abs(tas_rate) > _ACCEL_LIMIT_MS2:
+            raise ValueError(
+                f"pyBADA TAS-rate out of physical bounds: {tas_rate:.2f} m/s² "
+                f"(limit ±{_ACCEL_LIMIT_MS2} m/s²) — "
+                f"alt={alt_m:.1f}m tas={tas_ms:.2f}m/s phase={bada_phase}"
+            )
+
         # -- Universal altitude capture cap (all climb/descent branches) -------
+
         # Prevent the aircraft from overshooting its target altitude:
         #   - During climb: cap ROCD at 0 once the target altitude is reached.
         #   - During descent: cap ROCD at 0 once the target altitude is reached.
@@ -176,9 +207,12 @@ class ReferenceGenerator:
             if alt_m <= intent.target_alt_m:
                 rocd = max(rocd, 0.0)
 
-        # Bank angle reference: turning is managed by BankController based on
-        # the heading error; ReferenceGenerator always sets the magnitude to 0
-        # (no turn commanded here — turning is handled by guidance_layer.py).
+        # Bank angle: lateral guidance (bank angle and heading) is delegated
+        # entirely to BlueSky's kinematic autopilot.  bank_ref_deg is set to 0.0
+        # so the ForceCommand and dynamics integrator do not apply any bank.
+        # To implement TEM-derived bank scheduling in a future extension, compute
+        # the bank angle here using bank_limit_deg and turn_sign (both already
+        # available as parameters).
         bank_ref = 0.0
 
         return GuidanceReference(

@@ -143,6 +143,7 @@ def dynmode(arg1=None, arg2=None):
 
     # --- apply ---------------------------------------------------------------
     if idx is None:
+        perf.default_dyn_mode = mode
         perf.dyn_mode[:] = mode
         msg = f"All aircraft: DYNMODE {mode} — {_MODE_NAMES[mode]}"
     else:
@@ -176,6 +177,7 @@ def mass(acid: str, mass_kg: float):
         return False, f"MASS: mass must be positive (got {mass_kg} kg)."
 
     perf.mass[idx] = mass_kg
+    perf.mass_override[idx] = True
     msg = f"{bs.traf.id[idx]}: mass set to {mass_kg:.1f} kg"
     print(f"[pybada3dof] {msg}")
     return True, msg

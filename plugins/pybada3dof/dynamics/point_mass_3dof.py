@@ -2,7 +2,7 @@
 dynamics/point_mass_3dof.py
 
 Point-mass 3-DOF integrator.  All forces have already been resolved by the
-Energy and Control layers above; this module simply integrates the BADA
+Energy and Guidance layers above; this module simply integrates the BADA
 point-mass equations of motion for one timestep dt:
 
     dV/dt   = (T - D)/mass - g*sin(gamma)   (already folded into
@@ -11,8 +11,8 @@ point-mass equations of motion for one timestep dt:
                                               split, so we apply it directly)
 
     dh/dt   = V * sin(gamma) = VS            (ForceCommand.vs_ms, directly
-                                              from the BADA ROCD via
-                                              EnergyRateController)
+                                              from the BADA ROCD passed through
+                                              by GuidanceLayer)
 
     dpsi/dt = g * tan(bank) / V              (turn-rate from bank angle,
                                               computed by pyBADA's
@@ -43,7 +43,8 @@ class PointMass3DOF(IAircraftDynamics):
 
         :param state:   Aircraft state at the start of the tick (pre-kinematic
                         snapshot from bridge.py).
-        :param command: Rate-limited force command from FlightPathAngleController.
+        :param command: Force command from GuidanceLayer (passthrough from
+                        GuidanceReference — no rate limiting applied).
         :param dt:      Simulation timestep [s].
         :returns:       New AircraftState after integration.
         """

@@ -8,22 +8,21 @@ simulation tick.  The call sequence is:
         -> IntentClassifier          (what is the aircraft trying to do?)
         -> FeasibilityFilter         (clamp intent to BADA envelope)
         -> ReferenceGenerator        (TEM/ESF: compute ROCD, acceleration, bank)
-        -> FlightPathAngleController (rate-limit VS and bank angle)
         -> PointMass3DOF             (integrate equations of motion)
         -> AircraftState             (new state written back to bs.traf)
 
 This is the only class ``bridge.py`` talks to.  Every other module in this
-package (guidance/, energy/, control/, dynamics/) is wired here and nowhere
+package (guidance/, energy/, dynamics/) is wired here and nowhere
 else, which is what keeps a future 3-DOF -> 6-DOF model swap a one-line
 change (see the constructor comment below).
 """
 
-from .control.controllers import FlightPathAngleController
+
 from .dynamics.point_mass_3dof import PointMass3DOF
 from .guidance.feasibility_filter import FeasibilityFilter
 from .guidance.intent_classifier import IntentClassifier
 from .guidance.reference_generator import ReferenceGenerator
-from .state import AircraftState, BlueSkyTargets, FlightMode
+from .state import AircraftState, BlueSkyTargets, FlightEnvelope, FlightMode, ForceCommand
 
 # String labels written back to AircraftState.phase for SAVEHEADER logging.
 _PHASE_STR = {
@@ -45,7 +44,6 @@ class GuidanceLayer:
         self._intent_classifier   = IntentClassifier()
         self._feasibility_filter  = FeasibilityFilter()
         self._reference_generator = ReferenceGenerator(performance_model_provider)
-        self._flight_controller   = FlightPathAngleController()
         # Only this line changes for a future 6-DOF dynamics model:
         self._dynamics            = PointMass3DOF()
         self._perf_provider       = performance_model_provider
@@ -59,7 +57,8 @@ class GuidanceLayer:
 
     def step(self, idx: int, targets: BlueSkyTargets, state: AircraftState,
               temp_actual_k: float, dt: float,
-              p_pa: float = None) -> AircraftState:
+              p_pa: float = None,
+              envelope: FlightEnvelope = None) -> AircraftState:
         """Advance one aircraft by one simulation timestep `dt` [s].
 
         Returns a new AircraftState; never mutates `state` in place.
@@ -67,6 +66,16 @@ class GuidanceLayer:
         own update_pos() already integrates the great-circle track from
         the returned tas/hdg/vs, so duplicating that here would cause
         divergence.
+
+        Parameters
+        ----------
+        envelope : FlightEnvelope, optional
+            Pre-computed BADA flight envelope for this aircraft.  When
+            provided by bridge.py (which already called get_envelope() for
+            all aircraft in its ``update()`` loop), the redundant second
+            call inside FeasibilityFilter is skipped entirely, halving the
+            per-aircraft atmosphere computation cost for MODE 1 aircraft.
+            When None (default), get_envelope() is called here as before.
         """
         perf = self._perf_provider()
 
@@ -74,12 +83,16 @@ class GuidanceLayer:
         intent = self._intent_classifier.classify(idx, state, targets, dt)
 
         # 2. Query current BADA flight envelope and clamp intent to it
-        envelope = perf.get_envelope(idx, state.alt_m, state.tas_ms, state.mass_kg,
-                                     temp_actual_k, p_pa)
+        if envelope is None:
+            envelope = perf.get_envelope(idx, state.alt_m, state.tas_ms, state.mass_kg,
+                                         temp_actual_k, p_pa)
         intent = self._feasibility_filter.apply(intent, envelope)
 
-        # 3. Determine turn direction for the bank-angle reference.
+        # 3. Compute turn direction for future lateral-guidance extensions.
         #    dhdg is in [-180, +180]: negative = left turn, positive = right turn.
+        #    Currently, lateral guidance (bank angle, heading) is delegated to
+        #    BlueSky's kinematic autopilot; turn_sign is passed to generate() for
+        #    future TEM-derived bank-scheduling use only.
         turn_sign = 1.0
         dhdg = (targets.target_hdg_deg - state.hdg_deg + 180.0) % 360.0 - 180.0
         if dhdg < 0:
@@ -93,8 +106,18 @@ class GuidanceLayer:
             p_pa=p_pa,
         )
 
-        # 5. Rate-limit the reference through the controller and integrate
-        command   = self._flight_controller.compute(idx, reference, dt)
+        # 5. Assemble the force command.
+        #    bank_ref_deg is 0.0 (lateral guidance delegated to BlueSky autopilot).
+        command = ForceCommand(
+            thrust_n=reference.thrust_n,
+            drag_n=reference.drag_n,
+            bank_deg=reference.bank_ref_deg,
+            vs_ms=reference.rocd_ms,
+            tas_rate_ms2=reference.tas_rate_ms2,
+            fuel_flow_kgps=reference.fuel_flow_kgps,
+            thrust_max_n=reference.thrust_max_n,
+            thrust_idle_n=reference.thrust_idle_n,
+        )
         new_state = self._dynamics.integrate(state, command, dt)
 
         # 6. Persist the resolved vertical phase string for logging

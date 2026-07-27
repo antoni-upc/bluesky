@@ -26,7 +26,13 @@
 /analyze_vs.py
 /check_first_steps.py
 /check_rocd_units.py
-
+/analyze_benchmark.py
+/bench*
+/scratch*
+/Final_results*
+/compute_phase*
+/generate*
+/scenario/result*
 
 /cache
 /scenario/ic.scn

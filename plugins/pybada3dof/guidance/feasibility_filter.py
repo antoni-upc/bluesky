@@ -60,7 +60,7 @@ class FeasibilityFilter:
         # Skipped for dummy/fallback aircraft: their hmax_m reflects the
         # generic model's ceiling, not the actual type's service ceiling.
         # To clamp dummy aircraft as well, replace the condition with:
-        #     if envelope.hmax_m > 0:
+        #if envelope.hmax_m > 0:
         if not envelope.is_dummy and envelope.hmax_m > 0:
             clamped_alt = min(intent.target_alt_m, envelope.hmax_m)
             if clamped_alt != intent.target_alt_m:

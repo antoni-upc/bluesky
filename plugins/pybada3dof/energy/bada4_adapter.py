@@ -23,9 +23,13 @@ Fallback strategy for unknown aircraft types:
      BADA_DIR sorted alphabetically.  The loaded slot is flagged is_dummy=True.
 """
 
+import os
+from pathlib import Path
+
 import numpy as np
 
 from pyBADA.bada4 import Bada4Aircraft
+import pyBADA.atmosphere as _atm
 
 from ..state import EnergyTerms, FlightEnvelope
 from .performance_model import BadaPerformanceModelMixin, IPerformanceModel
@@ -34,7 +38,14 @@ from .performance_model import BadaPerformanceModelMixin, IPerformanceModel
 class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
 
     BADA_VER = "4.2"
-    BADA_DIR = "/home/paucr/bluesky/.venv/lib/python3.12/site-packages/pyBADA/aircraft/BADA4/DUMMY"
+    # Path to the BADA 4 XML data directory.
+    # pyBADA ships a DUMMY subset under its own package directory; update
+    # BADA_DIR to point to a licensed BADA 4.x dataset for real-aircraft types.
+    BADA_DIR = str(
+        Path(__file__).parent.parent.parent.parent  # repo root
+        / ".venv" / "lib" / "python3.12" / "site-packages"
+        / "pyBADA" / "aircraft" / "BADA4" / "DUMMY"
+    )
 
     def __init__(self, actype_lookup):
         """
@@ -51,7 +62,6 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
     # ------------------------------------------------------------------
     def _available_model_dirs(self):
         """Return the sorted list of model subdirectory names in BADA_DIR."""
-        import os
         try:
             return sorted([
                 d for d in os.listdir(self.BADA_DIR)
@@ -185,7 +195,6 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
         (e.g. for a generic dummy without type-specific data or a pyBADA API
         change).
         """
-        import pyBADA.atmosphere as _atm
         ac = self.model_refs[idx]
         if ac is None:
             return 9144.0
@@ -207,12 +216,14 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
         if ac is None:
             return FlightEnvelope(0, 1e6, 0, -1, -100, 100, 2.0, 0, 0, is_dummy=True)
 
-        import pyBADA.atmosphere as _atm
-        theta, delta, deltaTemp, M = self._atmosphere(alt_m, tas_ms, temp_actual_k, p_pa)
-        sigma = delta / theta
-        # getConfig() expects CAS [m/s], not TAS — convert
-        cas_ms = _atm.tas2Cas(tas=tas_ms, delta=delta, sigma=sigma)
         try:
+            self._sanitize_inputs(alt_m, tas_ms, mass_kg, temp_actual_k)
+            theta, delta, deltaTemp, M = self._atmosphere(alt_m, tas_ms, temp_actual_k, p_pa)
+            if theta == 0.0:
+                raise ValueError(f"theta=0 at alt={alt_m:.1f}m — atmosphere degenerate")
+            sigma = delta / theta
+            # getConfig() expects CAS [m/s], not TAS — convert
+            cas_ms = _atm.tas2Cas(tas=tas_ms, delta=delta, sigma=sigma)
             # Must resolve config/HLid/LG before calling maxAltitude
             config = ac.flightEnvelope.getConfig(
                 phase="Cruise", h=alt_m, mass=mass_kg, v=cas_ms, deltaTemp=deltaTemp
@@ -273,7 +284,8 @@ class Bada4PerformanceAdapter(BadaPerformanceModelMixin, IPerformanceModel):
         if ac is None:
             return EnergyTerms(0, 0, 0, 0, 0, "CR", 0, 0)
 
-        import pyBADA.atmosphere as _atm
+        self._sanitize_inputs(alt_m, tas_ms, mass_kg, temp_actual_k)
+
         theta, delta, deltaTemp, M = self._atmosphere(alt_m, tas_ms, temp_actual_k, p_pa)
         sigma = delta / theta
 
