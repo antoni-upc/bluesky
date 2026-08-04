@@ -60,6 +60,14 @@ class PerfBase(Entity, replaceable=True):
         """implement this method"""
         return intent_v, intent_vs, intent_h
 
+    def update_dynamics(self, traffic, dt):
+        """Update optional non-native longitudinal/vertical dynamics.
+
+        Return a boolean mask identifying aircraft whose TAS and vertical
+        speed were handled. The base implementation handles none.
+        """
+        return np.zeros(traffic.ntraf, dtype=bool)
+
     def currentlimits(self):
         """implement this method"""
         # Get current kinematic performance envelop of all aircraft

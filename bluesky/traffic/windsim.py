@@ -8,6 +8,14 @@ from .windfield import Windfield
 
 
 class WindSim(Entity, Windfield, replaceable=True):      
+    def get_atmosphere(self, lat, lon, alt, utc):
+        """Return an optional atmospheric override for traffic positions.
+
+        The default wind implementation deliberately provides no override,
+        leaving Traffic's ISA state untouched.
+        """
+        return None
+
     @command(name='WIND')
     def add(self, lat: 'lat', lon: 'lon', *winddata: 'float/alt'):
         """ Define a wind vector as part of the 2D or 3D wind field.
