@@ -1,6 +1,7 @@
 """ERA5 atmosphere/wind provider backed by shared validated interpolation."""
 
 from pathlib import Path
+import hashlib
 import os
 
 import numpy as np
@@ -32,6 +33,7 @@ def init_plugin():
 
 class WindECMWF(MeteorologyProvider):
     source = 'ERA5'
+    slot_hours = 1
 
     def __init__(self):
         super().__init__()
@@ -43,33 +45,55 @@ class WindECMWF(MeteorologyProvider):
         probe.unlink()
         self.request_bounds = None
 
-    def _path(self, slot):
-        return self.cache / f'p_levels_{slot:%Y%m%d}.nc'
+    @staticmethod
+    def _areas(bounds):
+        lat0, lon0, lat1, lon1 = bounds
+        north, south = max(lat0, lat1), min(lat0, lat1)
+        west, east = (lon0 + 180.0) % 360.0 - 180.0, (lon1 + 180.0) % 360.0 - 180.0
+        if west <= east:
+            return [(north, west, south, east)]
+        return [(north, west, south, 180.0), (north, -180.0, south, east)]
 
-    def _fetch(self, slot):
+    def _path(self, slot, bounds, part):
+        key = ','.join(f'{float(value):.6f}' for value in bounds)
+        digest = hashlib.sha256(key.encode('ascii')).hexdigest()[:12]
+        return self.cache / f'p_levels_{slot:%Y%m%d_%H}_{digest}_{part}.nc'
+
+    @staticmethod
+    def _request(slot, area):
+        return {
+            'product_type': ['reanalysis'], 'data_format': 'netcdf',
+            'download_format': 'unarchived',
+            'pressure_level': [str(x) for x in bs.settings.era5_pressure_levels],
+            'year': [f'{slot.year:04d}'], 'month': [f'{slot.month:02d}'],
+            'day': [f'{slot.day:02d}'], 'time': [f'{slot.hour:02d}:00'],
+            'area': list(area),
+            'variable': ['u_component_of_wind', 'v_component_of_wind',
+                         'temperature', 'geopotential']}
+
+    def _fetch(self, slot, bounds):
         import cdsapi
-        target = self._path(slot)
-        if target.exists():
-            try:
-                return target, self._read(target, slot)
-            except (OSError, ValueError, KeyError, IndexError):
-                target.unlink()
-        part = target.with_suffix('.nc.part')
-        part.unlink(missing_ok=True)
-        try:
-            cdsapi.Client().retrieve('reanalysis-era5-pressure-levels', {
-                'product_type': 'reanalysis', 'format': 'netcdf',
-                'pressure_level': [str(x) for x in bs.settings.era5_pressure_levels],
-                'year': f'{slot.year:04d}', 'month': f'{slot.month:02d}', 'day': f'{slot.day:02d}',
-                'time': [f'{h:02d}:00' for h in range(0, 24, 3)],
-                'variable': ['u_component_of_wind', 'v_component_of_wind',
-                             'temperature', 'geopotential']}, str(part))
-            cube = self._read(part, slot)  # validate before accepting cache
-            part.replace(target)
-        except Exception:
+        cubes = []
+        for index, area in enumerate(self._areas(bounds)):
+            target = self._path(slot, bounds, index)
+            if target.exists():
+                try:
+                    cubes.append(self._read(target, slot))
+                    continue
+                except (OSError, ValueError, KeyError, IndexError):
+                    target.unlink()
+            part = target.with_suffix('.nc.part')
             part.unlink(missing_ok=True)
-            raise
-        return target, cube
+            try:
+                cdsapi.Client().retrieve('reanalysis-era5-pressure-levels',
+                                         self._request(slot, area), str(part))
+                cube = self._read(part, slot)  # validate before accepting cache
+                part.replace(target)
+                cubes.append(cube)
+            except Exception:
+                part.unlink(missing_ok=True)
+                raise
+        return cubes[0] if len(cubes) == 1 else self._merge(cubes, slot)
 
     @staticmethod
     def _variable(dataset, *names):
@@ -108,11 +132,40 @@ class WindECMWF(MeteorologyProvider):
             return WeatherCube.from_pressure_levels(levels, lat, lon, geopotential / 9.80665,
                 east, north, temp, self.source, slot.isoformat())
 
+    @staticmethod
+    def _merge(cubes, slot):
+        """Merge antimeridian request parts already resampled to common heights."""
+        first = cubes[0]
+        if any(not np.array_equal(cube.latitude, first.latitude) for cube in cubes[1:]):
+            raise ValueError('ERA5 antimeridian parts do not share a latitude axis')
+        lower = max(float(cube.altitude[0]) for cube in cubes)
+        upper = min(float(cube.altitude[-1]) for cube in cubes)
+        if not lower < upper:
+            raise ValueError('ERA5 antimeridian parts have no common vertical domain')
+        altitude = np.linspace(lower, upper, min(len(cube.altitude) for cube in cubes))
+        longitude = np.concatenate([cube.longitude for cube in cubes])
+        wrapped = (longitude + 360.0) % 360.0
+        _, keep = np.unique(wrapped, return_index=True)
+        keep.sort()
+        fields = []
+        for name in ('east_wind', 'north_wind', 'temperature', 'pressure'):
+            parts = []
+            for cube in cubes:
+                source = getattr(cube, name)
+                output = np.empty((len(altitude), len(cube.latitude), len(cube.longitude)))
+                for iy in range(len(cube.latitude)):
+                    for ix in range(len(cube.longitude)):
+                        output[:, iy, ix] = np.interp(
+                            altitude, cube.altitude, source[:, iy, ix])
+                parts.append(output)
+            fields.append(np.concatenate(parts, axis=2)[:, :, keep])
+        return WeatherCube(altitude, first.latitude, longitude[keep], *fields,
+                           first.source, slot.isoformat())
+
     def load(self, lat0, lon0, lat1, lon1, slot=None):
         slot = self.desired_slot(slot or bs.sim.utc)
-        path, cube = self._fetch(slot)
-        cube = cube or self._read(path, slot)
         self.request_bounds = (lat0, lon0, lat1, lon1)
+        cube = self._fetch(slot, self.request_bounds)
         self.set_cube(cube, self.request_bounds)
         return True, f'ERA5 {slot.isoformat()} loaded and validated'
 

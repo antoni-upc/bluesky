@@ -19,6 +19,7 @@ def previous_slot(utc, hours=3):
 
 class MeteorologyProvider(WindSim):
     source = 'METEO'
+    slot_hours = 3
 
     def __init__(self):
         super().__init__()
@@ -89,4 +90,4 @@ class MeteorologyProvider(WindSim):
         return sample
 
     def desired_slot(self, utc):
-        return previous_slot(utc)
+        return previous_slot(utc, self.slot_hours)

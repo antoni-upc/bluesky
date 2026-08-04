@@ -1,5 +1,6 @@
 """GFS atmosphere/wind provider backed by shared validated interpolation."""
 
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,13 @@ from bluesky.plugins.meteo.download import atomic_download
 
 bs.settings.set_variable_defaults(
     gfs_cache_path='',
-    windgfs_url='https://www.ncei.noaa.gov/data/global-forecast-system/access/historical/analysis/')
+    windgfs_source='NCEI',
+    windgfs_url='')
+
+GFS_BASE_URLS = {
+    'NCEI': 'https://www.ncei.noaa.gov/data/global-forecast-system/access/historical/analysis/',
+    'AWS': 'https://noaa-gfs-bdp-pds.s3.amazonaws.com/',
+}
 
 
 def init_plugin():
@@ -29,6 +36,7 @@ def init_plugin():
 
 class WindGFS(MeteorologyProvider):
     source = 'GFS'
+    slot_hours = 6
 
     def __init__(self):
         super().__init__()
@@ -41,9 +49,19 @@ class WindGFS(MeteorologyProvider):
         self.request_bounds = None
 
     def _location(self, slot):
-        name = f'gfsanl_3_{slot:%Y%m%d}_{slot:%H}00_000.grb2'
-        remote = f'{slot:%Y%m}/{slot:%Y%m%d}/{name}'
-        return bs.settings.windgfs_url.rstrip('/') + '/' + remote, self.cache / name
+        source = str(bs.settings.windgfs_source).upper()
+        if source == 'NCEI':
+            name = f'gfsanl_3_{slot:%Y%m%d}_{slot:%H}00_000.grb2'
+            remote = f'{slot:%Y%m}/{slot:%Y%m%d}/{name}'
+        elif source == 'AWS':
+            name = f'gfs.t{slot:%H}z.pgrb2.1p00.f000'
+            remote = f'gfs.{slot:%Y%m%d}/{slot:%H}/atmos/{name}'
+            # Include the date in the cache name because AWS reuses the product filename daily.
+            name = f'gfs.{slot:%Y%m%d}.t{slot:%H}z.pgrb2.1p00.f000'
+        else:
+            raise ValueError(f'Unknown GFS source {source!r}; expected NCEI or AWS')
+        base = bs.settings.windgfs_url or GFS_BASE_URLS[source]
+        return base.rstrip('/') + '/' + remote, self.cache / name
 
     @staticmethod
     def _validate(path):
@@ -90,8 +108,20 @@ class WindGFS(MeteorologyProvider):
         return True, f'GFS {slot.isoformat()} loaded and validated'
 
     @stack.command(name='WINDGFS')
-    def load_command(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon'):
-        return self.load(lat0, lon0, lat1, lon1)
+    def load_command(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon',
+                     date: str = '', cycle: str = ''):
+        """Load GFS for simulation UTC or an explicit YYYYMMDD and 00/06/12/18 cycle."""
+        if bool(date) != bool(cycle):
+            return False, 'Provide both GFS date YYYYMMDD and cycle 00, 06, 12, or 18'
+        if not date:
+            return self.load(lat0, lon0, lat1, lon1)
+        try:
+            slot = datetime.strptime(f'{date}{cycle}', '%Y%m%d%H')
+        except ValueError:
+            return False, 'Invalid GFS date/cycle; use YYYYMMDD and 00, 06, 12, or 18'
+        if slot.hour not in (0, 6, 12, 18):
+            return False, 'Invalid GFS cycle; expected 00, 06, 12, or 18'
+        return self.load(lat0, lon0, lat1, lon1, slot=slot)
 
     @timed_function(name='WINDGFS_update', dt=60)
     def update(self):

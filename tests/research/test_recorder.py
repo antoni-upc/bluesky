@@ -8,6 +8,7 @@ import pytest
 
 import bluesky as bs
 from bluesky.plugins.meteo.recorder import StreamingRecorder
+from bluesky.plugins.research_recorder import atmosstatus
 from bluesky.plugins.pybada.model import Resolution
 
 
@@ -53,3 +54,20 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert not hasattr(recorder, '_rows')
     recorder.reset()
     assert recorder.rows == 0
+
+
+def test_atmosstatus_exposes_applied_state_and_isa_difference(monkeypatch):
+    traffic = SimpleNamespace(
+        ntraf=1, id=['WX1'], alt=np.array([3000.0]), pressure_alt=np.array([3100.0]),
+        Temp=np.array([270.0]), p=np.array([69000.0]), rho=np.array([0.89]),
+        windnorth=np.array([5.0]), windeast=np.array([-2.0]), tas=np.array([180.0]),
+        cas=np.array([150.0]), M=np.array([0.55]), gs=np.array([182.0]),
+        atmos_source=['ERA5'], atmos_valid=np.array([True]),
+        atmos_dataset_time=['2026-07-25T06:00:00'], atmos_fallback_reason=[''],
+        id2idx=lambda acid: 0 if acid == 'WX1' else -1)
+    monkeypatch.setattr(bs, 'traf', traffic)
+    success, message = atmosstatus('WX1')
+    assert success
+    for value in ('source=ERA5', 'T=270.000 K', 'p=69000.000 Pa',
+                  'pressure_alt=3100.0 m', 'wind_north=5.000 m/s', 'ISA'):
+        assert value in message

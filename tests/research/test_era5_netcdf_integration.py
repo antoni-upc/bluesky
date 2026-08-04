@@ -6,6 +6,7 @@ import pytest
 netcdf = pytest.importorskip('netCDF4')
 
 from bluesky.plugins.windecmwf import WindECMWF
+from bluesky.plugins.meteo import WeatherCube
 
 
 def test_real_netcdf_reader_builds_valid_cube(tmp_path):
@@ -34,10 +35,47 @@ def test_real_netcdf_reader_builds_valid_cube(tmp_path):
         for name, value in values.items():
             variable = ds.createVariable(name, 'f8', shape)
             variable.units = units[name]
-            variable[:] = value[None, ...]
+            variable[0, :, :, :] = value
     provider = object.__new__(WindECMWF)
     cube = provider._read(path, datetime(2026, 1, 1, tzinfo=timezone.utc))
     north, east, sample = cube.interpolate([40.5], [1.5], [565.0])
     assert sample.valid[0]
     assert np.isfinite(north[0]) and np.isfinite(east[0])
     assert sample.source == 'ERA5'
+
+
+def test_era5_request_is_one_bounded_slot():
+    slot = datetime(2026, 8, 4, 6, tzinfo=timezone.utc)
+    area = WindECMWF._areas((40.0, -5.0, 45.0, 5.0))
+    assert area == [(45.0, -5.0, 40.0, 5.0)]
+    request = WindECMWF._request(slot, area[0])
+    assert request['time'] == ['06:00']
+    assert request['area'] == [45.0, -5.0, 40.0, 5.0]
+    assert request['data_format'] == 'netcdf'
+    assert request['download_format'] == 'unarchived'
+
+
+def test_era5_uses_hourly_validity_slots():
+    provider = object.__new__(WindECMWF)
+    slot = provider.desired_slot(datetime(2026, 8, 4, 5, 59, tzinfo=timezone.utc))
+    assert slot == datetime(2026, 8, 4, 5, tzinfo=timezone.utc)
+
+
+def test_era5_antimeridian_request_and_merge():
+    assert WindECMWF._areas((10.0, 179.0, 11.0, -179.0)) == [
+        (11.0, 179.0, 10.0, 180.0), (11.0, -180.0, 10.0, -179.0)]
+    lat = np.array([10.0, 11.0])
+
+    def cube(altitude, longitude, value):
+        shape = (2, 2, 2)
+        field = np.full(shape, value)
+        return WeatherCube(np.asarray(altitude), lat, np.asarray(longitude),
+                           field, field + 1.0, field + 270.0, field + 80000.0,
+                           'ERA5', 'part')
+
+    west = cube([100.0, 1000.0], [179.0, 180.0], 1.0)
+    east = cube([110.0, 990.0], [-180.0, -179.0], 2.0)
+    merged = WindECMWF._merge([west, east], datetime(2026, 8, 4, 6))
+    assert merged.longitude.tolist() == [179.0, 180.0, 181.0]
+    assert merged.altitude.tolist() == [110.0, 990.0]
+    assert merged.interpolate([10.5, 10.5], [179.5, -179.5], [500.0, 500.0])[2].valid.all()
