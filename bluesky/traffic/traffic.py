@@ -217,12 +217,19 @@ class Traffic(Entity):
                 return False, acid + " already exists."  # already exists do nothing
             acid = n * [acid]
 
+        if isinstance(actype, str):
+            actype = n * [actype]
+
+        # Replaceable performance models can reject unsupported aircraft.
+        # Validate before resizing any TrafficArrays so a failed CRE cannot
+        # leave a partially-created aircraft behind.
+        valid, message = self.perf.validate_create(actype)
+        if not valid:
+            return False, message
+
         # Adjust the size of all traffic arrays
         super().create(n)
         self.ntraf += n
-
-        if isinstance(actype, str):
-            actype = n * [actype]
 
         if isinstance(aclat, (float, int)):
             aclat = np.array(n * [aclat])

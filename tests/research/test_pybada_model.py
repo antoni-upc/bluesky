@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from bluesky.plugins.pybada.model import EnergyResult, EvaluationError, ModelStore, ModelUnavailable
+from bluesky.plugins.pybada.performance import PyBadaTEM
 
 
 def test_energy_result_rejects_missing_or_negative_physics():
@@ -26,6 +27,19 @@ def test_interactive_resolution_is_not_prefix_matching(tmp_path):
     store = ModelStore('3', str(tmp_path), strict=False)
     with pytest.raises(ModelUnavailable):
         store.resolve('A32X')
+
+
+def test_create_validation_rejects_before_mutating_performance_state(tmp_path):
+    (tmp_path / 'A320.OPF').touch()
+    perf = object.__new__(PyBadaTEM)
+    perf.store = ModelStore('3', str(tmp_path), strict=True)
+    perf.models = []
+    perf.resolutions = []
+    valid, message = perf.validate_create(['A32X'])
+    assert not valid
+    assert 'A32X' in message
+    assert perf.models == []
+    assert perf.resolutions == []
 
 
 @pytest.mark.smoke

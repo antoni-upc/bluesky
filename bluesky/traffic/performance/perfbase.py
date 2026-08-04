@@ -68,6 +68,10 @@ class PerfBase(Entity, replaceable=True):
         """
         return np.zeros(traffic.ntraf, dtype=bool)
 
+    def validate_create(self, actypes):
+        """Validate aircraft types before Traffic mutates its arrays."""
+        return True, ''
+
     def currentlimits(self):
         """implement this method"""
         # Get current kinematic performance envelop of all aircraft

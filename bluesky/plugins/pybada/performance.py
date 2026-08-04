@@ -71,6 +71,17 @@ class PyBadaTEM(PerfBase):
         for i in range(len(self.mass) - n, len(self.mass)):
             self.mass[i] = float(getattr(self.models[i], 'MREF', getattr(self.models[i], 'OEW', 60000.0)))
 
+    def validate_create(self, actypes):
+        """Resolve every requested model before BlueSky creates any aircraft."""
+        if self.store is None:
+            self.activate()
+        try:
+            for actype in actypes:
+                self.store.resolve(actype)
+        except ModelUnavailable as exc:
+            return False, str(exc)
+        return True, ''
+
     def delete(self, idx):
         if np.isscalar(idx):
             idxs = [int(idx)]
