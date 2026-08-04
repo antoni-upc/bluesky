@@ -1,213 +1,100 @@
+"""GFS atmosphere/wind provider backed by shared validated interpolation."""
+
 from pathlib import Path
-import sys
-import pygrib
-import datetime
-import requests
+
 import numpy as np
+
 import bluesky as bs
 from bluesky import stack
 from bluesky.core import timed_function
-from bluesky.traffic.windsim import WindSim
+from bluesky.plugins.meteo import MeteorologyProvider, WeatherCube
+from bluesky.plugins.meteo.download import atomic_download
+
 
 bs.settings.set_variable_defaults(
-    windgfs_url="https://www.ncei.noaa.gov/data/global-forecast-system/access/historical/analysis/")
+    gfs_cache_path='',
+    windgfs_url='https://www.ncei.noaa.gov/data/global-forecast-system/access/historical/analysis/')
 
-# nlayer = 23
-
-datadir = Path('')
 
 def init_plugin():
-    global datadir
-    datadir = bs.resource(bs.settings.data_path) / 'grib'
+    try:
+        import pygrib  # noqa: F401
+        import requests  # noqa: F401
+        provider = WindGFS()
+    except Exception as exc:
+        raise ImportError(f'WINDGFS unavailable; check GFS dependencies and cache: {exc}') from exc
+    WindGFS.select(provider)
+    return {'plugin_name': 'WINDGFS', 'plugin_type': 'sim'}
 
-    if not datadir.is_dir():
-        datadir.mkdir()
 
-    global windgfs
-    windgfs = WindGFS()
+class WindGFS(MeteorologyProvider):
+    source = 'GFS'
 
-    config = {
-        'plugin_name': 'WINDGFS',
-        'plugin_type': 'sim'
-    }
-
-    return config
-
-class WindGFS(WindSim):
     def __init__(self):
         super().__init__()
-        self.year  = 0
-        self.month = 0
-        self.day   = 0
-        self.hour  = 0
-        self.lat0  = -90
-        self.lon0  = -180
-        self.lat1  = 90
-        self.lon1  = 180
+        configured = bs.settings.gfs_cache_path
+        self.cache = Path(configured).expanduser() if configured else bs.resource('grib')
+        self.cache.mkdir(parents=True, exist_ok=True)
+        probe = self.cache / '.write-capability'
+        probe.write_text('ok', encoding='ascii')
+        probe.unlink()
+        self.request_bounds = None
 
-        # Switch for periodic loading of new GFS data
-        self.autoload = True
+    def _location(self, slot):
+        name = f'gfsanl_3_{slot:%Y%m%d}_{slot:%H}00_000.grb2'
+        remote = f'{slot:%Y%m}/{slot:%Y%m%d}/{name}'
+        return bs.settings.windgfs_url.rstrip('/') + '/' + remote, self.cache / name
 
-    def fetch_grb(self, year, month, day, hour, pred=0):
-        ym = "%04d%02d" % (year, month)
-        ymd = "%04d%02d%02d" % (year, month, day)
-        hm = "%02d00" % hour
-        pred = "%03d" % pred
+    @staticmethod
+    def _validate(path):
+        import pygrib
+        with pygrib.open(str(path)) as grib:
+            for name in ('u', 'v', 't', 'gh'):
+                if not grib.select(shortName=name, typeOfLevel='isobaricInhPa'):
+                    raise ValueError(f'Missing GFS {name} pressure-level messages')
 
-        remote_loc = "/%s/%s/gfsanl_3_%s_%s_%s.grb2" % (ym, ymd, ymd, hm, pred)
+    def _fetch(self, slot):
+        import requests
+        url, target = self._location(slot)
+        if target.exists():
+            try:
+                self._validate(target)
+                return target
+            except (OSError, ValueError, RuntimeError):
+                target.unlink()
+        return atomic_download(requests.Session(), url, target, self._validate)
 
-        fname = "gfsanl_3_%s_%s_%s.grb2" % (ymd, hm, pred)
-        fpath = datadir / fname
+    def _read(self, path, slot):
+        import pygrib
+        with pygrib.open(str(path)) as grib:
+            groups = {name: grib.select(shortName=name, typeOfLevel='isobaricInhPa')
+                      for name in ('u', 'v', 't', 'gh')}
+            level_sets = [{message.level for message in messages} for messages in groups.values()]
+            levels = sorted(set.intersection(*level_sets), reverse=True)
+            if len(levels) < 2:
+                raise ValueError('GFS variables do not share at least two pressure levels')
+            lookup = {name: {m.level: m for m in messages} for name, messages in groups.items()}
+            first = lookup['u'][levels[0]]
+            lat2d, lon2d = first.latlons()
+            lat, lon = lat2d[:, 0], lon2d[0, :]
+            fields = [np.stack([lookup[name][level].values for level in levels])
+                      for name in ('u', 'v', 't', 'gh')]
+        return WeatherCube.from_pressure_levels(np.asarray(levels) * 100.0, lat, lon,
+            fields[3], fields[0], fields[1], fields[2], self.source, slot.isoformat())
 
-        remote_url = bs.settings.windgfs_url + remote_loc
-
-        if not fpath.is_file():
-            stack.echo("Downloading file, please wait...")
-            print("Downloading %s" % remote_url)
-
-            response = requests.get(remote_url, stream=True)
-
-            if response.status_code != 200:
-                print("Error. remote data not found")
-                return None
-
-            with open(fpath, "wb") as f:
-                total_length = response.headers.get('content-length')
-
-                if total_length is None:  # no content length header
-                    f.write(response.content)
-                else:
-                    dl = 0
-                    total_length = int(total_length)
-                    for data in response.iter_content(chunk_size=4096):
-                        dl += len(data)
-                        f.write(data)
-                        done = int(50 * dl / total_length)
-                        sys.stdout.write("\r[%s%s]" % ('=' * done, ' ' * (50-done)) )
-                        sys.stdout.flush()
-
-        stack.echo("Download completed.")
-        grb = pygrib.open(fpath)
-
-        return grb
-
-    def extract_wind(self, grb, lat0, lon0, lat1, lon1):
-
-        grb_wind_v = grb.select(shortName="v", typeOfLevel=['isobaricInhPa'])
-        grb_wind_u = grb.select(shortName="u", typeOfLevel=['isobaricInhPa'])
-
-        lats = np.array([])
-        lons = np.array([])
-        alts = np.array([])
-        vxs = np.array([])
-        vys = np.array([])
-
-        for grbu, grbv in zip(grb_wind_u, grb_wind_v):
-            level = grbu.level
-
-            if level < 100:  # lesss than 100 hPa, above about 54 k ft
-                continue
-            else:
-                vxs_ = grbu.values
-                vys_ = grbv.values
-
-                p = level * 100
-                h = (1 - (p / 101325.0)**0.190264) * 44330.76923    # in meters
-
-                lats_ = grbu.latlons()[0].flatten()
-                lons_ = grbu.latlons()[1].flatten()
-                alts_ = round(h) * np.ones(len(lats_))
-
-                lats = np.append(lats, lats_)
-                lons = np.append(lons, lons_)
-                alts = np.append(alts, alts_)
-                vxs = np.append(vxs, vxs_)
-                vys = np.append(vys, vys_)
-
-        lons = (lons + 180) % 360.0 - 180.0     # convert range from 0~360 to -180~180
-
-        lat0_ = min(lat0, lat1)
-        lat1_ = max(lat0, lat1)
-        lon0_ = min(lon0, lon1)
-        lon1_ = max(lon0, lon1)
-
-        mask = (lats >= lat0_) & (lats <= lat1_) & (lons >= lon0_) & (lons <= lon1_)
-
-        data = np.array([lats[mask], lons[mask], alts[mask], vxs[mask], vys[mask]])
-
-        return data
+    def load(self, lat0, lon0, lat1, lon1, slot=None):
+        slot = self.desired_slot(slot or bs.sim.utc)
+        cube = self._read(self._fetch(slot), slot)
+        self.request_bounds = (lat0, lon0, lat1, lon1)
+        self.set_cube(cube, self.request_bounds)
+        return True, f'GFS {slot.isoformat()} loaded and validated'
 
     @stack.command(name='WINDGFS')
-    def loadwind(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon',
-               year: int=None, month: int=None, day: int=None, hour: int=None):
-        ''' WINDGFS: Load a windfield directly from NOAA database.
+    def load_command(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon'):
+        return self.load(lat0, lon0, lat1, lon1)
 
-            Arguments:
-            - lat0, lon0, lat1, lon1 [deg]: Bounding box in which to generate wind field
-            - year, month, day, hour: Date and time of wind data (optional, will use
-              current simulation UTC if not specified).
-        '''
-        self.lat0, self.lon0, self.lat1, self.lon1 =  min(lat0, lat1), \
-                              min(lon0, lon1), max(lat0, lat1), max(lon0, lon1)
-        self.year = year or bs.sim.utc.year
-        self.month = month or bs.sim.utc.month
-        self.day = day or bs.sim.utc.day
-        self.hour = hour or bs.sim.utc.hour
-
-        # round hour to 3 hours, check if it is a +3h prediction
-        self.hour = round(self.hour/3) * 3
-        if self.hour in [3, 9, 15, 21]:
-            self.hour = self.hour - 3
-            pred = 3
-        elif self.hour == 24:
-            ymd0 = "%04d%02d%02d" % (self.year, self.month, self.day)
-            print(ymd0)
-            ymd1 = (datetime.datetime.strptime(ymd0, '%Y%m%d') + 
-                    datetime.timedelta(days=1))
-            self.year  = ymd1.year
-            self.month = ymd1.month
-            self.day   = ymd1.day    
-            self.hour  = 0
-            pred = 0
-        else:
-            pred = 0
-
-        txt = "Loading wind field for %s-%s-%s %s:00..." % (self.year, self.month, self.day, self.hour)
-        stack.echo("%s" % txt)
-
-        grb = self.fetch_grb(self.year, self.month, self.day, self.hour, pred)
-
-        if grb is None or self.lat0 == self.lat1 or self.lon0 == self.lon1:
-            return False, "Wind data non-existend in area [%d, %d], [%d, %d]. " \
-                % (self.lat0, self.lat1, self.lon0, self.lon1) \
-                + "time: %04d-%02d-%02d %02d:00" \
-                % (self.year, self.month, self.day, self.hour)
-
-        # first clear exisiting wind field
-        self.clear()
-
-        # add new wind field
-        data = self.extract_wind(grb, self.lat0, self.lon0, self.lat1, self.lon1).T
-
-        data = data[np.lexsort((data[:, 2], data[:, 1], data[:, 0]))] # Sort by lat, lon, alt
-        reshapefactor = int((1 + max(self.lat0, self.lat1) - min(self.lat0, self.lat1)) * \
-                            (1 + max(self.lon0, self.lon1) - min(self.lon0, self.lon1)))
-
-        lat     = np.reshape(data[:,0], (reshapefactor, -1)).T[0,:]
-        lon     = np.reshape(data[:,1], (reshapefactor, -1)).T[0,:]
-        veast   = np.reshape(data[:,3], (reshapefactor, -1)).T
-        vnorth  = np.reshape(data[:,4], (reshapefactor, -1)).T
-        windalt = np.reshape(data[:,2], (reshapefactor, -1)).T[:,0]
-
-        self.addpointvne(lat, lon, vnorth, veast, windalt)        
-
-        return True, "Wind field updated in area [%d, %d], [%d, %d]. " \
-            % (self.lat0, self.lat1, self.lon0, self.lon1) \
-            + "time: %04d-%02d-%02d %02d:00" \
-            % (self.year, self.month, self.day, self.hour)
-
-    @timed_function(name='WINDGFS', dt=3600)
+    @timed_function(name='WINDGFS_update', dt=60)
     def update(self):
-        if self.autoload:
-            _, txt = self.loadwind(self.lat0, self.lon0, self.lat1, self.lon1)
-            stack.echo("%s" % txt)
+        slot = self.desired_slot(bs.sim.utc)
+        if self.request_bounds and slot.isoformat() != self.active_slot:
+            self.load(*self.request_bounds, slot=slot)
