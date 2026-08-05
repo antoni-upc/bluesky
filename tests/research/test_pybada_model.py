@@ -29,6 +29,15 @@ def test_interactive_resolution_is_not_prefix_matching(tmp_path):
         store.resolve('A32X')
 
 
+def test_bada3_fixed_width_code_normalization(tmp_path):
+    store = ModelStore('3', str(tmp_path), version='3.15', strict=True)
+    candidate, method = store._candidate('A320', {'A320__': 'A320__'})
+    assert candidate == 'A320__'
+    assert method == 'bada3-code'
+    candidate, _ = store._candidate('A32', {'A320__': 'A320__'})
+    assert candidate is None
+
+
 def test_dataset_version_is_required(tmp_path):
     with pytest.raises(ModelUnavailable, match='version is required'):
         ModelStore('3', str(tmp_path))
@@ -42,6 +51,43 @@ def test_activation_requires_path_and_version(monkeypatch):
     monkeypatch.setattr('bluesky.plugins.pybada.performance.bs.settings.pybada4_version', '')
     with pytest.raises(ModelUnavailable, match='Configure both pybada4_data_path'):
         perf.activate('4')
+
+
+def test_failed_family_switch_is_transactional(monkeypatch):
+    old_store = object()
+    old_model = object()
+    old_resolution = object()
+    perf = object.__new__(PyBadaTEM)
+    perf.family = '4'
+    perf.version = '4.2'
+    perf.strict = True
+    perf.store = old_store
+    perf.models = [old_model]
+    perf.resolutions = [old_resolution]
+
+    class RejectingStore:
+        version = '3.15'
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def resolve(self, actype):
+            raise ModelUnavailable(f'No BADA 3 model for {actype}')
+
+    monkeypatch.setattr('bluesky.plugins.pybada.performance.ModelStore', RejectingStore)
+    monkeypatch.setattr('bluesky.plugins.pybada.performance.bs.traf',
+                        SimpleNamespace(type=['A320-232']))
+    monkeypatch.setattr('bluesky.plugins.pybada.performance.bs.settings.pybada3_data_path',
+                        '/configured/bada3')
+    monkeypatch.setattr('bluesky.plugins.pybada.performance.bs.settings.pybada3_version', '3.15')
+
+    with pytest.raises(ModelUnavailable):
+        perf.activate('3')
+    assert perf.family == '4'
+    assert perf.version == '4.2'
+    assert perf.store is old_store
+    assert perf.models == [old_model]
+    assert perf.resolutions == [old_resolution]
 
 
 def test_create_validation_rejects_before_mutating_performance_state(tmp_path):

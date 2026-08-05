@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
-from bluesky.tools.aero import R, T0, gamma, p0
+import bluesky as bs
+from bluesky.tools.aero import R, T0, gamma, p0, vatmos
 from bluesky.traffic.atmosphere import mach_to_cas, pressure_altitude, tas_to_mach
 from bluesky.traffic.traffic import Traffic
 from bluesky.traffic.performance.perfbase import PerfBase
@@ -41,3 +43,23 @@ def test_base_performance_dynamics_hook_handles_no_aircraft():
     handled = PerfBase.update_dynamics(object.__new__(PerfBase), traffic, 0.5)
     assert handled.dtype == np.bool_
     assert handled.shape == (0,)
+
+
+def test_atmosphere_synchronizes_exactly_to_current_isa_position(monkeypatch):
+    state = SimpleNamespace(
+        ntraf=1, alt=np.array([4373.6]), lat=np.array([41.3]), lon=np.array([2.1]),
+        tas=np.array([158.5]), p=np.zeros(1), rho=np.zeros(1), Temp=np.zeros(1),
+        pressure_alt=np.zeros(1), dtemp=np.zeros(1), atmos_valid=np.zeros(1, dtype=bool),
+        atmos_source=['STALE'], atmos_dataset_time=['stale'],
+        atmos_fallback_reason=['stale'],
+        wind=SimpleNamespace(get_atmosphere=lambda lat, lon, alt, utc: None))
+    state._update_airdata = lambda: Traffic._update_airdata(state)
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(utc=None))
+    Traffic.update_atmosphere(state)
+    expected_p, expected_rho, expected_temp = vatmos(state.alt)
+    np.testing.assert_array_equal(state.p, expected_p)
+    np.testing.assert_array_equal(state.rho, expected_rho)
+    np.testing.assert_array_equal(state.Temp, expected_temp)
+    np.testing.assert_array_equal(state.pressure_alt, pressure_altitude(expected_p))
+    np.testing.assert_allclose(state.pressure_alt, state.alt, atol=1.0)
+    np.testing.assert_array_equal(state.dtemp, np.zeros(1))

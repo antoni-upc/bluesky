@@ -41,7 +41,7 @@ def test_manifest_licensed_models_resolve_and_evaluate_all_phases(
                        aliases=config.get('aircraft_aliases', {}), strict=True)
     for requested in dataset['aircraft']:
         model, resolution = store.resolve(requested)
-        assert resolution.method in ('exact', 'alias')
+        assert resolution.method in ('exact', 'alias', 'bada3-code')
         assert not resolution.dummy
         for phase in phases:
             result = EnergyResult(**model.bluesky_energy(
