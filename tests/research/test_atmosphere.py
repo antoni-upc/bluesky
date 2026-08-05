@@ -4,6 +4,7 @@ import pytest
 from bluesky.tools.aero import R, T0, gamma, p0
 from bluesky.traffic.atmosphere import mach_to_cas, pressure_altitude, tas_to_mach
 from bluesky.traffic.traffic import Traffic
+from bluesky.traffic.performance.perfbase import PerfBase
 from bluesky.tools.aero import vtas2cas, vtas2mach
 
 
@@ -33,3 +34,10 @@ def test_disabled_provider_preserves_native_airdata_exactly():
     Traffic._update_airdata(state)
     np.testing.assert_array_equal(state.M, vtas2mach(state.tas, state.alt))
     np.testing.assert_array_equal(state.cas, vtas2cas(state.tas, state.alt))
+
+
+def test_base_performance_dynamics_hook_handles_no_aircraft():
+    traffic = type('TrafficState', (), {'ntraf': 0})()
+    handled = PerfBase.update_dynamics(object.__new__(PerfBase), traffic, 0.5)
+    assert handled.dtype == np.bool_
+    assert handled.shape == (0,)
