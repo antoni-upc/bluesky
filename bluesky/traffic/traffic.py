@@ -299,6 +299,10 @@ class Traffic(Entity):
         # manually in Traffic.
         self.create_children(n)
 
+        # Synchronize an already-active atmosphere provider with the newly
+        # created position before the first performance evaluation.
+        self.update_atmosphere()
+
         # Record as individual CRE commands for repeatability
         #print(self.ntraf-n,self.ntraf)
         for j in range(self.ntraf-n,self.ntraf):
@@ -412,7 +416,50 @@ class Traffic(Entity):
         if self.ntraf == 0:
             return
 
-        #---------- Atmosphere --------------------------------
+        # Atmosphere is synchronized to the current position on creation,
+        # provider load, and at the end of every traffic update.
+
+        #---------- ADSB Update -------------------------------
+        self.adsb.update()
+
+        #---------- Fly the Aircraft --------------------------
+        self.ap.update()  # Autopilot logic
+
+        # Conflict detection and resolution
+        if self.asastimer.readynext:
+            self.cd.update(self, self)
+            self.cr.update(self.cd, self, self)
+            self.resnav.update(self.cd, self, self)
+
+        self.aporasas.update()   # Decide to use autopilot or ASAS for commands
+
+        #---------- Limit commanded speeds based on performance ------------------------------
+        self.aporasas.tas, self.aporasas.vs, self.aporasas.alt = \
+            self.perf.limits(self.aporasas.tas, self.aporasas.vs,
+                             self.aporasas.alt, self.ax)
+
+        #---------- Kinematics --------------------------------
+        handled = np.asarray(self.perf.update_dynamics(self, bs.sim.simdt), dtype=bool)
+        if handled.shape != (self.ntraf,):
+            raise ValueError('Performance dynamics hook returned an invalid mask shape')
+        self.update_airspeed(handled)
+        self.update_groundspeed()
+        self.update_pos()
+        self.update_atmosphere()
+
+        #---------- Simulate Turbulence -----------------------
+        self.turbulence.update()
+
+        # Check whether new traffic state triggers conditional commands
+        self.cond.update()
+
+        #---------- Aftermath ---------------------------------
+        self.trails.update()
+
+    def update_atmosphere(self):
+        """Synchronize atmosphere and airdata with the current traffic state."""
+        if self.ntraf == 0:
+            return
         self.p, self.rho, self.Temp = vatmos(self.alt)
         isa_temperature = self.Temp.copy()
         self.atmos_valid[:] = True
@@ -441,42 +488,6 @@ class Traffic(Entity):
         self.pressure_alt[:] = pressure_altitude(self.p)
         self.dtemp[:] = self.Temp - isa_temperature
         self._update_airdata()
-
-        #---------- ADSB Update -------------------------------
-        self.adsb.update()
-
-        #---------- Fly the Aircraft --------------------------
-        self.ap.update()  # Autopilot logic
-
-        # Conflict detection and resolution
-        if self.asastimer.readynext:
-            self.cd.update(self, self)
-            self.cr.update(self.cd, self, self)
-            self.resnav.update(self.cd, self, self)
-
-        self.aporasas.update()   # Decide to use autopilot or ASAS for commands
-
-        #---------- Limit commanded speeds based on performance ------------------------------
-        self.aporasas.tas, self.aporasas.vs, self.aporasas.alt = \
-            self.perf.limits(self.aporasas.tas, self.aporasas.vs,
-                             self.aporasas.alt, self.ax)
-
-        #---------- Kinematics --------------------------------
-        handled = np.asarray(self.perf.update_dynamics(self, bs.sim.simdt), dtype=bool)
-        if handled.shape != (self.ntraf,):
-            raise ValueError('Performance dynamics hook returned an invalid mask shape')
-        self.update_airspeed(handled)
-        self.update_groundspeed()
-        self.update_pos()
-
-        #---------- Simulate Turbulence -----------------------
-        self.turbulence.update()
-
-        # Check whether new traffic state triggers conditional commands
-        self.cond.update()
-
-        #---------- Aftermath ---------------------------------
-        self.trails.update()
 
     def update_airspeed(self, handled=None):
         handled = np.zeros(self.ntraf, dtype=bool) if handled is None else handled
