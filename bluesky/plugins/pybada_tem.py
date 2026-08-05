@@ -21,7 +21,10 @@ def perfmodel(model: str = ''):
     perf = PyBadaTEM.implinstance()
     if not model:
         return True, f'Active pyBADA dataset: BADA {perf.version}'
-    perf.activate(model.upper())
+    try:
+        perf.activate(model.upper())
+    except Exception as exc:
+        return False, f'PERFMODEL unchanged: {exc}'
     return True, f'Active pyBADA dataset: BADA {perf.version}'
 
 
@@ -110,5 +113,6 @@ def perfstatus(acid=None):
         lines.append(
             f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
             f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
+            f'mass={perf.mass[idx]:.1f} kg, '
             f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}')
     return True, '\n'.join(lines)

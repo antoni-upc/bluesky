@@ -133,16 +133,28 @@ class ModelStore:
             return {p.stem.upper(): p.stem for p in self.data_path.glob('*.OPF')}
         return {p.name.upper(): p.name for p in self.data_path.iterdir() if p.is_dir()}
 
+    def _candidate(self, requested, available):
+        candidate = available.get(requested)
+        method = 'exact'
+        # BADA 3 uses fixed-width six-character file codes padded with
+        # underscores. Accepting the unpadded code is deterministic
+        # canonicalization, not prefix or similarity matching.
+        if candidate is None and self.family == '3' and len(requested) <= 6:
+            padded = requested.rstrip('_').ljust(6, '_')
+            candidate = available.get(padded)
+            if candidate is not None:
+                method = 'bada3-code'
+        if candidate is None and requested in self.aliases:
+            candidate = available.get(self.aliases[requested].upper())
+            method = 'alias'
+        return candidate, method
+
     def resolve(self, requested: str):
         requested = requested.upper()
         if requested in self._cache:
             return self._cache[requested]
         available = self._available()
-        candidate = available.get(requested)
-        method = 'exact'
-        if candidate is None and requested in self.aliases:
-            candidate = available.get(self.aliases[requested].upper())
-            method = 'alias'
+        candidate, method = self._candidate(requested, available)
         if candidate is None:
             if self.strict:
                 raise ModelUnavailable(f'No exact or approved BADA {self.family} model for {requested}')

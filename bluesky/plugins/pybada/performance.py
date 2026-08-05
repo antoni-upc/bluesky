@@ -41,16 +41,21 @@ class PyBadaTEM(PerfBase):
         if not data_path or not version:
             raise ModelUnavailable(
                 f'Configure both pybada{family}_data_path and pybada{family}_version')
-        self.store = ModelStore(family, data_path, version,
-                                bs.settings.pybada_aircraft_aliases, self.strict)
-        self.family = family
-        self.version = self.store.version
-        self.models.clear()
-        self.resolutions.clear()
+        candidate_store = ModelStore(family, data_path, version,
+                                     bs.settings.pybada_aircraft_aliases, self.strict)
+        candidate_models = []
+        candidate_resolutions = []
         for actype in bs.traf.type:
-            model, resolution = self.store.resolve(actype)
-            self.models.append(model)
-            self.resolutions.append(resolution)
+            model, resolution = candidate_store.resolve(actype)
+            candidate_models.append(model)
+            candidate_resolutions.append(resolution)
+        # Commit only after all current aircraft resolve. A failed family
+        # switch leaves the complete prior implementation state untouched.
+        self.store = candidate_store
+        self.family = family
+        self.version = candidate_store.version
+        self.models[:] = candidate_models
+        self.resolutions[:] = candidate_resolutions
 
     def create(self, n):
         super().create(n)

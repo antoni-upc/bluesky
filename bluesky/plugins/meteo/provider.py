@@ -42,11 +42,15 @@ class MeteorologyProvider(WindSim):
         Windfield.clear(self)
         self.cube = None
         self.active_slot = None
+        if getattr(bs, 'traf', None) is not None:
+            bs.traf.update_atmosphere()
 
     def set_cube(self, cube, bounds=None):
         self.cube = cube
         self.active_slot = cube.dataset_time
         self.bounds = bounds
+        if getattr(bs, 'traf', None) is not None:
+            bs.traf.update_atmosphere()
 
     def _inside_bounds(self, lat, lon):
         if self.bounds is None:
