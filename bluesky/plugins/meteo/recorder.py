@@ -13,14 +13,14 @@ import numpy as np
 import bluesky as bs
 
 
-SCHEMA_VERSION = 'samples-v2'
+SCHEMA_VERSION = 'samples-v3'
 FIELDS = (
     'schema_version', 'run_id', 'sim_time_s', 'sample_interval_s', 'sim_utc', 'acid', 'actype',
     'lat_deg', 'lon_deg', 'geometric_alt_m', 'pressure_alt_m', 'tas_m_s',
     'cas_m_s', 'mach', 'vertical_speed_m_s', 'heading_deg', 'track_deg',
     'temperature_k', 'pressure_pa', 'density_kg_m3', 'wind_north_m_s',
     'wind_east_m_s', 'atmosphere_source', 'atmosphere_valid',
-    'dataset_time', 'fallback_reason', 'performance_model',
+    'dataset_time', 'fallback_reason', 'performance_model', 'performance_dataset_version',
     'performance_aircraft', 'performance_resolution', 'performance_dummy',
     'dynamics_mode', 'performance_valid', 'performance_miss_count', 'thrust_n',
     'rated_thrust_n', 'drag_n', 'fuel_flow_kg_s', 'mass_kg')
@@ -117,6 +117,7 @@ class StreamingRecorder:
                 'dataset_time': bs.traf.atmos_dataset_time[idx],
                 'fallback_reason': bs.traf.atmos_fallback_reason[idx],
                 'performance_model': model_name,
+                'performance_dataset_version': getattr(perf_impl, 'version', ''),
                 'performance_aircraft': getattr(resolution, 'resolved', ''),
                 'performance_resolution': getattr(resolution, 'method', ''),
                 'performance_dummy': getattr(resolution, 'dummy', ''),

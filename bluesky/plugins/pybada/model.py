@@ -116,8 +116,11 @@ class BadaModelAdapter:
 class ModelStore:
     """Exact/explicit model resolver; no heuristic scientific matching."""
 
-    def __init__(self, family: str, data_path: str, aliases=None, strict=False):
+    def __init__(self, family: str, data_path: str, version=None, aliases=None, strict=False):
         self.family = str(family)
+        if not version:
+            raise ModelUnavailable(f'BADA {self.family} dataset version is required')
+        self.version = str(version)
         self.data_path = Path(data_path).expanduser().resolve()
         self.aliases = {str(k).upper(): str(v) for k, v in (aliases or {}).items()}
         self.strict = bool(strict)
@@ -155,9 +158,8 @@ class ModelStore:
         try:
             module = import_module('pyBADA.bada3' if self.family == '3' else 'pyBADA.bada4')
             cls = getattr(module, 'Bada3Aircraft' if self.family == '3' else 'Bada4Aircraft')
-            version = '3.15' if self.family == '3' else '4.3'
             model = BadaModelAdapter(
-                cls(badaVersion=version, acName=candidate, filePath=str(self.data_path)),
+                cls(badaVersion=self.version, acName=candidate, filePath=str(self.data_path)),
                 self.family)
         except (ImportError, AttributeError, OSError, TypeError, ValueError) as exc:
             raise ModelUnavailable(f'Cannot load BADA {self.family} model {candidate}: {exc}') from exc

@@ -12,7 +12,7 @@ def init_plugin():
     except Exception as exc:
         raise ImportError(f'PYBADATEM unavailable: {exc}') from exc
     PyBadaTEM.select(perf)
-    stack.echo(f'PYBADATEM active: BADA {perf.family}, data={perf.store.data_path}, strict={perf.strict}')
+    stack.echo(f'PYBADATEM active: BADA {perf.version}, data={perf.store.data_path}, strict={perf.strict}')
     return {'plugin_name': 'PYBADATEM', 'plugin_type': 'sim'}
 
 
@@ -20,9 +20,9 @@ def init_plugin():
 def perfmodel(model: str = ''):
     perf = PyBadaTEM.implinstance()
     if not model:
-        return True, f'Active pyBADA family: BADA{perf.family}'
+        return True, f'Active pyBADA dataset: BADA {perf.version}'
     perf.activate(model.upper())
-    return True, f'Active pyBADA family: BADA{perf.family}'
+    return True, f'Active pyBADA dataset: BADA {perf.version}'
 
 
 _DYNAMICS_MODES = {
@@ -103,12 +103,12 @@ def perfstatus(acid=None):
             return False, f'Aircraft {acid} not found'
         indices = (idx,)
     if not bs.traf.id:
-        return True, f'PYBADATEM BADA{perf.family}: no aircraft'
+        return True, f'PYBADATEM BADA {perf.version}: no aircraft'
     lines = []
     for idx in indices:
         resolution = perf.resolutions[idx]
         lines.append(
-            f'{bs.traf.id[idx]}: BADA{perf.family}/{resolution.resolved} '
+            f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
             f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
             f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}')
     return True, '\n'.join(lines)

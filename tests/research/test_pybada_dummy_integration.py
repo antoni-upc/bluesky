@@ -11,7 +11,8 @@ from bluesky.plugins.pybada.model import ModelStore
 @pytest.mark.parametrize('family,directory', [('3', 'BADA3'), ('4', 'BADA4')])
 def test_packaged_dummy_models_evaluate_all_phases(family, directory):
     data = Path(pybada.__file__).resolve().parent / 'aircraft' / directory / 'DUMMY'
-    model, resolution = ModelStore(family, str(data), strict=False).resolve('A320')
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data), version=version, strict=False).resolve('A320')
     assert resolution.dummy
     if family == '4':
         assert resolution.resolved.upper() == 'DUMMY-TWIN'

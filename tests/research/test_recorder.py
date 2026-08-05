@@ -23,7 +23,7 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
         windeast=values, atmos_source=['SYNTHETIC'], atmos_valid=np.array([True]),
         atmos_dataset_time=['2026-01-01T00:00:00+00:00'], atmos_fallback_reason=[''],
         perf=SimpleNamespace(
-            family='4', thrust=np.array([np.nan]), rated_thrust=np.array([2.0]), drag=values,
+            family='4', version='4.2', thrust=np.array([np.nan]), rated_thrust=np.array([2.0]), drag=values,
             fuelflow=values, mass=np.array([60000.0]), dyn_mode=np.array([1]),
             invalid=np.array([False]), failure_count=np.array([2]),
             resolutions=[Resolution('A320', 'DUMMY-TWIN', 'dummy', True)]))
@@ -44,6 +44,7 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert row['atmosphere_source'] == 'SYNTHETIC'
     assert row['dynamics_mode'] == 'TEM'
     assert row['performance_aircraft'] == 'DUMMY-TWIN'
+    assert row['performance_dataset_version'] == '4.2'
     assert row['performance_resolution'] == 'dummy'
     assert row['performance_dummy'] == 'True'
     assert row['performance_valid'] == 'True'

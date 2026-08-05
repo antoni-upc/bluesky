@@ -1,7 +1,5 @@
 """BlueSky performance implementation for longitudinal/vertical TEM."""
 
-from pathlib import Path
-
 import numpy as np
 
 import bluesky as bs
@@ -11,6 +9,7 @@ from .model import EnergyResult, EvaluationError, ModelStore, ModelUnavailable
 
 bs.settings.set_variable_defaults(
     pybada3_data_path='', pybada4_data_path='', pybada_family='4',
+    pybada3_version='', pybada4_version='',
     pybada_strict=False, pybada_aircraft_aliases={}, pybada_speed_schedule='ICAO')
 
 
@@ -20,6 +19,7 @@ class PyBadaTEM(PerfBase):
     def __init__(self):
         super().__init__()
         self.family = str(bs.settings.pybada_family)
+        self.version = ''
         self.schedule = str(bs.settings.pybada_speed_schedule).upper()
         self.strict = bool(bs.settings.pybada_strict)
         self.store = None
@@ -32,26 +32,19 @@ class PyBadaTEM(PerfBase):
             self.invalid = np.array([], dtype=bool)
             self.failure_count = np.array([], dtype=int)
 
-    @staticmethod
-    def _discover(family):
-        configured = bs.settings.pybada3_data_path if family == '3' else bs.settings.pybada4_data_path
-        if configured:
-            return configured
-        try:
-            package = __import__('pyBADA')
-        except ImportError as exc:
-            raise ModelUnavailable('Install the pybada optional dependency before loading PYBADATEM') from exc
-        base = Path(package.__file__).resolve().parent / 'aircraft' / ('BADA3' if family == '3' else 'BADA4')
-        dummy = base / 'DUMMY'
-        return str(dummy if dummy.is_dir() else base)
-
     def activate(self, family=None):
         family = str(family or self.family).replace('BADA', '')
         if family not in ('3', '4'):
             raise ValueError('PERFMODEL accepts BADA3 or BADA4')
-        self.store = ModelStore(family, self._discover(family),
+        data_path = bs.settings.pybada3_data_path if family == '3' else bs.settings.pybada4_data_path
+        version = bs.settings.pybada3_version if family == '3' else bs.settings.pybada4_version
+        if not data_path or not version:
+            raise ModelUnavailable(
+                f'Configure both pybada{family}_data_path and pybada{family}_version')
+        self.store = ModelStore(family, data_path, version,
                                 bs.settings.pybada_aircraft_aliases, self.strict)
         self.family = family
+        self.version = self.store.version
         self.models.clear()
         self.resolutions.clear()
         for actype in bs.traf.type:
