@@ -13,7 +13,7 @@ import numpy as np
 import bluesky as bs
 
 
-SCHEMA_VERSION = 'samples-v4'
+SCHEMA_VERSION = 'samples-v5'
 FIELDS = (
     'schema_version', 'run_id', 'sim_time_s', 'sample_interval_s', 'sim_utc', 'acid', 'actype',
     'lat_deg', 'lon_deg', 'geometric_alt_m', 'pressure_alt_m', 'tas_m_s',
@@ -27,7 +27,9 @@ FIELDS = (
     'envelope_policy', 'envelope_profile', 'envelope_checks',
     'envelope_status', 'envelope_failed_checks', 'envelope_last_action',
     'envelope_last_reason', 'envelope_event_count', 'envelope_violation_count',
-    'mass_min_kg', 'mass_max_kg')
+    'mass_min_kg', 'mass_max_kg', 'envelope_configuration',
+    'minimum_cas_m_s', 'maximum_cas_m_s', 'minimum_mach', 'maximum_mach',
+    'maximum_altitude_m')
 UNITS = {
     'sim_time_s': 's', 'sample_interval_s': 's', 'lat_deg': 'deg', 'lon_deg': 'deg',
     'geometric_alt_m': 'm', 'pressure_alt_m': 'm', 'tas_m_s': 'm/s',
@@ -36,7 +38,8 @@ UNITS = {
     'pressure_pa': 'Pa', 'density_kg_m3': 'kg/m^3', 'wind_north_m_s': 'm/s',
     'wind_east_m_s': 'm/s', 'thrust_n': 'N', 'rated_thrust_n': 'N', 'drag_n': 'N',
     'fuel_flow_kg_s': 'kg/s', 'mass_kg': 'kg', 'mass_min_kg': 'kg',
-    'mass_max_kg': 'kg'}
+    'mass_max_kg': 'kg', 'minimum_cas_m_s': 'm/s', 'maximum_cas_m_s': 'm/s',
+    'minimum_mach': '1', 'maximum_mach': '1', 'maximum_altitude_m': 'm'}
 
 
 def _finite(value):
@@ -142,6 +145,7 @@ class StreamingRecorder:
             event_counts = getattr(perf_impl, 'envelope_event_count', ())
             violation_counts = getattr(perf_impl, 'envelope_violation_count', ())
             bounds = perf_impl.bounds(idx) if hasattr(perf_impl, 'bounds') else None
+            flight_bounds = perf_impl.flight_bounds(idx) if hasattr(perf_impl, 'flight_bounds') else None
             names = lambda values: ','.join(getattr(value, 'value', str(value)) for value in values)
             row = {
                 'schema_version': SCHEMA_VERSION, 'run_id': self.run_id,
@@ -181,7 +185,13 @@ class StreamingRecorder:
                 'envelope_event_count': int(event_counts[idx]) if idx < len(event_counts) else '',
                 'envelope_violation_count': int(violation_counts[idx]) if idx < len(violation_counts) else '',
                 'mass_min_kg': '' if bounds is None else _finite(bounds.minimum),
-                'mass_max_kg': '' if bounds is None else _finite(bounds.maximum)}
+                'mass_max_kg': '' if bounds is None else _finite(bounds.maximum),
+                'envelope_configuration': '' if flight_bounds is None else flight_bounds.configuration,
+                'minimum_cas_m_s': '' if flight_bounds is None else _finite(flight_bounds.minimum_cas),
+                'maximum_cas_m_s': '' if flight_bounds is None else _finite(flight_bounds.maximum_cas),
+                'minimum_mach': '' if flight_bounds is None else _finite(flight_bounds.minimum_mach),
+                'maximum_mach': '' if flight_bounds is None else _finite(flight_bounds.maximum_mach),
+                'maximum_altitude_m': '' if flight_bounds is None else _finite(flight_bounds.maximum_altitude)}
             self.writer.writerow({key: _finite(value) for key, value in row.items()})
             self.rows += 1
         self.stream.flush()

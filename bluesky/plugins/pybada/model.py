@@ -112,6 +112,59 @@ class BadaModelAdapter:
                     drag=float(drag), fuel_flow=float(fuel), esf=float(esf),
                     rocd=float(rocd), acceleration=float(acceleration))
 
+    def bluesky_airdata(self, *, h, tas, temperature):
+        """Convert TAS with the same applied-atmosphere convention as TEM."""
+        atm, _, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
+        cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
+        return float(cas), float(mach)
+
+    def bluesky_envelope(self, *, h, cas, mach, mass, temperature, pressure, phase):
+        """Normalize BADA 3/4 longitudinal limits at one operating point."""
+        ac = self.model
+        tas = mach * np.sqrt(1.4 * 287.05287 * temperature)
+        atm, dtemp, theta, delta, sigma, _ = self._atmosphere(h, tas, temperature)
+        config = ac.flightEnvelope.getConfig(
+            phase=phase, h=h, mass=mass, v=cas, deltaTemp=dtemp) or 'CR'
+        if self.family == '3':
+            minimum_cas = ac.flightEnvelope.VMin(
+                h=h, mass=mass, config=config, deltaTemp=dtemp)
+            maximum_cas = ac.flightEnvelope.VMax(h=h, deltaTemp=dtemp)
+            maximum_altitude = ac.flightEnvelope.maxAltitude(
+                mass=mass, deltaTemp=dtemp)
+            maximum_mach = float(ac.MMO)
+        else:
+            hlid, gear = ac.flightEnvelope.getAeroConfig(config=config)
+            minimum_cas = ac.flightEnvelope.VMin(
+                config=config, theta=theta, delta=delta, mass=mass)
+            maximum_cas = ac.flightEnvelope.VMax(
+                h=h, HLid=hlid, LG=gear, delta=delta, theta=theta,
+                mass=mass, nz=1.0)
+            maximum_altitude = ac.flightEnvelope.maxAltitude(
+                HLid=hlid, LG=gear, M=mach, deltaTemp=dtemp,
+                mass=mass, nz=1.0)
+            maximum_mach = ac.flightEnvelope.maxM(LG=gear)
+        def optional_float(value):
+            if value is None:
+                return None
+            value = float(value)
+            return value if np.isfinite(value) else None
+
+        minimum_cas = optional_float(minimum_cas)
+        maximum_cas = optional_float(maximum_cas)
+        maximum_mach = optional_float(maximum_mach)
+        maximum_altitude = optional_float(maximum_altitude)
+        minimum_mach = (None if minimum_cas is None else optional_float(atm.cas2Mach(
+            cas=minimum_cas, theta=theta, delta=delta, sigma=sigma)))
+        minimum_tas = (None if minimum_cas is None else optional_float(
+            atm.cas2Tas(cas=minimum_cas, delta=delta, sigma=sigma)))
+        maximum_tas = (None if maximum_cas is None else optional_float(
+            atm.cas2Tas(cas=maximum_cas, delta=delta, sigma=sigma)))
+        return dict(configuration=str(config), minimum_cas=minimum_cas,
+                    maximum_cas=maximum_cas, minimum_mach=minimum_mach,
+                    maximum_mach=maximum_mach,
+                    maximum_altitude=maximum_altitude,
+                    minimum_tas=minimum_tas, maximum_tas=maximum_tas)
+
 
 class ModelStore:
     """Exact/explicit model resolver; no heuristic scientific matching."""

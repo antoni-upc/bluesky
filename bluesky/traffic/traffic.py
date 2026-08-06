@@ -7,6 +7,7 @@ import numpy as np
 import bluesky as bs
 from bluesky.core import Entity, Timer
 from bluesky.stack.recorder import savecmd
+from bluesky.stack.cmdparser import CommandRejected
 from bluesky.tools import geo
 from bluesky.tools.misc import latlon2txt
 from bluesky.tools.aero import casormach2tas, fpm, kts, ft, g0, Rearth, nm, tas2cas,\
@@ -303,6 +304,17 @@ class Traffic(Entity):
         # created position before the first performance evaluation.
         self.update_atmosphere()
 
+        # Validate the synchronized initial state after performance children
+        # have assigned their per-aircraft defaults, but before recording CRE.
+        new_indices = list(range(self.ntraf - n, self.ntraf))
+        for idx in new_indices:
+            accepted, reason = self.perf.assess_direct_state(idx, None)
+            if not accepted:
+                acid_rejected = self.id[idx]
+                self.delete(new_indices)
+                return False, CommandRejected(
+                    f'{acid_rejected}: CRE rejected; {reason}')
+
         # Record as individual CRE commands for repeatability
         #print(self.ntraf-n,self.ntraf)
         for j in range(self.ntraf-n,self.ntraf):
@@ -445,7 +457,8 @@ class Traffic(Entity):
         self.update_airspeed(handled)
         self.update_groundspeed()
         self.update_pos()
-        self.update_atmosphere()
+        if self.perf.requires_synced_direct_state:
+            self.update_atmosphere()
 
         #---------- Simulate Turbulence -----------------------
         self.turbulence.update()
@@ -613,6 +626,28 @@ class Traffic(Entity):
         return
 
     def move(self, idx, lat, lon, alt=None, hdg=None, casmach=None, vspd=None):
+        if not np.isscalar(idx):
+            # Bulk external observations retain their existing observe-only
+            # semantics until a dedicated replay/datafeed policy is defined.
+            self.lat[idx] = lat
+            self.lon[idx] = lon
+            if alt is not None:
+                self.alt[idx], self.selalt[idx] = alt, alt
+            if hdg is not None:
+                self.hdg[idx], self.ap.trk[idx] = hdg, hdg
+            if casmach is not None:
+                self.tas[idx], self.selspd[idx], _ = vcasormach(casmach, alt)
+            if vspd is not None:
+                self.vs[idx], self.swvnav[idx] = vspd, False
+            return True
+        idx = int(idx)
+        fields = ('lat', 'lon', 'alt', 'selalt', 'hdg', 'tas', 'selspd', 'vs',
+                  'p', 'rho', 'Temp', 'pressure_alt', 'cas', 'M', 'dtemp')
+        previous = {name: self.__dict__[name][idx].copy()
+                    if hasattr(self.__dict__[name][idx], 'copy')
+                    else self.__dict__[name][idx] for name in fields}
+        previous['ap_trk'] = self.ap.trk[idx]
+        previous['swvnav'] = self.swvnav[idx]
         self.lat[idx]      = lat
         self.lon[idx]      = lon
 
@@ -625,11 +660,21 @@ class Traffic(Entity):
             self.ap.trk[idx] = hdg
 
         if casmach is not None:
-            self.tas[idx], self.selspd[idx], _ = vcasormach(casmach, alt)
+            self.tas[idx], self.selspd[idx], _ = vcasormach(
+                casmach, self.alt[idx] if alt is None else alt)
 
         if vspd is not None:
             self.vs[idx]     = vspd
             self.swvnav[idx] = False
+        self.update_atmosphere()
+        accepted, reason = self.perf.assess_direct_state(idx, previous)
+        if accepted:
+            return True
+        for name in fields:
+            self.__dict__[name][idx] = previous[name]
+        self.ap.trk[idx] = previous['ap_trk']
+        self.swvnav[idx] = previous['swvnav']
+        return False, CommandRejected(f'{self.id[idx]}: MOVE rejected; {reason}')
 
     def poscommand(self, idxorwp: int|str):
         """POS command: Show info or an aircraft, airport, waypoint or navaid"""

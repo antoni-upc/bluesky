@@ -5,9 +5,10 @@ import numpy as np
 import bluesky as bs
 from bluesky.traffic.performance.perfbase import PerfBase
 from .model import EnergyResult, EvaluationError, ModelStore, ModelUnavailable
-from .envelope import (EnvelopeAction, EnvelopePolicy, EnvelopeProfile,
-                       EnvelopeStatus, QualityEvent, evaluate_mass, expand_checks,
-                       mass_bounds, parse_policy, quality_events)
+from .envelope import (EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile,
+                       EnvelopeResult, EnvelopeStatus, FlightBounds, QualityEvent, combine_results,
+                       evaluate_flight, evaluate_mass, expand_checks, mass_bounds,
+                       parse_policy, quality_events)
 
 
 bs.settings.set_variable_defaults(
@@ -21,6 +22,8 @@ bs.settings.set_variable_defaults(
 class PyBadaTEM(PerfBase):
     """One authoritative BADA 3/4 integration with native lateral guidance."""
 
+    requires_synced_direct_state = True
+
     def __init__(self):
         super().__init__()
         self.family = str(bs.settings.pybada_family)
@@ -32,6 +35,8 @@ class PyBadaTEM(PerfBase):
         self.resolutions = []
         self.envelope_checks = []
         self.envelope_failed_checks = []
+        self.envelope_state_failed_checks = []
+        self.envelope_guidance_failed_checks = []
         with self.settrafarrays():
             self.dyn_mode = np.array([], dtype=int)
             self.rated_thrust = np.array([])
@@ -44,6 +49,10 @@ class PyBadaTEM(PerfBase):
             self.envelope_last_action = np.array([], dtype='U8')
             self.envelope_last_reason = np.array([], dtype='U80')
             self.envelope_active_reason = np.array([], dtype='U80')
+            self.envelope_state_reason = np.array([], dtype='U80')
+            self.envelope_guidance_reason = np.array([], dtype='U80')
+            self.envelope_attempt_reason = np.array([], dtype='U80')
+            self.envelope_guidance_infeasible = np.array([], dtype=bool)
             self.envelope_event_count = np.array([], dtype=int)
             self.envelope_violation_count = np.array([], dtype=int)
 
@@ -69,8 +78,7 @@ class PyBadaTEM(PerfBase):
                 len(self.envelope_checks) == len(candidate_models)):
             for idx, model in enumerate(candidate_models):
                 policy = parse_policy(self.envelope_policy[idx])
-                evaluation = evaluate_mass(self.mass[idx], mass_bounds(model),
-                                           self.envelope_checks[idx])
+                evaluation, _ = self.evaluate_envelope(idx, model=model)
                 if policy != EnvelopePolicy.OFF and evaluation.status == EnvelopeStatus.UNKNOWN:
                     raise ModelUnavailable(f'{bs.traf.id[idx]} envelope unknown: {evaluation.reason}')
                 if policy == EnvelopePolicy.ENFORCE and evaluation.status == EnvelopeStatus.INFEASIBLE:
@@ -105,11 +113,17 @@ class PyBadaTEM(PerfBase):
             explicit = parse_checks(bs.settings.pybada_envelope_checks)
             self.envelope_checks.append(expand_checks(profile, explicit))
             self.envelope_failed_checks.append(())
+            self.envelope_state_failed_checks.append(())
+            self.envelope_guidance_failed_checks.append(())
         self.envelope_policy[-n:] = parse_policy(bs.settings.pybada_envelope_policy).value
         self.envelope_profile[-n:] = str(bs.settings.pybada_envelope_profile).upper()
         self.envelope_status[-n:] = EnvelopeStatus.VALID.value
         self.envelope_last_action[-n:] = EnvelopeAction.NONE.value
         self.envelope_active_reason[-n:] = ''
+        self.envelope_state_reason[-n:] = ''
+        self.envelope_guidance_reason[-n:] = ''
+        self.envelope_attempt_reason[-n:] = ''
+        self.envelope_guidance_infeasible[-n:] = False
         for i in range(len(self.mass) - n, len(self.mass)):
             self.mass[i] = float(getattr(self.models[i], 'MREF', getattr(self.models[i], 'OEW', 60000.0)))
 
@@ -134,6 +148,8 @@ class PyBadaTEM(PerfBase):
             del self.resolutions[i]
             del self.envelope_checks[i]
             del self.envelope_failed_checks[i]
+            del self.envelope_state_failed_checks[i]
+            del self.envelope_guidance_failed_checks[i]
         super().delete(idx)
 
     def reset(self):
@@ -141,10 +157,52 @@ class PyBadaTEM(PerfBase):
         self.resolutions.clear()
         self.envelope_checks.clear()
         self.envelope_failed_checks.clear()
+        self.envelope_state_failed_checks.clear()
+        self.envelope_guidance_failed_checks.clear()
         super().reset()
 
     def bounds(self, idx):
         return mass_bounds(self.models[idx])
+
+    def _phase(self, idx):
+        target = bs.traf.aporasas.alt[idx]
+        return ('Climb' if target > bs.traf.alt[idx] + 1.0 else
+                ('Descent' if target < bs.traf.alt[idx] - 1.0 else 'Cruise'))
+
+    def flight_bounds(self, idx, *, mass=None, cas=None, mach=None, model=None):
+        model = model or self.models[idx]
+        try:
+            values = model.bluesky_envelope(
+                h=float(bs.traf.pressure_alt[idx]),
+                cas=float(bs.traf.cas[idx] if cas is None else cas),
+                mach=float(bs.traf.M[idx] if mach is None else mach),
+                mass=float(self.mass[idx] if mass is None else mass),
+                temperature=float(bs.traf.Temp[idx]), pressure=float(bs.traf.p[idx]),
+                phase=self._phase(idx))
+            return FlightBounds(**values)
+        except Exception as exc:
+            return FlightBounds('', None, None, None, None, None,
+                                reason=f'envelope evaluation failed: {exc}')
+
+    def evaluate_envelope(self, idx, *, mass=None, cas=None, mach=None,
+                          altitude=None, checks=None, model=None):
+        checks = self.envelope_checks[idx] if checks is None else tuple(checks)
+        candidate_mass = self.mass[idx] if mass is None else mass
+        mbounds = mass_bounds(model or self.models[idx])
+        flight_checks = {EnvelopeCheck.LOW_SPEED, EnvelopeCheck.HIGH_SPEED,
+                         EnvelopeCheck.MACH_MIN, EnvelopeCheck.MACH_MAX,
+                         EnvelopeCheck.ALTITUDE_MAX}
+        fbounds = (self.flight_bounds(idx, mass=candidate_mass, cas=cas,
+                                     mach=mach, model=model)
+                   if set(checks).intersection(flight_checks)
+                   else FlightBounds('', None, None, None, None, None))
+        return combine_results(
+            evaluate_mass(candidate_mass, mbounds, checks),
+            evaluate_flight(
+                bs.traf.cas[idx] if cas is None else cas,
+                bs.traf.M[idx] if mach is None else mach,
+                bs.traf.alt[idx] if altitude is None else altitude,
+                fbounds, checks)), fbounds
 
     def _emit_event(self, idx, reason, action, requested=None, applied=None):
         event = QualityEvent(
@@ -170,17 +228,55 @@ class PyBadaTEM(PerfBase):
         quality_events.emit(event)
         return event
 
-    def _set_result(self, idx, result, policy, action, requested=None, applied=None):
-        previous = (self.envelope_status[idx], self.envelope_active_reason[idx])
-        self.envelope_status[idx] = result.status.value
-        self.envelope_failed_checks[idx] = result.failed_checks
-        if result.status == EnvelopeStatus.VALID:
-            self.envelope_active_reason[idx] = ''
-            return
-        # Emit only on a new/changed violation, or after recovery.
-        if previous != (result.status.value, result.reason):
+    def _refresh_envelope_status(self, idx):
+        failed = list(self.envelope_state_failed_checks[idx])
+        if self.envelope_guidance_infeasible[idx]:
+            failed.extend(self.envelope_guidance_failed_checks[idx])
+        self.envelope_failed_checks[idx] = tuple(dict.fromkeys(failed))
+        self.envelope_status[idx] = (EnvelopeStatus.INFEASIBLE.value
+                                     if failed else EnvelopeStatus.VALID.value)
+        reasons = [self.envelope_state_reason[idx]]
+        if self.envelope_guidance_infeasible[idx]:
+            reasons.append(self.envelope_guidance_reason[idx])
+        self.envelope_active_reason[idx] = ','.join(filter(None, reasons))
+
+    def _set_result(self, idx, result, policy, action, requested=None, applied=None,
+                    source='state', contributes=True):
+        if source == 'state':
+            reason_array = self.envelope_state_reason
+            failed_list = self.envelope_state_failed_checks
+        elif source == 'guidance':
+            reason_array = self.envelope_guidance_reason
+            failed_list = self.envelope_guidance_failed_checks
+        else:
+            reason_array = self.envelope_attempt_reason
+            failed_list = None
+        previous_reason = reason_array[idx]
+        other_active_reason = ''
+        if source == 'state' and self.envelope_guidance_infeasible[idx]:
+            other_active_reason = self.envelope_guidance_reason[idx]
+        elif source == 'guidance':
+            other_active_reason = self.envelope_state_reason[idx]
+        reason_array[idx] = '' if result.status == EnvelopeStatus.VALID else result.reason
+        if failed_list is not None:
+            failed_list[idx] = (() if result.status == EnvelopeStatus.VALID
+                                else result.failed_checks)
+        if source == 'guidance':
+            self.envelope_guidance_infeasible[idx] = (
+                contributes and result.status == EnvelopeStatus.INFEASIBLE)
+        self._refresh_envelope_status(idx)
+        if (result.status != EnvelopeStatus.VALID and previous_reason != result.reason
+                and (source == 'attempt' or other_active_reason != result.reason)):
             self._emit_event(idx, result.reason, action, requested, applied)
-        self.envelope_active_reason[idx] = result.reason
+
+    def _clear_envelope_sources(self, idx):
+        self.envelope_state_reason[idx] = ''
+        self.envelope_guidance_reason[idx] = ''
+        self.envelope_attempt_reason[idx] = ''
+        self.envelope_state_failed_checks[idx] = ()
+        self.envelope_guidance_failed_checks[idx] = ()
+        self.envelope_guidance_infeasible[idx] = False
+        self._refresh_envelope_status(idx)
 
     def configure_envelope(self, idx, *, policy=None, profile=None, checks=None):
         old = (self.envelope_policy[idx], self.envelope_profile[idx], self.envelope_checks[idx])
@@ -190,7 +286,7 @@ class PyBadaTEM(PerfBase):
         new_checks = tuple(checks) if checks is not None else (
             self.envelope_checks[idx] if profile is None else expand_checks(new_profile))
         result = EnvelopeStatus.VALID
-        evaluation = evaluate_mass(self.mass[idx], self.bounds(idx), new_checks)
+        evaluation, _ = self.evaluate_envelope(idx, checks=new_checks)
         if new_policy != EnvelopePolicy.OFF:
             result = evaluation.status
             if result == EnvelopeStatus.UNKNOWN:
@@ -201,9 +297,7 @@ class PyBadaTEM(PerfBase):
         self.envelope_profile[idx] = new_profile.value
         self.envelope_checks[idx] = new_checks
         if new_policy == EnvelopePolicy.OFF:
-            self.envelope_status[idx] = EnvelopeStatus.VALID.value
-            self.envelope_failed_checks[idx] = ()
-            self.envelope_active_reason[idx] = ''
+            self._clear_envelope_sources(idx)
         else:
             action = EnvelopeAction.ABORTED if new_policy == EnvelopePolicy.ABORT else EnvelopeAction.ACCEPTED
             self._set_result(idx, evaluation, new_policy, action, self.mass[idx], self.mass[idx])
@@ -222,21 +316,51 @@ class PyBadaTEM(PerfBase):
         policy = parse_policy(self.envelope_policy[idx])
         if policy == EnvelopePolicy.OFF:
             self.mass[idx], self.mass_override[idx] = value, override
-            self.envelope_status[idx] = EnvelopeStatus.VALID.value
+            self._clear_envelope_sources(idx)
             return True, ''
-        result = evaluate_mass(value, self.bounds(idx), self.envelope_checks[idx])
+        result, _ = self.evaluate_envelope(idx, mass=value)
         if result.status == EnvelopeStatus.UNKNOWN:
             return False, result.reason
         if result.status == EnvelopeStatus.INFEASIBLE and policy == EnvelopePolicy.ENFORCE:
-            if self.envelope_active_reason[idx] != result.reason:
-                self._emit_event(idx, result.reason, EnvelopeAction.REJECTED, value, self.mass[idx])
-            self.envelope_active_reason[idx] = result.reason
+            self._set_result(idx, result, policy, EnvelopeAction.REJECTED,
+                             value, self.mass[idx], source='attempt', contributes=False)
             return False, result.reason
         self.mass[idx], self.mass_override[idx] = value, override
-        if result.status == EnvelopeStatus.VALID:
-            self.envelope_active_reason[idx] = ''
+        self._set_result(idx, EnvelopeResult(EnvelopeStatus.VALID), policy,
+                         EnvelopeAction.NONE, source='attempt', contributes=False)
         action = EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and result.status != EnvelopeStatus.VALID else EnvelopeAction.ACCEPTED
         self._set_result(idx, result, policy, action, value, value)
+        if action == EnvelopeAction.ABORTED:
+            bs.sim.hold()
+        return True, ''
+
+    def assess_direct_state(self, idx, previous):
+        """Assess a synchronized provisional MOVE state transactionally."""
+        policy = parse_policy(self.envelope_policy[idx])
+        result, bounds = self.evaluate_envelope(
+            idx, checks=() if policy == EnvelopePolicy.OFF else None)
+        if result.status == EnvelopeStatus.UNKNOWN:
+            return False, f'reason={result.reason}; prior state preserved'
+        if policy == EnvelopePolicy.OFF:
+            self.envelope_status[idx] = EnvelopeStatus.VALID.value
+            return True, ''
+        requested = {'cas_m_s': float(bs.traf.cas[idx]), 'mach': float(bs.traf.M[idx]),
+                     'altitude_m': float(bs.traf.alt[idx])}
+        applied = (None if previous is None else
+                   {'cas_m_s': float(previous['cas']), 'mach': float(previous['M']),
+                    'altitude_m': float(previous['alt'])})
+        if result.status == EnvelopeStatus.INFEASIBLE and policy == EnvelopePolicy.ENFORCE:
+            self._set_result(idx, result, policy, EnvelopeAction.REJECTED,
+                             requested, applied, source='attempt', contributes=False)
+            return False, (f'policy=ENFORCE, reason={result.reason}, '
+                           f'CAS bounds={bounds.minimum_cas}..{bounds.maximum_cas} m/s, '
+                           f'Mach bounds={bounds.minimum_mach}..{bounds.maximum_mach}, '
+                           f'altitude max={bounds.maximum_altitude} m; prior state preserved')
+        action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and
+                  result.status == EnvelopeStatus.INFEASIBLE else EnvelopeAction.ACCEPTED)
+        self._set_result(idx, EnvelopeResult(EnvelopeStatus.VALID), policy,
+                         EnvelopeAction.NONE, source='attempt', contributes=False)
+        self._set_result(idx, result, policy, action, requested, requested)
         if action == EnvelopeAction.ABORTED:
             bs.sim.hold()
         return True, ''
@@ -245,8 +369,7 @@ class PyBadaTEM(PerfBase):
         """Evaluate the pyBADA API through one observable failure boundary."""
         ac = self.models[idx]
         h, tas, mass = bs.traf.pressure_alt[idx], bs.traf.tas[idx], self.mass[idx]
-        phase = 'Climb' if bs.traf.aporasas.alt[idx] > bs.traf.alt[idx] + 1.0 else \
-            ('Descent' if bs.traf.aporasas.alt[idx] < bs.traf.alt[idx] - 1.0 else 'Cruise')
+        phase = self._phase(idx)
         try:
             # Adapter-friendly hook used by dependency-free fakes and future
             # pyBADA-version-specific adapters.
@@ -292,3 +415,73 @@ class PyBadaTEM(PerfBase):
                 if self.strict:
                     raise RuntimeError(f'PYBADATEM strict evaluation failure: {exc}') from exc
         return handled
+
+    def limits(self, intent_v, intent_vs, intent_h, ax):
+        """Apply selected speed/Mach/altitude policies to resolved guidance."""
+        applied_v = np.asarray(intent_v, dtype=float).copy()
+        applied_h = np.asarray(intent_h, dtype=float).copy()
+        for idx in range(len(applied_v)):
+            policy = parse_policy(self.envelope_policy[idx])
+            checks = set(self.envelope_checks[idx])
+            if policy == EnvelopePolicy.OFF or not checks.intersection({
+                    EnvelopeCheck.LOW_SPEED, EnvelopeCheck.HIGH_SPEED,
+                    EnvelopeCheck.MACH_MIN, EnvelopeCheck.MACH_MAX,
+                    EnvelopeCheck.ALTITUDE_MAX}):
+                continue
+            model = self.models[idx]
+            try:
+                requested_cas, requested_mach = model.bluesky_airdata(
+                    h=float(bs.traf.pressure_alt[idx]), tas=float(applied_v[idx]),
+                    temperature=float(bs.traf.Temp[idx]))
+            except Exception as exc:
+                raise RuntimeError(f'{bs.traf.id[idx]} guidance airdata unknown: {exc}') from exc
+            result, bounds = self.evaluate_envelope(
+                idx, cas=requested_cas, mach=requested_mach,
+                altitude=float(applied_h[idx]))
+            current_result, _ = self.evaluate_envelope(idx)
+            requested = {'tas_m_s': float(intent_v[idx]), 'cas_m_s': requested_cas,
+                         'mach': requested_mach, 'altitude_m': float(intent_h[idx])}
+            combined = combine_results(current_result, result)
+            if combined.status == EnvelopeStatus.UNKNOWN:
+                raise RuntimeError(f'{bs.traf.id[idx]} guidance envelope unknown: {combined.reason}')
+            state_action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and
+                            current_result.status == EnvelopeStatus.INFEASIBLE
+                            else EnvelopeAction.ACCEPTED)
+            self._set_result(idx, current_result, policy, state_action,
+                             {'cas_m_s': float(bs.traf.cas[idx]),
+                              'mach': float(bs.traf.M[idx]),
+                              'altitude_m': float(bs.traf.alt[idx])},
+                             {'cas_m_s': float(bs.traf.cas[idx]),
+                              'mach': float(bs.traf.M[idx]),
+                              'altitude_m': float(bs.traf.alt[idx])},
+                             source='state')
+            if state_action == EnvelopeAction.ABORTED:
+                bs.sim.hold()
+                break
+            if combined.status == EnvelopeStatus.VALID:
+                self._set_result(idx, result, policy, EnvelopeAction.ACCEPTED,
+                                 requested, requested, source='guidance')
+                continue
+            if policy == EnvelopePolicy.ENFORCE:
+                if result.status == EnvelopeStatus.INFEASIBLE:
+                    if checks.intersection({EnvelopeCheck.LOW_SPEED, EnvelopeCheck.MACH_MIN}):
+                        applied_v[idx] = max(applied_v[idx], bounds.minimum_tas)
+                    if checks.intersection({EnvelopeCheck.HIGH_SPEED, EnvelopeCheck.MACH_MAX}):
+                        applied_v[idx] = min(applied_v[idx], bounds.maximum_tas)
+                    if EnvelopeCheck.ALTITUDE_MAX in checks:
+                        applied_h[idx] = min(applied_h[idx], bounds.maximum_altitude)
+                applied_cas, applied_mach = model.bluesky_airdata(
+                    h=float(bs.traf.pressure_alt[idx]), tas=float(applied_v[idx]),
+                    temperature=float(bs.traf.Temp[idx]))
+                applied = {'tas_m_s': float(applied_v[idx]), 'cas_m_s': applied_cas,
+                           'mach': applied_mach, 'altitude_m': float(applied_h[idx])}
+                self._set_result(idx, result, policy, EnvelopeAction.LIMITED,
+                                 requested, applied, source='guidance', contributes=False)
+            else:
+                action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT
+                          else EnvelopeAction.ACCEPTED)
+                self._set_result(idx, result, policy, action, requested, requested,
+                                 source='guidance', contributes=True)
+                if action == EnvelopeAction.ABORTED:
+                    bs.sim.hold()
+        return applied_v, np.asarray(intent_vs, dtype=float), applied_h

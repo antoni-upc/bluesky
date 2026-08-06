@@ -13,6 +13,8 @@ settings.set_variable_defaults(performance_dt=1.0)
 class PerfBase(Entity, replaceable=True):
     """Base class for BlueSky aircraft performance implementations."""
 
+    requires_synced_direct_state = False
+
     def __init__(self):
         super().__init__()
         with self.settrafarrays():
@@ -70,6 +72,10 @@ class PerfBase(Entity, replaceable=True):
 
     def validate_create(self, actypes):
         """Validate aircraft types before Traffic mutates its arrays."""
+        return True, ''
+
+    def assess_direct_state(self, idx, previous):
+        """Accept a provisionally applied direct state assignment by default."""
         return True, ''
 
     def currentlimits(self):

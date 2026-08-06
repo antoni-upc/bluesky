@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -73,6 +73,19 @@ class MassBounds:
 
 
 @dataclass(frozen=True)
+class FlightBounds:
+    configuration: str
+    minimum_cas: Optional[float]
+    maximum_cas: Optional[float]
+    minimum_mach: Optional[float]
+    maximum_mach: Optional[float]
+    maximum_altitude: Optional[float]
+    minimum_tas: Optional[float] = None
+    maximum_tas: Optional[float] = None
+    reason: str = ''
+
+
+@dataclass(frozen=True)
 class EnvelopeResult:
     status: EnvelopeStatus
     failed_checks: tuple[EnvelopeCheck, ...] = ()
@@ -87,8 +100,8 @@ class QualityEvent:
     policy: str
     action: str
     continuation: str
-    requested: Optional[float] = None
-    applied: Optional[float] = None
+    requested: Optional[Any] = None
+    applied: Optional[Any] = None
     sim_time_s: Optional[float] = None
 
     def as_dict(self):
@@ -190,3 +203,60 @@ def evaluate_mass(value, bounds, checks):
     reason = ','.join(check.value for check in failed)
     return EnvelopeResult(EnvelopeStatus.INFEASIBLE if failed else EnvelopeStatus.VALID,
                           tuple(failed), reason)
+
+
+def evaluate_flight(cas, mach, altitude, bounds, checks):
+    """Evaluate longitudinal state against operating-point BADA bounds."""
+    values = np.asarray((cas, mach, altitude), dtype=float)
+    if not np.all(np.isfinite(values)) or cas < 0.0 or mach < 0.0:
+        return EnvelopeResult(
+            EnvelopeStatus.UNKNOWN,
+            reason='CAS/Mach/altitude must be finite and speeds non-negative')
+    selected = set(checks)
+    required = {
+        EnvelopeCheck.LOW_SPEED: bounds.minimum_cas,
+        EnvelopeCheck.HIGH_SPEED: bounds.maximum_cas,
+        EnvelopeCheck.MACH_MIN: bounds.minimum_mach,
+        EnvelopeCheck.MACH_MAX: bounds.maximum_mach,
+        EnvelopeCheck.ALTITUDE_MAX: bounds.maximum_altitude,
+    }
+    missing = [check.value for check, value in required.items()
+               if check in selected and (value is None or not np.isfinite(value))]
+    if missing:
+        detail = bounds.reason or f'missing bounds for {",".join(missing)}'
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN, reason=detail)
+    contradictory = ((EnvelopeCheck.LOW_SPEED in selected and
+                      EnvelopeCheck.HIGH_SPEED in selected and
+                      bounds.minimum_cas > bounds.maximum_cas) or
+                     (EnvelopeCheck.MACH_MIN in selected and
+                      EnvelopeCheck.MACH_MAX in selected and
+                      bounds.minimum_mach > bounds.maximum_mach))
+    if contradictory:
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason='contradictory speed envelope bounds')
+    failed = []
+    if EnvelopeCheck.LOW_SPEED in selected and cas < bounds.minimum_cas:
+        failed.append(EnvelopeCheck.LOW_SPEED)
+    if EnvelopeCheck.HIGH_SPEED in selected and cas > bounds.maximum_cas:
+        failed.append(EnvelopeCheck.HIGH_SPEED)
+    if EnvelopeCheck.MACH_MIN in selected and mach < bounds.minimum_mach:
+        failed.append(EnvelopeCheck.MACH_MIN)
+    if EnvelopeCheck.MACH_MAX in selected and mach > bounds.maximum_mach:
+        failed.append(EnvelopeCheck.MACH_MAX)
+    if EnvelopeCheck.ALTITUDE_MAX in selected and altitude > bounds.maximum_altitude:
+        failed.append(EnvelopeCheck.ALTITUDE_MAX)
+    return EnvelopeResult(
+        EnvelopeStatus.INFEASIBLE if failed else EnvelopeStatus.VALID,
+        tuple(failed), ','.join(check.value for check in failed))
+
+
+def combine_results(*results):
+    """Combine independently evaluated components without losing reasons."""
+    unknown = next((result for result in results
+                    if result.status == EnvelopeStatus.UNKNOWN), None)
+    if unknown is not None:
+        return unknown
+    failed = tuple(dict.fromkeys(check for result in results
+                                 for check in result.failed_checks))
+    return EnvelopeResult(EnvelopeStatus.INFEASIBLE if failed else EnvelopeStatus.VALID,
+                          failed, ','.join(check.value for check in failed))

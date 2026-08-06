@@ -204,11 +204,22 @@ def perfstatus(acid=None):
         bounds = perf.bounds(idx) if hasattr(perf, 'bounds') else None
         bounds_text = ('unknown' if bounds is None or not bounds.known else
                        f'{bounds.minimum:.1f}..{bounds.maximum:.1f} kg')
+        flight = perf.flight_bounds(idx) if hasattr(perf, 'flight_bounds') else None
+        def value_text(value, digits):
+            return 'unknown' if value is None or not np.isfinite(value) else f'{value:.{digits}f}'
+        flight_text = ('unknown' if flight is None else
+                       f'CAS={value_text(flight.minimum_cas, 1)}..'
+                       f'{value_text(flight.maximum_cas, 1)} m/s, '
+                       f'Mach={value_text(flight.minimum_mach, 3)}..'
+                       f'{value_text(flight.maximum_mach, 3)}, '
+                       f'hmax={value_text(flight.maximum_altitude, 1)} m, '
+                       f'config={flight.configuration or "unknown"}')
         lines.append(
             f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
             f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
             f'mass={perf.mass[idx]:.1f} kg, '
             f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}, '
             f'envelope={policy}/{status}, checks={_checks_text(checks)}, bounds={bounds_text}, '
+            f'flight_bounds={flight_text}, '
             f'last={action}/{reason or "-"}, events={int(events)}, violations={int(violations)}')
     return True, '\n'.join(lines)
