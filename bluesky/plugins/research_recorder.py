@@ -8,9 +8,11 @@ from bluesky.tools.aero import vatmos
 
 bs.settings.set_variable_defaults(research_output_path='output', research_recording_dt=1.0)
 recorder = StreamingRecorder()
+_subscribed = False
 
 
 def init_plugin():
+    global _subscribed
     output = bs.resource(bs.settings.research_output_path)
     output.mkdir(parents=True, exist_ok=True)
     probe = output / '.write-capability'
@@ -20,6 +22,10 @@ def init_plugin():
         raise ImportError(f'RESEARCHRECORDER output is not writable: {output}') from exc
     finally:
         probe.unlink(missing_ok=True)
+    if not _subscribed:
+        from bluesky.plugins.pybada.envelope import quality_events
+        quality_events.connect(recorder.observe_event)
+        _subscribed = True
     return {'plugin_name': 'RESEARCHRECORDER', 'plugin_type': 'sim',
             'update_interval': bs.settings.research_recording_dt,
             'update': update, 'reset': reset}

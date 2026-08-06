@@ -13,7 +13,7 @@ import numpy as np
 import bluesky as bs
 
 
-SCHEMA_VERSION = 'samples-v3'
+SCHEMA_VERSION = 'samples-v4'
 FIELDS = (
     'schema_version', 'run_id', 'sim_time_s', 'sample_interval_s', 'sim_utc', 'acid', 'actype',
     'lat_deg', 'lon_deg', 'geometric_alt_m', 'pressure_alt_m', 'tas_m_s',
@@ -23,7 +23,11 @@ FIELDS = (
     'dataset_time', 'fallback_reason', 'performance_model', 'performance_dataset_version',
     'performance_aircraft', 'performance_resolution', 'performance_dummy',
     'dynamics_mode', 'performance_valid', 'performance_miss_count', 'thrust_n',
-    'rated_thrust_n', 'drag_n', 'fuel_flow_kg_s', 'mass_kg')
+    'rated_thrust_n', 'drag_n', 'fuel_flow_kg_s', 'mass_kg',
+    'envelope_policy', 'envelope_profile', 'envelope_checks',
+    'envelope_status', 'envelope_failed_checks', 'envelope_last_action',
+    'envelope_last_reason', 'envelope_event_count', 'envelope_violation_count',
+    'mass_min_kg', 'mass_max_kg')
 UNITS = {
     'sim_time_s': 's', 'sample_interval_s': 's', 'lat_deg': 'deg', 'lon_deg': 'deg',
     'geometric_alt_m': 'm', 'pressure_alt_m': 'm', 'tas_m_s': 'm/s',
@@ -31,7 +35,8 @@ UNITS = {
     'heading_deg': 'deg', 'track_deg': 'deg', 'temperature_k': 'K',
     'pressure_pa': 'Pa', 'density_kg_m3': 'kg/m^3', 'wind_north_m_s': 'm/s',
     'wind_east_m_s': 'm/s', 'thrust_n': 'N', 'rated_thrust_n': 'N', 'drag_n': 'N',
-    'fuel_flow_kg_s': 'kg/s', 'mass_kg': 'kg'}
+    'fuel_flow_kg_s': 'kg/s', 'mass_kg': 'kg', 'mass_min_kg': 'kg',
+    'mass_max_kg': 'kg'}
 
 
 def _finite(value):
@@ -50,6 +55,11 @@ class StreamingRecorder:
         self.rows = 0
         self.started_utc = ''
         self.sample_intervals = set()
+        self.event_stream = None
+        self.event_path = None
+        self.event_count = 0
+        self.reason_totals = {}
+        self.quality_status = 'VALID'
 
     @property
     def active(self):
@@ -62,10 +72,32 @@ class StreamingRecorder:
         self.run_id = self.path.stem
         self.started_utc = datetime.now(timezone.utc).isoformat()
         self.stream = self.path.open('w', newline='', encoding='utf-8')
+        self.event_path = self.path.with_suffix('.events.jsonl')
+        self.event_stream = self.event_path.open('w', encoding='utf-8')
         self.writer = csv.DictWriter(self.stream, fieldnames=FIELDS)
         self.writer.writeheader()
         self.rows = 0
         self.sample_intervals.clear()
+        self.event_count = 0
+        self.reason_totals.clear()
+        self.quality_status = 'VALID'
+
+    def observe_event(self, event):
+        """Synchronously persist a published event only while recording."""
+        if not self.active:
+            return
+        self.event_stream.write(json.dumps(event.as_dict(), sort_keys=True) + '\n')
+        self.event_stream.flush()
+        self.event_count += 1
+        self.reason_totals[event.reason] = self.reason_totals.get(event.reason, 0) + 1
+        self.quality_status = 'ABORTED' if event.action == 'ABORTED' else (
+            'DEGRADED' if self.quality_status == 'VALID' else self.quality_status)
+        if event.action == 'ABORTED':
+            # Capture the state that caused the event and finalize all evidence
+            # synchronously. The publisher calls sim.hold only after this
+            # subscriber returns.
+            self.sample()
+            self.stop()
 
     def sample(self):
         if not self.active:
@@ -100,6 +132,17 @@ class StreamingRecorder:
             dyn_mode = int(dyn_modes[idx]) if idx < len(dyn_modes) else None
             invalid = getattr(perf_impl, 'invalid', ())
             misses = getattr(perf_impl, 'failure_count', ())
+            policies = getattr(perf_impl, 'envelope_policy', ())
+            profiles = getattr(perf_impl, 'envelope_profile', ())
+            checks = getattr(perf_impl, 'envelope_checks', ())
+            statuses = getattr(perf_impl, 'envelope_status', ())
+            failed = getattr(perf_impl, 'envelope_failed_checks', ())
+            actions = getattr(perf_impl, 'envelope_last_action', ())
+            reasons = getattr(perf_impl, 'envelope_last_reason', ())
+            event_counts = getattr(perf_impl, 'envelope_event_count', ())
+            violation_counts = getattr(perf_impl, 'envelope_violation_count', ())
+            bounds = perf_impl.bounds(idx) if hasattr(perf_impl, 'bounds') else None
+            names = lambda values: ','.join(getattr(value, 'value', str(value)) for value in values)
             row = {
                 'schema_version': SCHEMA_VERSION, 'run_id': self.run_id,
                 'sim_time_s': bs.sim.simt, 'sample_interval_s': sample_interval,
@@ -127,7 +170,18 @@ class StreamingRecorder:
                 'thrust_n': perf_value('thrust'),
                 'rated_thrust_n': perf_value('rated_thrust'),
                 'drag_n': perf_value('drag'), 'fuel_flow_kg_s': perf_value('fuelflow'),
-                'mass_kg': perf_value('mass')}
+                'mass_kg': perf_value('mass'),
+                'envelope_policy': policies[idx] if idx < len(policies) else '',
+                'envelope_profile': profiles[idx] if idx < len(profiles) else '',
+                'envelope_checks': names(checks[idx]) if idx < len(checks) else '',
+                'envelope_status': statuses[idx] if idx < len(statuses) else '',
+                'envelope_failed_checks': names(failed[idx]) if idx < len(failed) else '',
+                'envelope_last_action': actions[idx] if idx < len(actions) else '',
+                'envelope_last_reason': reasons[idx] if idx < len(reasons) else '',
+                'envelope_event_count': int(event_counts[idx]) if idx < len(event_counts) else '',
+                'envelope_violation_count': int(violation_counts[idx]) if idx < len(violation_counts) else '',
+                'mass_min_kg': '' if bounds is None else _finite(bounds.minimum),
+                'mass_max_kg': '' if bounds is None else _finite(bounds.maximum)}
             self.writer.writerow({key: _finite(value) for key, value in row.items()})
             self.rows += 1
         self.stream.flush()
@@ -137,6 +191,9 @@ class StreamingRecorder:
             return None
         self.stream.flush()
         self.stream.close()
+        self.event_stream.flush()
+        self.event_stream.close()
+        self.event_stream = None
         self.stream = self.writer = None
         versions = {}
         for package in ('numpy', 'scipy', 'openap', 'pyBADA', 'netCDF4', 'pygrib'):
@@ -146,6 +203,20 @@ class StreamingRecorder:
                 versions[package] = None
         sources = sorted(set(getattr(bs.traf, 'atmos_source', [])))
         dataset_times = sorted(set(filter(None, getattr(bs.traf, 'atmos_dataset_time', []))))
+        perf = getattr(bs.traf, 'perf', None)
+        try:
+            from bluesky.core.entity import getproxied
+            perf = getproxied(perf)
+        except (ImportError, AttributeError):
+            pass
+        effective = []
+        for idx, acid in enumerate(getattr(bs.traf, 'id', ())):
+            policies = getattr(perf, 'envelope_policy', ())
+            checks = getattr(perf, 'envelope_checks', ())
+            effective.append({'aircraft': acid,
+                              'policy': policies[idx] if idx < len(policies) else '',
+                              'checks': [getattr(c, 'value', str(c)) for c in checks[idx]]
+                              if idx < len(checks) else []})
         metadata = {
             'schema_version': SCHEMA_VERSION, 'run_id': self.run_id,
             'created_utc': self.started_utc, 'rows': self.rows,
@@ -155,7 +226,10 @@ class StreamingRecorder:
             'sample_intervals_s': sorted(self.sample_intervals),
             'atmosphere_sources': sources, 'dataset_times': dataset_times,
             'columns': list(FIELDS), 'missing_value': 'empty CSV field',
-            'units': UNITS}
+            'units': UNITS, 'events_jsonl': str(self.event_path),
+            'event_total': self.event_count, 'reason_totals': self.reason_totals,
+            'quality_status': self.quality_status,
+            'effective_envelope': effective}
         meta_path = self.path.with_suffix('.metadata.json')
         meta_path.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
         return self.path, meta_path
@@ -165,6 +239,10 @@ class StreamingRecorder:
         self.path = None
         self.rows = 0
         self.sample_intervals.clear()
+        self.event_path = None
+        self.event_count = 0
+        self.reason_totals.clear()
+        self.quality_status = 'VALID'
 
     def derive(self):
         """Generate independent optional artifacts from authoritative CSV."""

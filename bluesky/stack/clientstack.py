@@ -6,7 +6,7 @@ import math
 import bluesky as bs
 from bluesky.core.signal import Signal
 from bluesky.stack.stackbase import Stack, forward, stack
-from bluesky.stack.cmdparser import Command, command, commandgroup
+from bluesky.stack.cmdparser import Command, CommandRejected, command, commandgroup
 from bluesky.stack import argparser
 
 
@@ -44,7 +44,8 @@ def process():
                         echotext = echotext or cmdobj.brieftext()
                     else:
                         echoflags = bs.BS_FUNERR
-                        echotext = f'Syntax error: {echotext or cmdobj.brieftext()}'
+                        if not isinstance(echotext, CommandRejected):
+                            echotext = f'Syntax error: {echotext or cmdobj.brieftext()}'
 
             except Exception as e:
                 success = False

@@ -1,8 +1,13 @@
 """PyBADA longitudinal/vertical TEM plugin entry point."""
 
+import numpy as np
+
 import bluesky as bs
 from bluesky import stack
 from bluesky.plugins.pybada import PyBadaTEM
+from bluesky.plugins.pybada.envelope import (EnvelopePolicy, EnvelopeProfile,
+    expand_checks, parse_checks, parse_policy, parse_profile)
+from bluesky.stack.cmdparser import CommandRejected
 
 
 def init_plugin():
@@ -86,12 +91,91 @@ def spdsched(schedule: str = ''):
 
 @stack.command(name='MASS')
 def mass(acid: 'acid', mass_kg: float):
-    if mass_kg <= 0:
-        return False, 'MASS must be positive'
     perf = PyBadaTEM.implinstance()
-    perf.mass[acid] = mass_kg
-    perf.mass_override[acid] = True
-    return True, f'{bs.traf.id[acid]} mass set to {mass_kg:.1f} kg'
+    aircraft = bs.traf.id[acid]
+    if not np.isfinite(mass_kg) or mass_kg <= 0:
+        return False, CommandRejected(
+            f'{aircraft}: MASS {mass_kg!r} kg rejected; reason=mass must be finite and positive; '
+            f'policy={getattr(perf, "envelope_policy", ["OFF"])[acid]}, '
+            f'preserved={perf.mass[acid]:.1f} kg')
+    success, reason = perf.assign_mass(acid, mass_kg)
+    if not success:
+        bounds = perf.bounds(acid)
+        bounds_text = ('unknown' if not bounds.known else
+                       f'{bounds.minimum:.1f}..{bounds.maximum:.1f} kg')
+        return False, CommandRejected(
+            f'{aircraft}: MASS {mass_kg:.1f} kg rejected; '
+            f'policy={perf.envelope_policy[acid]}, reason={reason}, '
+            f'bounds={bounds_text}, preserved={perf.mass[acid]:.1f} kg')
+    if perf.envelope_last_action[acid] == 'ABORTED':
+        return True, (f'{aircraft}: MASS {mass_kg:.1f} kg applied; quality event emitted, '
+                      'simulation placed in HOLD')
+    return True, f'{aircraft} mass set to {mass_kg:.1f} kg'
+
+
+def _checks_text(checks):
+    return ','.join(check.value for check in checks) or 'none'
+
+
+@stack.command(name='ENVELOPE', annotations='[txt],[txt]')
+def envelope(acid=None, policy=None):
+    """Inspect or set independent per-aircraft BADA envelope policy."""
+    perf = PyBadaTEM.implinstance()
+    if acid is None:
+        lines = [f'default: {str(bs.settings.pybada_envelope_policy).upper()}']
+        lines.extend(f'{name}: {perf.envelope_policy[idx]}'
+                     for idx, name in enumerate(bs.traf.id))
+        return True, '\n'.join(lines)
+    # A policy without an aircraft changes only the creation default.
+    if policy is None:
+        try:
+            default = parse_policy(acid)
+        except ValueError:
+            idx = bs.traf.id2idx(acid)
+            if idx < 0:
+                return False, f'Aircraft {acid} not found'
+            return True, f'{bs.traf.id[idx]}: {perf.envelope_policy[idx]}'
+        bs.settings.pybada_envelope_policy = default.value
+        return True, f'Default envelope policy set to {default.value}'
+    idx = bs.traf.id2idx(acid)
+    if idx < 0:
+        return False, f'Aircraft {acid} not found'
+    try:
+        value = parse_policy(policy)
+    except ValueError as exc:
+        return False, f'ENVELOPE {exc}'
+    success, reason = perf.configure_envelope(idx, policy=value)
+    if not success:
+        return False, f'ENVELOPE unchanged: {reason}'
+    return True, f'{bs.traf.id[idx]}: envelope policy set to {value.value}'
+
+
+@stack.command(name='ENVELOPECHECKS')
+def envelopechecks(acid: str, profile: str = '', *checks):
+    """ENVELOPECHECKS acid [CORE_ONLY|LONGITUDINAL|FULL|CUSTOM checks...]."""
+    perf = PyBadaTEM.implinstance()
+    idx = bs.traf.id2idx(acid)
+    if idx < 0:
+        return False, f'Aircraft {acid} not found'
+    if not profile:
+        return True, (f'{bs.traf.id[idx]}: profile={perf.envelope_profile[idx]}, '
+                      f'checks={_checks_text(perf.envelope_checks[idx])}')
+    try:
+        selected_profile = parse_profile(profile)
+        if selected_profile == EnvelopeProfile.CUSTOM:
+            selected = parse_checks(checks)
+        else:
+            if checks:
+                raise ValueError(f'{selected_profile.value} does not accept explicit checks')
+            selected = expand_checks(selected_profile)
+    except ValueError as exc:
+        return False, f'ENVELOPECHECKS unchanged: {exc}'
+    success, reason = perf.configure_envelope(
+        idx, profile=selected_profile, checks=selected)
+    if not success:
+        return False, f'ENVELOPECHECKS unchanged: {reason}'
+    return True, (f'{bs.traf.id[idx]}: profile={selected_profile.value}, '
+                  f'checks={_checks_text(selected)}')
 
 
 @stack.command(name='PERFSTATUS', annotations='[txt]')
@@ -110,9 +194,21 @@ def perfstatus(acid=None):
     lines = []
     for idx in indices:
         resolution = perf.resolutions[idx]
+        policy = getattr(perf, 'envelope_policy', ['OFF'] * len(bs.traf.id))[idx]
+        checks = getattr(perf, 'envelope_checks', [()] * len(bs.traf.id))[idx]
+        status = getattr(perf, 'envelope_status', ['VALID'] * len(bs.traf.id))[idx]
+        action = getattr(perf, 'envelope_last_action', ['NONE'] * len(bs.traf.id))[idx]
+        reason = getattr(perf, 'envelope_last_reason', [''] * len(bs.traf.id))[idx]
+        events = getattr(perf, 'envelope_event_count', [0] * len(bs.traf.id))[idx]
+        violations = getattr(perf, 'envelope_violation_count', [0] * len(bs.traf.id))[idx]
+        bounds = perf.bounds(idx) if hasattr(perf, 'bounds') else None
+        bounds_text = ('unknown' if bounds is None or not bounds.known else
+                       f'{bounds.minimum:.1f}..{bounds.maximum:.1f} kg')
         lines.append(
             f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
             f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
             f'mass={perf.mass[idx]:.1f} kg, '
-            f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}')
+            f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}, '
+            f'envelope={policy}/{status}, checks={_checks_text(checks)}, bounds={bounds_text}, '
+            f'last={action}/{reason or "-"}, events={int(events)}, violations={int(violations)}')
     return True, '\n'.join(lines)
