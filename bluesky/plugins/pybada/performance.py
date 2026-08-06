@@ -6,8 +6,9 @@ import bluesky as bs
 from bluesky.traffic.performance.perfbase import PerfBase
 from .model import EnergyResult, EvaluationError, ModelStore, ModelUnavailable
 from .envelope import (EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile,
-                       EnvelopeResult, EnvelopeStatus, FlightBounds, QualityEvent, combine_results,
-                       evaluate_flight, evaluate_mass, expand_checks, mass_bounds,
+                       EnvelopeResult, EnvelopeStatus, FlightBounds, QualityEvent,
+                       LateralBounds, VerticalBounds, combine_results, evaluate_flight,
+                       evaluate_lateral, evaluate_mass, evaluate_vertical, expand_checks, mass_bounds,
                        parse_policy, quality_events)
 
 
@@ -35,6 +36,7 @@ class PyBadaTEM(PerfBase):
         self.resolutions = []
         self.envelope_checks = []
         self.envelope_failed_checks = []
+        self.envelope_mass_failed_checks = []
         self.envelope_state_failed_checks = []
         self.envelope_guidance_failed_checks = []
         with self.settrafarrays():
@@ -49,9 +51,11 @@ class PyBadaTEM(PerfBase):
             self.envelope_last_action = np.array([], dtype='U8')
             self.envelope_last_reason = np.array([], dtype='U80')
             self.envelope_active_reason = np.array([], dtype='U80')
+            self.envelope_mass_reason = np.array([], dtype='U80')
             self.envelope_state_reason = np.array([], dtype='U80')
             self.envelope_guidance_reason = np.array([], dtype='U80')
             self.envelope_attempt_reason = np.array([], dtype='U80')
+            self.envelope_dynamics_reason = np.array([], dtype='U80')
             self.envelope_guidance_infeasible = np.array([], dtype=bool)
             self.envelope_event_count = np.array([], dtype=int)
             self.envelope_violation_count = np.array([], dtype=int)
@@ -78,7 +82,7 @@ class PyBadaTEM(PerfBase):
                 len(self.envelope_checks) == len(candidate_models)):
             for idx, model in enumerate(candidate_models):
                 policy = parse_policy(self.envelope_policy[idx])
-                evaluation, _ = self.evaluate_envelope(idx, model=model)
+                evaluation, _, _, _ = self.evaluate_envelope(idx, model=model)
                 if policy != EnvelopePolicy.OFF and evaluation.status == EnvelopeStatus.UNKNOWN:
                     raise ModelUnavailable(f'{bs.traf.id[idx]} envelope unknown: {evaluation.reason}')
                 if policy == EnvelopePolicy.ENFORCE and evaluation.status == EnvelopeStatus.INFEASIBLE:
@@ -113,6 +117,7 @@ class PyBadaTEM(PerfBase):
             explicit = parse_checks(bs.settings.pybada_envelope_checks)
             self.envelope_checks.append(expand_checks(profile, explicit))
             self.envelope_failed_checks.append(())
+            self.envelope_mass_failed_checks.append(())
             self.envelope_state_failed_checks.append(())
             self.envelope_guidance_failed_checks.append(())
         self.envelope_policy[-n:] = parse_policy(bs.settings.pybada_envelope_policy).value
@@ -120,9 +125,11 @@ class PyBadaTEM(PerfBase):
         self.envelope_status[-n:] = EnvelopeStatus.VALID.value
         self.envelope_last_action[-n:] = EnvelopeAction.NONE.value
         self.envelope_active_reason[-n:] = ''
+        self.envelope_mass_reason[-n:] = ''
         self.envelope_state_reason[-n:] = ''
         self.envelope_guidance_reason[-n:] = ''
         self.envelope_attempt_reason[-n:] = ''
+        self.envelope_dynamics_reason[-n:] = ''
         self.envelope_guidance_infeasible[-n:] = False
         for i in range(len(self.mass) - n, len(self.mass)):
             self.mass[i] = float(getattr(self.models[i], 'MREF', getattr(self.models[i], 'OEW', 60000.0)))
@@ -148,6 +155,7 @@ class PyBadaTEM(PerfBase):
             del self.resolutions[i]
             del self.envelope_checks[i]
             del self.envelope_failed_checks[i]
+            del self.envelope_mass_failed_checks[i]
             del self.envelope_state_failed_checks[i]
             del self.envelope_guidance_failed_checks[i]
         super().delete(idx)
@@ -157,6 +165,7 @@ class PyBadaTEM(PerfBase):
         self.resolutions.clear()
         self.envelope_checks.clear()
         self.envelope_failed_checks.clear()
+        self.envelope_mass_failed_checks.clear()
         self.envelope_state_failed_checks.clear()
         self.envelope_guidance_failed_checks.clear()
         super().reset()
@@ -184,8 +193,43 @@ class PyBadaTEM(PerfBase):
             return FlightBounds('', None, None, None, None, None,
                                 reason=f'envelope evaluation failed: {exc}')
 
+    def vertical_bounds(self, idx, *, mass=None, tas=None, model=None):
+        model = model or self.models[idx]
+        try:
+            values = model.bluesky_vertical_envelope(
+                h=float(bs.traf.pressure_alt[idx]),
+                tas=float(bs.traf.tas[idx] if tas is None else tas),
+                mass=float(self.mass[idx] if mass is None else mass),
+                temperature=float(bs.traf.Temp[idx]), pressure=float(bs.traf.p[idx]),
+                schedule=self.schedule)
+            return VerticalBounds(**values)
+        except Exception as exc:
+            return VerticalBounds(None, None,
+                                  reason=f'vertical envelope evaluation failed: {exc}')
+
+    def effective_bank_angle(self, idx):
+        if not bool(bs.traf.swhdgsel[idx]):
+            return 0.0
+        selected = float(bs.traf.ap.turnphi[idx])
+        bank = selected if selected > float(bs.traf.eps[idx]) ** 2 else \
+            float(bs.traf.ap.bankdef[idx])
+        return float(np.degrees(bank))
+
+    def lateral_bounds(self, idx, *, model=None, configuration=None):
+        model = model or self.models[idx]
+        try:
+            if configuration is None:
+                configuration = self.flight_bounds(idx, model=model).configuration
+            values = model.bluesky_lateral_envelope(
+                configuration=configuration, phase=self._phase(idx))
+            return LateralBounds(**values)
+        except Exception as exc:
+            return LateralBounds('', None, None, None,
+                                 reason=f'lateral envelope evaluation failed: {exc}')
+
     def evaluate_envelope(self, idx, *, mass=None, cas=None, mach=None,
-                          altitude=None, checks=None, model=None):
+                          altitude=None, vertical_rate=None, bank_angle=None,
+                          checks=None, model=None):
         checks = self.envelope_checks[idx] if checks is None else tuple(checks)
         candidate_mass = self.mass[idx] if mass is None else mass
         mbounds = mass_bounds(model or self.models[idx])
@@ -196,13 +240,29 @@ class PyBadaTEM(PerfBase):
                                      mach=mach, model=model)
                    if set(checks).intersection(flight_checks)
                    else FlightBounds('', None, None, None, None, None))
+        vertical_checks = {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX}
+        vbounds = (self.vertical_bounds(idx, mass=candidate_mass, model=model)
+                   if set(checks).intersection(vertical_checks)
+                   else VerticalBounds(None, None))
+        lateral_checks = {EnvelopeCheck.BANK_ANGLE, EnvelopeCheck.LOAD_FACTOR}
+        lbounds = (self.lateral_bounds(idx, model=model,
+                                      configuration=fbounds.configuration or None)
+                   if set(checks).intersection(lateral_checks)
+                   else LateralBounds('', None, None, None))
+        bank = ((self.effective_bank_angle(idx) if bank_angle is None else float(bank_angle))
+                if set(checks).intersection(lateral_checks) else 0.0)
+        load = 1.0 / np.cos(np.radians(abs(bank))) if abs(bank) < 90.0 else np.inf
         return combine_results(
             evaluate_mass(candidate_mass, mbounds, checks),
             evaluate_flight(
                 bs.traf.cas[idx] if cas is None else cas,
                 bs.traf.M[idx] if mach is None else mach,
                 bs.traf.alt[idx] if altitude is None else altitude,
-                fbounds, checks)), fbounds
+                fbounds, checks),
+            evaluate_vertical((getattr(bs.traf, 'vs', np.zeros(len(bs.traf.id)))[idx]
+                               if vertical_rate is None else vertical_rate),
+                              vbounds, checks),
+            evaluate_lateral(bank, load, lbounds, checks)), fbounds, vbounds, lbounds
 
     def _emit_event(self, idx, reason, action, requested=None, applied=None):
         event = QualityEvent(
@@ -216,40 +276,101 @@ class PyBadaTEM(PerfBase):
             self.envelope_violation_count[idx] += 1
         self.envelope_last_action[idx] = action.value
         self.envelope_last_reason[idx] = reason
-        print(f'QUALITY aircraft={event.aircraft} component={event.component} '
-              f'reason={reason} policy={event.policy} action={event.action} '
-              f'continuation={event.continuation}')
+        values = (f'requested={self._format_event_value(reason, requested)} '
+                  f'applied={self._format_event_value(reason, applied)}')
+        message = (f'QUALITY aircraft={event.aircraft} component={event.component} '
+                   f'reason={reason} policy={event.policy} action={event.action} '
+                   f'{values} continuation={event.continuation}')
+        print(message)
         # ``print`` is retained for detached/headless evidence; stack.echo
         # publishes the same event to the interactive BlueSky console.
         from bluesky import stack
-        stack.echo(f'QUALITY aircraft={event.aircraft} component={event.component} '
-                   f'reason={reason} policy={event.policy} action={event.action} '
-                   f'continuation={event.continuation}')
+        stack.echo(message)
         quality_events.emit(event)
         return event
 
+    @staticmethod
+    def _format_event_value(reason, value):
+        if value is None:
+            return '{none}'
+        reasons = set(str(reason).split(','))
+        if not isinstance(value, dict):
+            key = ('mass_kg' if reasons.intersection(
+                   {EnvelopeCheck.MASS_MIN.value, EnvelopeCheck.MASS_MAX.value})
+                   else 'value')
+            value = {key: value}
+        relevant = []
+        if reasons.intersection({EnvelopeCheck.LOW_SPEED.value,
+                                 EnvelopeCheck.HIGH_SPEED.value}):
+            relevant.extend(('tas_m_s', 'cas_m_s'))
+        if reasons.intersection({EnvelopeCheck.MACH_MIN.value,
+                                 EnvelopeCheck.MACH_MAX.value}):
+            relevant.append('mach')
+        if EnvelopeCheck.ALTITUDE_MAX.value in reasons:
+            relevant.append('altitude_m')
+        if reasons.intersection({EnvelopeCheck.ROC_MAX.value,
+                                 EnvelopeCheck.ROD_MAX.value}):
+            relevant.append('vertical_rate_m_s')
+        if reasons.intersection({EnvelopeCheck.MASS_MIN.value,
+                                 EnvelopeCheck.MASS_MAX.value}):
+            relevant.append('mass_kg')
+        if EnvelopeCheck.BANK_ANGLE.value in reasons:
+            relevant.append('bank_angle_deg')
+        if EnvelopeCheck.LOAD_FACTOR.value in reasons:
+            relevant.append('load_factor')
+        keys = [key for key in dict.fromkeys(relevant) if key in value]
+        if not keys:
+            keys = list(value)
+        parts = []
+        for key in keys:
+            item = value[key]
+            if key == 'vertical_rate_m_s':
+                try:
+                    rate = float(item)
+                    direction = ('CLIMB' if rate > 0.0 else
+                                 ('DESCENT' if rate < 0.0 else 'LEVEL'))
+                    parts.append(f'direction={direction}')
+                    parts.append(f'vertical_rate_magnitude_m_s={abs(rate):.2f}')
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            try:
+                digits = 3 if key in ('mach', 'load_factor') else 2
+                text = f'{float(item):.{digits}f}' if np.isfinite(item) else str(item)
+            except (TypeError, ValueError):
+                text = str(item)
+            parts.append(f'{key}={text}')
+        return '{' + ','.join(parts) + '}'
+
     def _refresh_envelope_status(self, idx):
-        failed = list(self.envelope_state_failed_checks[idx])
+        failed = list(self.envelope_mass_failed_checks[idx])
+        failed.extend(self.envelope_state_failed_checks[idx])
         if self.envelope_guidance_infeasible[idx]:
             failed.extend(self.envelope_guidance_failed_checks[idx])
         self.envelope_failed_checks[idx] = tuple(dict.fromkeys(failed))
         self.envelope_status[idx] = (EnvelopeStatus.INFEASIBLE.value
                                      if failed else EnvelopeStatus.VALID.value)
-        reasons = [self.envelope_state_reason[idx]]
+        reasons = [self.envelope_mass_reason[idx], self.envelope_state_reason[idx]]
         if self.envelope_guidance_infeasible[idx]:
             reasons.append(self.envelope_guidance_reason[idx])
         self.envelope_active_reason[idx] = ','.join(filter(None, reasons))
 
     def _set_result(self, idx, result, policy, action, requested=None, applied=None,
                     source='state', contributes=True):
-        if source == 'state':
+        if source == 'mass':
+            reason_array = self.envelope_mass_reason
+            failed_list = self.envelope_mass_failed_checks
+        elif source == 'state':
             reason_array = self.envelope_state_reason
             failed_list = self.envelope_state_failed_checks
         elif source == 'guidance':
             reason_array = self.envelope_guidance_reason
             failed_list = self.envelope_guidance_failed_checks
-        else:
+        elif source == 'attempt':
             reason_array = self.envelope_attempt_reason
+            failed_list = None
+        else:
+            reason_array = self.envelope_dynamics_reason
             failed_list = None
         previous_reason = reason_array[idx]
         other_active_reason = ''
@@ -271,9 +392,12 @@ class PyBadaTEM(PerfBase):
 
     def _clear_envelope_sources(self, idx):
         self.envelope_state_reason[idx] = ''
+        self.envelope_mass_reason[idx] = ''
         self.envelope_guidance_reason[idx] = ''
         self.envelope_attempt_reason[idx] = ''
+        self.envelope_dynamics_reason[idx] = ''
         self.envelope_state_failed_checks[idx] = ()
+        self.envelope_mass_failed_checks[idx] = ()
         self.envelope_guidance_failed_checks[idx] = ()
         self.envelope_guidance_infeasible[idx] = False
         self._refresh_envelope_status(idx)
@@ -286,7 +410,7 @@ class PyBadaTEM(PerfBase):
         new_checks = tuple(checks) if checks is not None else (
             self.envelope_checks[idx] if profile is None else expand_checks(new_profile))
         result = EnvelopeStatus.VALID
-        evaluation, _ = self.evaluate_envelope(idx, checks=new_checks)
+        evaluation, _, _, _ = self.evaluate_envelope(idx, checks=new_checks)
         if new_policy != EnvelopePolicy.OFF:
             result = evaluation.status
             if result == EnvelopeStatus.UNKNOWN:
@@ -318,7 +442,12 @@ class PyBadaTEM(PerfBase):
             self.mass[idx], self.mass_override[idx] = value, override
             self._clear_envelope_sources(idx)
             return True, ''
-        result, _ = self.evaluate_envelope(idx, mass=value)
+        runtime_checks = (tuple(check for check in self.envelope_checks[idx]
+                                if check in {EnvelopeCheck.MASS_MIN,
+                                             EnvelopeCheck.MASS_MAX})
+                          if runtime else None)
+        result, _, _, _ = self.evaluate_envelope(
+            idx, mass=value, checks=runtime_checks)
         if result.status == EnvelopeStatus.UNKNOWN:
             return False, result.reason
         if result.status == EnvelopeStatus.INFEASIBLE and policy == EnvelopePolicy.ENFORCE:
@@ -326,10 +455,12 @@ class PyBadaTEM(PerfBase):
                              value, self.mass[idx], source='attempt', contributes=False)
             return False, result.reason
         self.mass[idx], self.mass_override[idx] = value, override
+        result_source = 'mass' if runtime else 'state'
         self._set_result(idx, EnvelopeResult(EnvelopeStatus.VALID), policy,
                          EnvelopeAction.NONE, source='attempt', contributes=False)
         action = EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and result.status != EnvelopeStatus.VALID else EnvelopeAction.ACCEPTED
-        self._set_result(idx, result, policy, action, value, value)
+        self._set_result(idx, result, policy, action, value, value,
+                         source=result_source)
         if action == EnvelopeAction.ABORTED:
             bs.sim.hold()
         return True, ''
@@ -337,7 +468,7 @@ class PyBadaTEM(PerfBase):
     def assess_direct_state(self, idx, previous):
         """Assess a synchronized provisional MOVE state transactionally."""
         policy = parse_policy(self.envelope_policy[idx])
-        result, bounds = self.evaluate_envelope(
+        result, bounds, vertical, lateral = self.evaluate_envelope(
             idx, checks=() if policy == EnvelopePolicy.OFF else None)
         if result.status == EnvelopeStatus.UNKNOWN:
             return False, f'reason={result.reason}; prior state preserved'
@@ -345,17 +476,27 @@ class PyBadaTEM(PerfBase):
             self.envelope_status[idx] = EnvelopeStatus.VALID.value
             return True, ''
         requested = {'cas_m_s': float(bs.traf.cas[idx]), 'mach': float(bs.traf.M[idx]),
-                     'altitude_m': float(bs.traf.alt[idx])}
+                     'altitude_m': float(bs.traf.alt[idx]),
+                     'vertical_rate_m_s': float(bs.traf.vs[idx])}
         applied = (None if previous is None else
                    {'cas_m_s': float(previous['cas']), 'mach': float(previous['M']),
-                    'altitude_m': float(previous['alt'])})
+                    'altitude_m': float(previous['alt']),
+                    'vertical_rate_m_s': float(previous['vs'])})
         if result.status == EnvelopeStatus.INFEASIBLE and policy == EnvelopePolicy.ENFORCE:
             self._set_result(idx, result, policy, EnvelopeAction.REJECTED,
                              requested, applied, source='attempt', contributes=False)
             return False, (f'policy=ENFORCE, reason={result.reason}, '
                            f'CAS bounds={bounds.minimum_cas}..{bounds.maximum_cas} m/s, '
                            f'Mach bounds={bounds.minimum_mach}..{bounds.maximum_mach}, '
-                           f'altitude max={bounds.maximum_altitude} m; prior state preserved')
+                           f'altitude max={bounds.maximum_altitude} m, '
+                           f'vertical bounds=ROC_MAX '
+                           f'{self._bound_text(vertical.maximum_rocd)} m/s, ROD_MAX '
+                           f'{self._bound_text_abs(vertical.minimum_rocd)} m/s; '
+                           f'lateral bounds=BANK_MAX '
+                           f'{self._bound_text(lateral.maximum_bank_angle_deg)} deg, '
+                           f'LOAD={self._bound_text(lateral.minimum_load_factor)}..'
+                           f'{self._bound_text(lateral.maximum_load_factor)}; '
+                           'prior state preserved')
         action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and
                   result.status == EnvelopeStatus.INFEASIBLE else EnvelopeAction.ACCEPTED)
         self._set_result(idx, EnvelopeResult(EnvelopeStatus.VALID), policy,
@@ -383,6 +524,20 @@ class PyBadaTEM(PerfBase):
                 f'{bs.traf.id[idx]}/{bs.traf.type[idx]} BADA{self.family} h={h:.1f} '
                 f'TAS={tas:.3f} mass={mass:.1f} phase={phase} schedule={self.schedule}: {exc}') from exc
 
+    @staticmethod
+    def _bound_text(value):
+        try:
+            return f'{float(value):.2f}' if np.isfinite(value) else 'unknown'
+        except (TypeError, ValueError):
+            return 'unknown'
+
+    @staticmethod
+    def _bound_text_abs(value):
+        try:
+            return f'{abs(float(value)):.2f}' if np.isfinite(value) else 'unknown'
+        except (TypeError, ValueError):
+            return 'unknown'
+
     def update_dynamics(self, traffic, dt):
         handled = np.zeros(traffic.ntraf, dtype=bool)
         # Performance is evaluated for every aircraft, like BlueSky's original
@@ -393,6 +548,49 @@ class PyBadaTEM(PerfBase):
                 result = self._evaluate(idx)
                 self.thrust[idx], self.rated_thrust[idx], self.drag[idx], self.fuelflow[idx] = \
                     result.thrust, result.rated_thrust, result.drag, result.fuel_flow
+                candidate_vs = None
+                if self.dyn_mode[idx] == 1:
+                    delta_alt = traffic.aporasas.alt[idx] - traffic.alt[idx]
+                    candidate_vs = np.sign(delta_alt) * min(
+                        abs(result.rocd), abs(delta_alt) / dt)
+                    if (hasattr(self, 'envelope_policy') and
+                            set(self.envelope_checks[idx]).intersection(
+                                {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX}) and
+                            parse_policy(self.envelope_policy[idx]) != EnvelopePolicy.OFF):
+                        policy = parse_policy(self.envelope_policy[idx])
+                        selected_vertical = tuple(
+                            check for check in self.envelope_checks[idx]
+                            if check in {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX})
+                        vertical = self.vertical_bounds(
+                            idx, mass=self.mass[idx], tas=traffic.tas[idx])
+                        vertical_result = evaluate_vertical(
+                            candidate_vs, vertical, selected_vertical)
+                        if vertical_result.status == EnvelopeStatus.UNKNOWN:
+                            raise EvaluationError(vertical_result.reason)
+                        if vertical_result.status == EnvelopeStatus.INFEASIBLE:
+                            requested = {'vertical_rate_m_s': float(candidate_vs)}
+                            if policy == EnvelopePolicy.ENFORCE:
+                                if EnvelopeCheck.ROC_MAX in selected_vertical:
+                                    candidate_vs = min(candidate_vs, vertical.maximum_rocd)
+                                if EnvelopeCheck.ROD_MAX in selected_vertical:
+                                    candidate_vs = max(candidate_vs, vertical.minimum_rocd)
+                                self._set_result(
+                                    idx, vertical_result, policy, EnvelopeAction.LIMITED,
+                                    requested, {'vertical_rate_m_s': float(candidate_vs)},
+                                    source='dynamics', contributes=False)
+                            else:
+                                action = (EnvelopeAction.ABORTED
+                                          if policy == EnvelopePolicy.ABORT
+                                          else EnvelopeAction.ACCEPTED)
+                                self._set_result(idx, vertical_result, policy, action,
+                                                 requested, requested, source='state')
+                                if action == EnvelopeAction.ABORTED:
+                                    bs.sim.hold()
+                                    continue
+                        else:
+                            self._set_result(idx, vertical_result, policy,
+                                             EnvelopeAction.NONE, source='dynamics',
+                                             contributes=False)
                 candidate_mass = self.mass[idx] - result.fuel_flow * dt
                 if hasattr(self, 'envelope_policy'):
                     override = bool(self.mass_override[idx]) if hasattr(self, 'mass_override') else False
@@ -404,8 +602,7 @@ class PyBadaTEM(PerfBase):
                 if self.dyn_mode[idx] == 1:
                     traffic.ax[idx] = result.acceleration
                     traffic.tas[idx] = max(0.0, traffic.tas[idx] + result.acceleration * dt)
-                    delta_alt = traffic.aporasas.alt[idx] - traffic.alt[idx]
-                    traffic.vs[idx] = np.sign(delta_alt) * min(abs(result.rocd), abs(delta_alt) / dt)
+                    traffic.vs[idx] = candidate_vs
                     handled[idx] = True
                 self.invalid[idx] = False
             except (ModelUnavailable, EvaluationError) as exc:
@@ -419,6 +616,7 @@ class PyBadaTEM(PerfBase):
     def limits(self, intent_v, intent_vs, intent_h, ax):
         """Apply selected speed/Mach/altitude policies to resolved guidance."""
         applied_v = np.asarray(intent_v, dtype=float).copy()
+        applied_vs = np.asarray(intent_vs, dtype=float).copy()
         applied_h = np.asarray(intent_h, dtype=float).copy()
         for idx in range(len(applied_v)):
             policy = parse_policy(self.envelope_policy[idx])
@@ -426,7 +624,9 @@ class PyBadaTEM(PerfBase):
             if policy == EnvelopePolicy.OFF or not checks.intersection({
                     EnvelopeCheck.LOW_SPEED, EnvelopeCheck.HIGH_SPEED,
                     EnvelopeCheck.MACH_MIN, EnvelopeCheck.MACH_MAX,
-                    EnvelopeCheck.ALTITUDE_MAX}):
+                    EnvelopeCheck.ALTITUDE_MAX, EnvelopeCheck.ROC_MAX,
+                    EnvelopeCheck.ROD_MAX, EnvelopeCheck.BANK_ANGLE,
+                    EnvelopeCheck.LOAD_FACTOR}):
                 continue
             model = self.models[idx]
             try:
@@ -435,25 +635,43 @@ class PyBadaTEM(PerfBase):
                     temperature=float(bs.traf.Temp[idx]))
             except Exception as exc:
                 raise RuntimeError(f'{bs.traf.id[idx]} guidance airdata unknown: {exc}') from exc
-            result, bounds = self.evaluate_envelope(
+            vertical_direction = np.sign(float(applied_h[idx]) - float(bs.traf.alt[idx]))
+            requested_signed_vs = vertical_direction * abs(float(applied_vs[idx]))
+            requested_bank = (self.effective_bank_angle(idx)
+                              if checks.intersection({EnvelopeCheck.BANK_ANGLE,
+                                                      EnvelopeCheck.LOAD_FACTOR}) else 0.0)
+            requested_load = (1.0 / np.cos(np.radians(abs(requested_bank)))
+                              if abs(requested_bank) < 90.0 else np.inf)
+            result, bounds, vertical, lateral = self.evaluate_envelope(
                 idx, cas=requested_cas, mach=requested_mach,
-                altitude=float(applied_h[idx]))
-            current_result, _ = self.evaluate_envelope(idx)
+                altitude=float(applied_h[idx]), vertical_rate=requested_signed_vs)
+            current_result, _, _, _ = self.evaluate_envelope(idx)
             requested = {'tas_m_s': float(intent_v[idx]), 'cas_m_s': requested_cas,
-                         'mach': requested_mach, 'altitude_m': float(intent_h[idx])}
+                         'mach': requested_mach, 'altitude_m': float(intent_h[idx]),
+                         'vertical_rate_m_s': requested_signed_vs,
+                         'bank_angle_deg': requested_bank,
+                         'load_factor': requested_load}
             combined = combine_results(current_result, result)
             if combined.status == EnvelopeStatus.UNKNOWN:
                 raise RuntimeError(f'{bs.traf.id[idx]} guidance envelope unknown: {combined.reason}')
             state_action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and
                             current_result.status == EnvelopeStatus.INFEASIBLE
                             else EnvelopeAction.ACCEPTED)
-            self._set_result(idx, current_result, policy, state_action,
+            recorded_state = (EnvelopeResult(EnvelopeStatus.VALID)
+                              if policy == EnvelopePolicy.ENFORCE else current_result)
+            self._set_result(idx, recorded_state, policy, state_action,
                              {'cas_m_s': float(bs.traf.cas[idx]),
                               'mach': float(bs.traf.M[idx]),
-                              'altitude_m': float(bs.traf.alt[idx])},
+                              'altitude_m': float(bs.traf.alt[idx]),
+                              'vertical_rate_m_s': float(bs.traf.vs[idx]),
+                              'bank_angle_deg': requested_bank,
+                              'load_factor': requested_load},
                              {'cas_m_s': float(bs.traf.cas[idx]),
                               'mach': float(bs.traf.M[idx]),
-                              'altitude_m': float(bs.traf.alt[idx])},
+                              'altitude_m': float(bs.traf.alt[idx]),
+                              'vertical_rate_m_s': float(bs.traf.vs[idx]),
+                              'bank_angle_deg': requested_bank,
+                              'load_factor': requested_load},
                              source='state')
             if state_action == EnvelopeAction.ABORTED:
                 bs.sim.hold()
@@ -463,19 +681,45 @@ class PyBadaTEM(PerfBase):
                                  requested, requested, source='guidance')
                 continue
             if policy == EnvelopePolicy.ENFORCE:
-                if result.status == EnvelopeStatus.INFEASIBLE:
-                    if checks.intersection({EnvelopeCheck.LOW_SPEED, EnvelopeCheck.MACH_MIN}):
+                failed = set(combined.failed_checks)
+                if combined.status == EnvelopeStatus.INFEASIBLE:
+                    if failed.intersection({EnvelopeCheck.LOW_SPEED, EnvelopeCheck.MACH_MIN}):
                         applied_v[idx] = max(applied_v[idx], bounds.minimum_tas)
-                    if checks.intersection({EnvelopeCheck.HIGH_SPEED, EnvelopeCheck.MACH_MAX}):
+                    if failed.intersection({EnvelopeCheck.HIGH_SPEED, EnvelopeCheck.MACH_MAX}):
                         applied_v[idx] = min(applied_v[idx], bounds.maximum_tas)
-                    if EnvelopeCheck.ALTITUDE_MAX in checks:
+                    if EnvelopeCheck.ALTITUDE_MAX in failed:
                         applied_h[idx] = min(applied_h[idx], bounds.maximum_altitude)
+                    if EnvelopeCheck.ROC_MAX in failed:
+                        requested_signed_vs = min(requested_signed_vs,
+                                                  vertical.maximum_rocd)
+                    if EnvelopeCheck.ROD_MAX in failed:
+                        requested_signed_vs = max(requested_signed_vs,
+                                                  vertical.minimum_rocd)
+                    applied_vs[idx] = abs(requested_signed_vs)
+                    if failed.intersection({EnvelopeCheck.BANK_ANGLE,
+                                            EnvelopeCheck.LOAD_FACTOR}):
+                        maximum = np.radians(lateral.maximum_bank_angle_deg)
+                        if float(bs.traf.ap.turnphi[idx]) > float(bs.traf.eps[idx]) ** 2:
+                            selected = float(bs.traf.ap.turnphi[idx])
+                            bs.traf.ap.turnphi[idx] = np.copysign(
+                                min(abs(selected), maximum), selected)
+                        else:
+                            selected = float(bs.traf.ap.bankdef[idx])
+                            bs.traf.ap.bankdef[idx] = np.copysign(
+                                min(abs(selected), maximum), selected)
                 applied_cas, applied_mach = model.bluesky_airdata(
                     h=float(bs.traf.pressure_alt[idx]), tas=float(applied_v[idx]),
                     temperature=float(bs.traf.Temp[idx]))
+                applied_bank = (self.effective_bank_angle(idx)
+                                if checks.intersection({EnvelopeCheck.BANK_ANGLE,
+                                                        EnvelopeCheck.LOAD_FACTOR})
+                                else requested_bank)
                 applied = {'tas_m_s': float(applied_v[idx]), 'cas_m_s': applied_cas,
-                           'mach': applied_mach, 'altitude_m': float(applied_h[idx])}
-                self._set_result(idx, result, policy, EnvelopeAction.LIMITED,
+                           'mach': applied_mach, 'altitude_m': float(applied_h[idx]),
+                           'vertical_rate_m_s': requested_signed_vs,
+                           'bank_angle_deg': applied_bank,
+                           'load_factor': (1.0 / np.cos(np.radians(abs(applied_bank))))}
+                self._set_result(idx, combined, policy, EnvelopeAction.LIMITED,
                                  requested, applied, source='guidance', contributes=False)
             else:
                 action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT
@@ -484,4 +728,4 @@ class PyBadaTEM(PerfBase):
                                  source='guidance', contributes=True)
                 if action == EnvelopeAction.ABORTED:
                     bs.sim.hold()
-        return applied_v, np.asarray(intent_vs, dtype=float), applied_h
+        return applied_v, applied_vs, applied_h

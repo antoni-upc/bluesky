@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any
+import xml.etree.ElementTree as ET
 
 import numpy as np
 
@@ -49,6 +50,7 @@ class BadaModelAdapter:
     def __init__(self, model, family):
         self.model = model
         self.family = family
+        self._bada4_dlm_limits = None
 
     def __getattr__(self, name):
         return getattr(self.model, name)
@@ -117,6 +119,61 @@ class BadaModelAdapter:
         atm, _, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
         cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
         return float(cas), float(mach)
+
+    def bluesky_vertical_envelope(self, *, h, tas, mass, temperature, pressure,
+                                  schedule):
+        """Return LIDL descent and MCMB climb ROCD at one operating point."""
+        common = dict(h=h, tas=tas, mass=mass, temperature=temperature,
+                      pressure=pressure, schedule=schedule)
+        minimum = float(self.bluesky_energy(phase='Descent', **common)['rocd'])
+        maximum = float(self.bluesky_energy(phase='Climb', **common)['rocd'])
+        if not np.all(np.isfinite((minimum, maximum))):
+            raise EvaluationError('non-finite MCMB/LIDL ROCD bounds')
+        if minimum > maximum:
+            raise EvaluationError(
+                f'contradictory MCMB/LIDL ROCD bounds {minimum}..{maximum}')
+        return dict(minimum_rocd=minimum, maximum_rocd=maximum)
+
+    def bluesky_lateral_envelope(self, *, configuration, phase):
+        """Return documented BADA lateral/load limits without defaults."""
+        if self.family == '3':
+            phase_code = {'Climb': 'cl', 'Descent': 'des',
+                          'Cruise': 'cr'}.get(phase, 'cr')
+            bank = float(self.model.flightEnvelope.getBankAngle(
+                phase=phase_code, flightUnit='civ', value='max'))
+            maximum = 1.0 / np.cos(np.radians(bank))
+            return dict(configuration=str(configuration), minimum_load_factor=None,
+                        maximum_load_factor=float(maximum),
+                        maximum_bank_angle_deg=bank)
+        if self._bada4_dlm_limits is None:
+            base = Path(self.model.filePath)
+            candidates = (base / self.model.acName / f'{self.model.acName}.xml',
+                          base / f'{self.model.acName}.xml')
+            path = next((item for item in candidates if item.is_file()), None)
+            if path is None:
+                raise EvaluationError(
+                    f'BADA 4 DLM XML unavailable for {self.model.acName}')
+            dlm = ET.parse(path).getroot().find('.//DLM')
+            if dlm is None:
+                raise EvaluationError('BADA 4 DLM is missing')
+            limits = {}
+            for name in ('n1', 'n3', 'nf1', 'nf3'):
+                node = dlm.find(name)
+                limits[name] = None if node is None else float(node.text)
+            self._bada4_dlm_limits = limits
+        hlid, _ = self.model.flightEnvelope.getAeroConfig(config=configuration)
+        minimum_name, maximum_name = ('n3', 'n1') if float(hlid) == 0.0 else ('nf3', 'nf1')
+        minimum = self._bada4_dlm_limits[minimum_name]
+        maximum = self._bada4_dlm_limits[maximum_name]
+        if minimum is None or maximum is None:
+            raise EvaluationError(
+                f'BADA 4 DLM lacks {minimum_name}/{maximum_name}')
+        if not np.all(np.isfinite((minimum, maximum))) or maximum < 1.0 or minimum > maximum:
+            raise EvaluationError('invalid BADA 4 load-factor limits')
+        bank = np.degrees(np.arccos(1.0 / maximum))
+        return dict(configuration=str(configuration), minimum_load_factor=minimum,
+                    maximum_load_factor=maximum,
+                    maximum_bank_angle_deg=float(bank))
 
     def bluesky_envelope(self, *, h, cas, mach, mass, temperature, pressure, phase):
         """Normalize BADA 3/4 longitudinal limits at one operating point."""

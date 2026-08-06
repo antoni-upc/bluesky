@@ -86,6 +86,22 @@ class FlightBounds:
 
 
 @dataclass(frozen=True)
+class VerticalBounds:
+    minimum_rocd: Optional[float]
+    maximum_rocd: Optional[float]
+    reason: str = ''
+
+
+@dataclass(frozen=True)
+class LateralBounds:
+    configuration: str
+    minimum_load_factor: Optional[float]
+    maximum_load_factor: Optional[float]
+    maximum_bank_angle_deg: Optional[float]
+    reason: str = ''
+
+
+@dataclass(frozen=True)
 class EnvelopeResult:
     status: EnvelopeStatus
     failed_checks: tuple[EnvelopeCheck, ...] = ()
@@ -248,6 +264,82 @@ def evaluate_flight(cas, mach, altitude, bounds, checks):
     return EnvelopeResult(
         EnvelopeStatus.INFEASIBLE if failed else EnvelopeStatus.VALID,
         tuple(failed), ','.join(check.value for check in failed))
+
+
+def evaluate_vertical(vertical_rate, bounds, checks):
+    """Evaluate signed ROCD: climb is positive and descent is negative."""
+    try:
+        vertical_rate = float(vertical_rate)
+    except (TypeError, ValueError):
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason='vertical rate is not numeric')
+    if not np.isfinite(vertical_rate):
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason='vertical rate must be finite')
+    selected = set(checks) & {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX}
+    if not selected:
+        return EnvelopeResult(EnvelopeStatus.VALID)
+    required = {
+        EnvelopeCheck.ROD_MAX: bounds.minimum_rocd,
+        EnvelopeCheck.ROC_MAX: bounds.maximum_rocd,
+    }
+    missing = [check.value for check, value in required.items()
+               if check in selected and (value is None or not np.isfinite(value))]
+    if missing:
+        return EnvelopeResult(
+            EnvelopeStatus.UNKNOWN,
+            reason=bounds.reason or f'missing bounds for {",".join(missing)}')
+    if (bounds.minimum_rocd is not None and bounds.maximum_rocd is not None and
+            bounds.minimum_rocd > bounds.maximum_rocd):
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason='contradictory vertical-rate envelope bounds')
+    failed = []
+    # TEM output and the bound are evaluated independently. Treat differences
+    # below one centimetre per second as numerical/operating-point noise.
+    tolerance = 0.01
+    if (EnvelopeCheck.ROC_MAX in selected and
+            vertical_rate > bounds.maximum_rocd + tolerance):
+        failed.append(EnvelopeCheck.ROC_MAX)
+    if (EnvelopeCheck.ROD_MAX in selected and
+            vertical_rate < bounds.minimum_rocd - tolerance):
+        failed.append(EnvelopeCheck.ROD_MAX)
+    return EnvelopeResult(
+        EnvelopeStatus.INFEASIBLE if failed else EnvelopeStatus.VALID,
+        tuple(failed), ','.join(check.value for check in failed))
+
+
+def evaluate_lateral(bank_angle_deg, load_factor, bounds, checks):
+    try:
+        bank = abs(float(bank_angle_deg))
+        load = float(load_factor)
+    except (TypeError, ValueError):
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason='bank angle/load factor is not numeric')
+    if not np.all(np.isfinite((bank, load))):
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason='bank angle/load factor must be finite')
+    selected = set(checks) & {EnvelopeCheck.BANK_ANGLE, EnvelopeCheck.LOAD_FACTOR}
+    if not selected:
+        return EnvelopeResult(EnvelopeStatus.VALID)
+    required = {EnvelopeCheck.BANK_ANGLE: bounds.maximum_bank_angle_deg,
+                EnvelopeCheck.LOAD_FACTOR: bounds.maximum_load_factor}
+    missing = [check.value for check, value in required.items()
+               if check in selected and (value is None or not np.isfinite(value))]
+    if missing:
+        return EnvelopeResult(EnvelopeStatus.UNKNOWN,
+                              reason=bounds.reason or
+                              f'missing bounds for {",".join(missing)}')
+    failed = []
+    if (EnvelopeCheck.BANK_ANGLE in selected and
+            bank > bounds.maximum_bank_angle_deg + 0.01):
+        failed.append(EnvelopeCheck.BANK_ANGLE)
+    if (EnvelopeCheck.LOAD_FACTOR in selected and
+            (load > bounds.maximum_load_factor + 0.001 or
+             (bounds.minimum_load_factor is not None and
+              load < bounds.minimum_load_factor - 0.001))):
+        failed.append(EnvelopeCheck.LOAD_FACTOR)
+    return EnvelopeResult(EnvelopeStatus.INFEASIBLE if failed else EnvelopeStatus.VALID,
+                          tuple(failed), ','.join(check.value for check in failed))
 
 
 def combine_results(*results):

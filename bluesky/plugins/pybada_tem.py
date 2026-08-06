@@ -214,6 +214,23 @@ def perfstatus(acid=None):
                        f'{value_text(flight.maximum_mach, 3)}, '
                        f'hmax={value_text(flight.maximum_altitude, 1)} m, '
                        f'config={flight.configuration or "unknown"}')
+        vertical = perf.vertical_bounds(idx) if hasattr(perf, 'vertical_bounds') else None
+        rod_max = (None if vertical is None or vertical.minimum_rocd is None
+                   else abs(vertical.minimum_rocd))
+        vertical_text = ('unknown' if vertical is None else
+                         f'ROC_MAX={value_text(vertical.maximum_rocd, 2)} m/s, '
+                         f'ROD_MAX={value_text(rod_max, 2)} m/s')
+        lateral = perf.lateral_bounds(idx) if hasattr(perf, 'lateral_bounds') else None
+        bank = perf.effective_bank_angle(idx) if hasattr(perf, 'effective_bank_angle') else None
+        load = (None if bank is None or not np.isfinite(bank) or abs(bank) >= 90.0
+                else 1.0 / np.cos(np.radians(abs(bank))))
+        lateral_text = ('unknown' if lateral is None else
+                        f'config={lateral.configuration or "unknown"}, '
+                        f'BANK_MAX={value_text(lateral.maximum_bank_angle_deg, 2)} deg, '
+                        f'LOAD_FACTOR={value_text(lateral.minimum_load_factor, 2)}..'
+                        f'{value_text(lateral.maximum_load_factor, 2)}, '
+                        f'current_bank={value_text(bank, 2)} deg, '
+                        f'current_load={value_text(load, 3)}')
         lines.append(
             f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
             f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
@@ -221,5 +238,7 @@ def perfstatus(acid=None):
             f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}, '
             f'envelope={policy}/{status}, checks={_checks_text(checks)}, bounds={bounds_text}, '
             f'flight_bounds={flight_text}, '
+            f'vertical_bounds={vertical_text}, '
+            f'lateral_bounds={lateral_text}, '
             f'last={action}/{reason or "-"}, events={int(events)}, violations={int(violations)}')
     return True, '\n'.join(lines)
