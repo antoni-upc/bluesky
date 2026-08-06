@@ -6,13 +6,15 @@ import pytest
 import bluesky as bs
 from bluesky.plugins.pybada.envelope import (
     EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile, EnvelopeResult,
-    EnvelopeStatus, FlightBounds,
-    evaluate_flight, evaluate_mass, expand_checks, mass_bounds, parse_checks)
+    EnvelopeStatus, FlightBounds, LateralBounds, VerticalBounds,
+    evaluate_flight, evaluate_lateral, evaluate_mass, evaluate_vertical, expand_checks, mass_bounds,
+    parse_checks)
 from bluesky.plugins.pybada.performance import PyBadaTEM
 
 
 def make_perf(policies=('OFF', 'OFF')):
     perf = object.__new__(PyBadaTEM)
+    perf.schedule = 'ICAO'
     perf.models = [SimpleNamespace(OEW=40_000.0, MTOW=80_000.0) for _ in policies]
     perf.mass = np.full(len(policies), 60_000.0)
     perf.mass_override = np.zeros(len(policies), dtype=bool)
@@ -21,15 +23,18 @@ def make_perf(policies=('OFF', 'OFF')):
     perf.envelope_checks = [(EnvelopeCheck.MASS_MIN, EnvelopeCheck.MASS_MAX)
                             for _ in policies]
     perf.envelope_failed_checks = [() for _ in policies]
+    perf.envelope_mass_failed_checks = [() for _ in policies]
     perf.envelope_state_failed_checks = [() for _ in policies]
     perf.envelope_guidance_failed_checks = [() for _ in policies]
     perf.envelope_status = np.asarray(['VALID'] * len(policies), dtype='U10')
     perf.envelope_last_action = np.asarray(['NONE'] * len(policies), dtype='U8')
     perf.envelope_last_reason = np.asarray([''] * len(policies), dtype='U80')
     perf.envelope_active_reason = np.asarray([''] * len(policies), dtype='U80')
+    perf.envelope_mass_reason = np.asarray([''] * len(policies), dtype='U80')
     perf.envelope_state_reason = np.asarray([''] * len(policies), dtype='U80')
     perf.envelope_guidance_reason = np.asarray([''] * len(policies), dtype='U80')
     perf.envelope_attempt_reason = np.asarray([''] * len(policies), dtype='U80')
+    perf.envelope_dynamics_reason = np.asarray([''] * len(policies), dtype='U80')
     perf.envelope_guidance_infeasible = np.zeros(len(policies), dtype=bool)
     perf.envelope_event_count = np.zeros(len(policies), dtype=int)
     perf.envelope_violation_count = np.zeros(len(policies), dtype=int)
@@ -37,10 +42,14 @@ def make_perf(policies=('OFF', 'OFF')):
 
 
 def traffic(monkeypatch):
+    autopilot = SimpleNamespace(turnphi=np.zeros(2),
+                                bankdef=np.radians(np.array([25.0, 25.0])))
     monkeypatch.setattr(bs, 'traf', SimpleNamespace(
         id=['A1', 'A2'], cas=np.array([120.0, 120.0]), M=np.array([0.4, 0.4]),
         alt=np.array([3000.0, 3000.0]), pressure_alt=np.array([3000.0, 3000.0]),
+        vs=np.array([0.0, 0.0]), tas=np.array([120.0, 120.0]),
         Temp=np.array([268.0, 268.0]), p=np.array([70000.0, 70000.0]),
+        swhdgsel=np.array([False, False]), eps=np.full(2, 1e-6), ap=autopilot,
         aporasas=SimpleNamespace(alt=np.array([3000.0, 3000.0]))))
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(simt=4.0, hold=lambda: None))
 
@@ -99,6 +108,8 @@ def test_quality_event_is_published_to_interactive_console(monkeypatch):
     assert 'aircraft=A1' in messages[0]
     assert 'reason=MASS_MAX' in messages[0]
     assert 'policy=REPORT' in messages[0]
+    assert 'requested={mass_kg=90000.00}' in messages[0]
+    assert 'applied={mass_kg=90000.00}' in messages[0]
 
 
 def test_unknown_bounds_reject_enabled_configuration_without_mutation(monkeypatch):
@@ -138,6 +149,13 @@ class FakeFlightModel:
                     maximum_altitude=10_000.0, minimum_tas=100.0,
                     maximum_tas=200.0)
 
+    def bluesky_vertical_envelope(self, **state):
+        return dict(minimum_rocd=-8.0, maximum_rocd=6.0)
+
+    def bluesky_lateral_envelope(self, **state):
+        return dict(configuration=state['configuration'], minimum_load_factor=-1.0,
+                    maximum_load_factor=2.0, maximum_bank_angle_deg=60.0)
+
 
 def test_flight_evaluation_reports_selected_longitudinal_reasons():
     bounds = FlightBounds('CR', 100.0, 200.0, 1 / 3, 2 / 3, 10_000.0)
@@ -148,6 +166,131 @@ def test_flight_evaluation_reports_selected_longitudinal_reasons():
     assert result.failed_checks == (EnvelopeCheck.HIGH_SPEED,
                                     EnvelopeCheck.MACH_MAX,
                                     EnvelopeCheck.ALTITUDE_MAX)
+
+
+def test_vertical_evaluation_uses_signed_rocd_and_rejects_unknown_bounds():
+    bounds = VerticalBounds(-8.0, 6.0)
+    assert evaluate_vertical(7.0, bounds, (EnvelopeCheck.ROC_MAX,)).reason == 'ROC_MAX'
+    assert evaluate_vertical(-9.0, bounds, (EnvelopeCheck.ROD_MAX,)).reason == 'ROD_MAX'
+    assert evaluate_vertical(0.0, bounds, tuple()).status == EnvelopeStatus.VALID
+    unknown = evaluate_vertical(1.0, VerticalBounds(None, 6.0),
+                                (EnvelopeCheck.ROD_MAX,))
+    assert unknown.status == EnvelopeStatus.UNKNOWN
+    assert evaluate_vertical(6.005, bounds, (EnvelopeCheck.ROC_MAX,)).status == \
+        EnvelopeStatus.VALID
+    assert evaluate_vertical(6.02, bounds, (EnvelopeCheck.ROC_MAX,)).reason == 'ROC_MAX'
+
+
+def test_lateral_evaluation_uses_selected_bada_bounds():
+    bounds = LateralBounds('CR', -1.0, 2.5, 66.4218215)
+    result = evaluate_lateral(75.0, 3.8637, bounds, (
+        EnvelopeCheck.BANK_ANGLE, EnvelopeCheck.LOAD_FACTOR))
+    assert result.status == EnvelopeStatus.INFEASIBLE
+    assert result.failed_checks == (EnvelopeCheck.BANK_ANGLE,
+                                    EnvelopeCheck.LOAD_FACTOR)
+    assert evaluate_lateral(60.0, 2.0, bounds, (
+        EnvelopeCheck.BANK_ANGLE, EnvelopeCheck.LOAD_FACTOR)).status == \
+        EnvelopeStatus.VALID
+    unknown = evaluate_lateral(10.0, 1.02,
+                               LateralBounds('CR', None, None, None),
+                               (EnvelopeCheck.LOAD_FACTOR,))
+    assert unknown.status == EnvelopeStatus.UNKNOWN
+
+
+def test_lateral_guidance_report_and_enforce_are_isolated(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    bs.traf.swhdgsel[:] = True
+    bs.traf.ap.bankdef[:] = np.radians(75.0)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    selected = (EnvelopeCheck.BANK_ANGLE, EnvelopeCheck.LOAD_FACTOR)
+    perf.envelope_checks = [selected, selected]
+    perf.limits(np.array([120.0, 120.0]), np.zeros(2),
+                np.array([3000.0, 3000.0]), np.zeros(2))
+    assert np.degrees(bs.traf.ap.bankdef).tolist() == pytest.approx([75.0, 60.0])
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
+    assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
+    assert perf.envelope_event_count.tolist() == [1, 1]
+    perf.limits(np.array([120.0, 120.0]), np.zeros(2),
+                np.array([3000.0, 3000.0]), np.zeros(2))
+    assert perf.envelope_event_count.tolist() == [1, 1]
+
+
+def test_vertical_guidance_report_and_enforce_are_isolated(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    selected = (EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX)
+    perf.envelope_checks = [selected, selected]
+    requested_vs = np.array([20.0, 20.0])
+    _, applied_vs, _ = perf.limits(
+        np.array([120.0, 120.0]), requested_vs,
+        np.array([6000.0, 0.0]), np.zeros(2))
+    np.testing.assert_allclose(applied_vs, [20.0, 8.0])
+    np.testing.assert_allclose(requested_vs, [20.0, 20.0])
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
+    assert perf.envelope_last_reason.tolist() == ['ROC_MAX', 'ROD_MAX']
+    assert perf.envelope_event_count.tolist() == [1, 1]
+    perf.limits(np.array([120.0, 120.0]), requested_vs,
+                np.array([6000.0, 0.0]), np.zeros(2))
+    assert perf.envelope_event_count.tolist() == [1, 1]
+
+
+def test_enforce_recovers_current_vertical_overshoot_as_a_limit(monkeypatch):
+    traffic(monkeypatch)
+    bs.traf.vs[0] = -20.0
+    messages = []
+    monkeypatch.setattr('bluesky.stack.echo', messages.append)
+    perf = make_perf(('ENFORCE', 'OFF'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    perf.envelope_checks[0] = (EnvelopeCheck.ROD_MAX,)
+    _, applied_vs, _ = perf.limits(
+        np.array([120.0, 120.0]), np.array([20.0, 0.0]),
+        np.array([0.0, 3000.0]), np.zeros(2))
+    assert applied_vs[0] == 8.0
+    assert perf.envelope_status[0] == 'VALID'
+    assert perf.envelope_last_action[0] == 'LIMITED'
+    assert perf.envelope_last_reason[0] == 'ROD_MAX'
+    assert perf.envelope_event_count[0] == 1
+    assert ('requested={direction=DESCENT,vertical_rate_magnitude_m_s=20.00}'
+            in messages[0])
+    assert ('applied={direction=DESCENT,vertical_rate_magnitude_m_s=8.00}'
+            in messages[0])
+
+
+class FakeVerticalEnergyModel(FakeFlightModel):
+    def bluesky_energy(self, **state):
+        return dict(thrust=12_000.0, rated_thrust=14_000.0, drag=10_000.0,
+                    fuel_flow=0.0, esf=0.5, rocd=20.0, acceleration=0.0)
+
+
+def test_tem_output_is_checked_before_state_mutation(monkeypatch):
+    traffic(monkeypatch)
+    bs.traf.ntraf = 2
+    bs.traf.type = ['A320', 'A320']
+    bs.traf.ax = np.zeros(2)
+    bs.traf.aporasas.alt[:] = 6000.0
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeVerticalEnergyModel(), FakeVerticalEnergyModel()]
+    perf.envelope_checks = [(EnvelopeCheck.ROC_MAX,), (EnvelopeCheck.ROC_MAX,)]
+    perf.family = '4'
+    perf.dyn_mode = np.ones(2, dtype=int)
+    perf.thrust = np.zeros(2)
+    perf.rated_thrust = np.zeros(2)
+    perf.drag = np.zeros(2)
+    perf.fuelflow = np.zeros(2)
+    perf.invalid = np.zeros(2, dtype=bool)
+    perf.failure_count = np.zeros(2, dtype=int)
+    assert perf.update_dynamics(bs.traf, 1.0).tolist() == [True, True]
+    np.testing.assert_allclose(bs.traf.vs, [20.0, 6.0])
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
+    assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
+    assert perf.envelope_event_count.tolist() == [1, 1]
+    assert perf.update_dynamics(bs.traf, 1.0).tolist() == [True, True]
+    assert perf.envelope_event_count.tolist() == [1, 1]
 
 
 def test_guidance_report_and_enforce_are_per_aircraft_and_atomic(monkeypatch):

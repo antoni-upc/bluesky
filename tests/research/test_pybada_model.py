@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from bluesky.plugins.pybada.model import (BadaModelAdapter, EnergyResult,
@@ -127,6 +128,10 @@ class FakeBada3Envelope:
     def maxAltitude(self, *, mass, deltaTemp):
         return 11_000.0
 
+    def getBankAngle(self, *, phase, flightUnit, value):
+        assert (phase, flightUnit, value) == ('cl', 'civ', 'max')
+        return 30.0
+
 
 class FakeBada4Envelope:
     def getConfig(self, **kwargs):
@@ -180,6 +185,60 @@ def test_unavailable_speed_bound_does_not_hide_available_altitude_bound(monkeypa
     assert result['maximum_cas'] is None
     assert result['maximum_tas'] is None
     assert result['maximum_altitude'] == 12_000.0
+
+
+def test_bada3_lateral_adapter_uses_phase_bank_limit():
+    aircraft = SimpleNamespace(flightEnvelope=FakeBada3Envelope())
+    result = BadaModelAdapter(aircraft, '3').bluesky_lateral_envelope(
+        configuration='CR', phase='Climb')
+    assert result['maximum_bank_angle_deg'] == 30.0
+    assert result['maximum_load_factor'] == pytest.approx(
+        1.0 / np.cos(np.radians(30.0)))
+    assert result['minimum_load_factor'] is None
+
+
+def test_bada4_lateral_adapter_selects_clean_and_high_lift_dlm(tmp_path):
+    aircraft_dir = tmp_path / 'A320-232'
+    aircraft_dir.mkdir()
+    source = aircraft_dir / 'A320-232.xml'
+    source.write_text('<Aircraft><DLM><n1>2.5</n1><n3>-1.0</n3>'
+                      '<nf1>2.0</nf1><nf3>0.0</nf3></DLM></Aircraft>')
+
+    class ConfigEnvelope:
+        def getAeroConfig(self, *, config):
+            return (0, 'LGUP') if config == 'CR' else (1, 'LGUP')
+
+    aircraft = SimpleNamespace(filePath=str(tmp_path), acName='A320-232',
+                               flightEnvelope=ConfigEnvelope())
+    adapter = BadaModelAdapter(aircraft, '4')
+    clean = adapter.bluesky_lateral_envelope(configuration='CR', phase='Cruise')
+    high_lift = adapter.bluesky_lateral_envelope(configuration='AP', phase='Descent')
+    assert (clean['minimum_load_factor'], clean['maximum_load_factor']) == (-1.0, 2.5)
+    assert clean['maximum_bank_angle_deg'] == pytest.approx(
+        np.degrees(np.arccos(1.0 / 2.5)))
+    assert (high_lift['minimum_load_factor'], high_lift['maximum_load_factor']) == (0.0, 2.0)
+    assert high_lift['maximum_bank_angle_deg'] == pytest.approx(60.0)
+    source.unlink()
+    assert adapter.bluesky_lateral_envelope(
+        configuration='CR', phase='Cruise')['maximum_load_factor'] == 2.5
+
+
+def test_vertical_envelope_uses_lidl_and_mcmb_at_same_operating_point(monkeypatch):
+    adapter = BadaModelAdapter(SimpleNamespace(), '4')
+    calls = []
+
+    def energy(**state):
+        calls.append(state)
+        return {'rocd': -7.5 if state['phase'] == 'Descent' else 5.25}
+
+    monkeypatch.setattr(adapter, 'bluesky_energy', energy)
+    result = adapter.bluesky_vertical_envelope(
+        h=3000.0, tas=150.0, mass=60_000.0, temperature=270.0,
+        pressure=70_000.0, schedule='ICAO')
+    assert result == {'minimum_rocd': -7.5, 'maximum_rocd': 5.25}
+    assert [call['phase'] for call in calls] == ['Descent', 'Climb']
+    assert calls[0]['h'] == calls[1]['h'] == 3000.0
+    assert calls[0]['mass'] == calls[1]['mass'] == 60_000.0
 
 
 @pytest.mark.smoke

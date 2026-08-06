@@ -105,8 +105,8 @@ def validate_normal(csv_path):
                     'MASSE event counter is not 1')
 
     metadata = check.read_json(csv_path.with_suffix('.metadata.json'))
-    check.check(metadata.get('schema_version') == 'samples-v5',
-                'metadata schema is not samples-v5')
+    check.check(metadata.get('schema_version') == 'samples-v7',
+                'metadata schema is not samples-v7')
     check.check(metadata.get('event_total') == 3, 'metadata event_total is not 3')
     check.check(metadata.get('reason_totals') == {'MASS_MAX': 3},
                 'metadata reason totals are not three MASS_MAX events')
