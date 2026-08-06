@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bluesky.plugins.pybada.model import EnergyResult, EvaluationError, ModelStore, ModelUnavailable
+from bluesky.plugins.pybada.model import (BadaModelAdapter, EnergyResult,
+                                          EvaluationError, ModelStore, ModelUnavailable)
 from bluesky.plugins.pybada.performance import PyBadaTEM
 
 
@@ -101,6 +102,84 @@ def test_create_validation_rejects_before_mutating_performance_state(tmp_path):
     assert 'A32X' in message
     assert perf.models == []
     assert perf.resolutions == []
+
+
+class FakeAtmosphere:
+    @staticmethod
+    def cas2Mach(*, cas, **kwargs):
+        return cas / 300.0
+
+    @staticmethod
+    def cas2Tas(*, cas, **kwargs):
+        return cas
+
+
+class FakeBada3Envelope:
+    def getConfig(self, **kwargs):
+        return 'CR'
+
+    def VMin(self, *, h, mass, config, deltaTemp):
+        return 100.0
+
+    def VMax(self, *, h, deltaTemp):
+        return 200.0
+
+    def maxAltitude(self, *, mass, deltaTemp):
+        return 11_000.0
+
+
+class FakeBada4Envelope:
+    def getConfig(self, **kwargs):
+        return 'CR'
+
+    def getAeroConfig(self, *, config):
+        return 0, 'LGUP'
+
+    def VMin(self, *, config, theta, delta, mass):
+        return 105.0
+
+    def VMax(self, *, h, HLid, LG, delta, theta, mass, nz):
+        return 205.0
+
+    def maxAltitude(self, *, HLid, LG, M, deltaTemp, mass, nz):
+        return 12_000.0
+
+    def maxM(self, *, LG):
+        return 0.78
+
+
+class FakePartialBada4Envelope(FakeBada4Envelope):
+    def VMax(self, **kwargs):
+        return None
+
+
+@pytest.mark.parametrize(('family', 'aircraft', 'expected'), [
+    ('3', SimpleNamespace(flightEnvelope=FakeBada3Envelope(), MMO=0.77),
+     (100.0, 200.0, 11_000.0, 0.77)),
+    ('4', SimpleNamespace(flightEnvelope=FakeBada4Envelope()),
+     (105.0, 205.0, 12_000.0, 0.78)),
+])
+def test_family_specific_longitudinal_envelope_adapter(monkeypatch, family, aircraft, expected):
+    monkeypatch.setattr(BadaModelAdapter, '_atmosphere', staticmethod(
+        lambda h, tas, temperature: (FakeAtmosphere(), 2.0, 0.9, 0.7, 0.8, 0.5)))
+    result = BadaModelAdapter(aircraft, family).bluesky_envelope(
+        h=3000.0, cas=150.0, mach=0.5, mass=60_000.0,
+        temperature=270.0, pressure=70_000.0, phase='Cruise')
+    assert (result['minimum_cas'], result['maximum_cas'],
+            result['maximum_altitude'], result['maximum_mach']) == expected
+    assert result['minimum_mach'] == pytest.approx(expected[0] / 300.0)
+
+
+def test_unavailable_speed_bound_does_not_hide_available_altitude_bound(monkeypatch):
+    monkeypatch.setattr(BadaModelAdapter, '_atmosphere', staticmethod(
+        lambda h, tas, temperature: (FakeAtmosphere(), 2.0, 0.9, 0.7, 0.8, 0.5)))
+    aircraft = SimpleNamespace(flightEnvelope=FakePartialBada4Envelope())
+    result = BadaModelAdapter(aircraft, '4').bluesky_envelope(
+        h=14_000.0, cas=130.0, mach=0.5, mass=60_000.0,
+        temperature=220.0, pressure=14_000.0, phase='Cruise')
+    assert result['maximum_cas'] is None
+    assert result['maximum_tas'] is None
+    assert result['maximum_altitude'] == 12_000.0
 
 
 @pytest.mark.smoke
