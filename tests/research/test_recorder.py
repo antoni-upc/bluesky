@@ -10,6 +10,7 @@ import bluesky as bs
 from bluesky.plugins.meteo.recorder import StreamingRecorder
 from bluesky.plugins.research_recorder import atmosstatus
 from bluesky.plugins.pybada.model import Resolution
+from bluesky.plugins.pybada.envelope import QualityEvent
 
 
 @pytest.mark.smoke
@@ -72,3 +73,40 @@ def test_atmosstatus_exposes_applied_state_and_isa_difference(monkeypatch):
     for value in ('source=ERA5', 'T=270.000 K', 'p=69000.000 Pa',
                   'pressure_alt=3100.0 m', 'wind_north=5.000 m/s', 'ISA'):
         assert value in message
+
+
+def test_quality_events_are_optional_synchronous_and_summarized(tmp_path, monkeypatch):
+    recorder = StreamingRecorder()
+    event = QualityEvent('A1', 'PYBADATEM', 'MASS_MAX', 'REPORT',
+                         'ACCEPTED', 'CONTINUE', 90_000.0, 90_000.0, 3.0)
+    recorder.observe_event(event)
+    assert not list(tmp_path.iterdir())
+    monkeypatch.setattr(bs, 'traf', SimpleNamespace(id=[], atmos_source=[],
+                                                    atmos_dataset_time=[], perf=None))
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(scenname='quality-test'))
+    recorder.start(tmp_path / 'run.csv')
+    recorder.observe_event(event)
+    assert recorder.event_path.read_text().endswith('\n')
+    _, metadata_path = recorder.stop()
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata['event_total'] == 1
+    assert metadata['reason_totals'] == {'MASS_MAX': 1}
+    assert metadata['quality_status'] == 'DEGRADED'
+
+
+def test_abort_event_auto_finalizes_evidence_before_return(tmp_path, monkeypatch):
+    monkeypatch.setattr(bs, 'traf', SimpleNamespace(id=[], atmos_source=[],
+                                                    atmos_dataset_time=[], perf=None))
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(scenname='abort-test'))
+    recorder = StreamingRecorder()
+    csv_path = tmp_path / 'abort.csv'
+    recorder.start(csv_path)
+    recorder.observe_event(QualityEvent(
+        'A1', 'PYBADATEM', 'MASS_MAX', 'ABORT', 'ABORTED', 'STOP',
+        100_000.0, 100_000.0, 4.0))
+    assert not recorder.active
+    assert csv_path.with_suffix('.events.jsonl').read_text().endswith('\n')
+    metadata = json.loads(csv_path.with_suffix('.metadata.json').read_text())
+    assert metadata['event_total'] == 1
+    assert metadata['reason_totals'] == {'MASS_MAX': 1}
+    assert metadata['quality_status'] == 'ABORTED'

@@ -4,7 +4,8 @@ import pytest
 
 import bluesky as bs
 from bluesky.plugins.pybada.model import ModelUnavailable, Resolution
-from bluesky.plugins.pybada_tem import _parse_dynamics_mode, perfmodel, perfstatus
+from bluesky.plugins.pybada_tem import _parse_dynamics_mode, mass, perfmodel, perfstatus
+from bluesky.stack.cmdparser import CommandRejected
 
 
 def test_kinematic_mode_name():
@@ -44,3 +45,16 @@ def test_perfstatus_reports_current_mass(monkeypatch):
     success, message = perfstatus('B42')
     assert success
     assert 'mass=61234.5 kg' in message
+
+
+def test_mass_fundamental_rejection_names_aircraft_and_preserved_state(monkeypatch):
+    traffic = SimpleNamespace(id=['AC1'])
+    perf = SimpleNamespace(mass=[61_000.0])
+    monkeypatch.setattr(bs, 'traf', traffic)
+    monkeypatch.setattr('bluesky.plugins.pybada_tem.PyBadaTEM.implinstance', lambda: perf)
+    success, message = mass(0, 0.0)
+    assert not success
+    assert isinstance(message, CommandRejected)
+    assert 'AC1:' in message
+    assert 'finite and positive' in message
+    assert 'preserved=61000.0 kg' in message
