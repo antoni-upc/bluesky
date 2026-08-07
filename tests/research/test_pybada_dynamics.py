@@ -5,6 +5,7 @@ import pytest
 
 import bluesky as bs
 from bluesky.plugins.pybada.performance import PyBadaTEM
+from bluesky.traffic.traffic import Traffic
 
 
 class FakeModel:
@@ -49,9 +50,10 @@ def test_tem_updates_once_and_depletes_mass(monkeypatch):
     traf = traffic()
     monkeypatch.setattr(bs, 'traf', traf)
     perf = performance(FakeModel())
-    handled = perf.update_dynamics(traf, 1.0)
-    assert handled.tolist() == [True]
-    assert traf.tas[0] == pytest.approx(200.2)
+    speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
+    assert speed_handled.tolist() == [False]
+    assert vertical_handled.tolist() == [True]
+    assert traf.tas[0] == pytest.approx(200.0)
     assert traf.vs[0] == pytest.approx(5.0)
     assert perf.mass[0] == pytest.approx(59999.5)
     assert perf.failure_count[0] == 0
@@ -62,8 +64,9 @@ def test_kinematic_computes_performance_without_driving_motion(monkeypatch):
     monkeypatch.setattr(bs, 'traf', traf)
     perf = performance(FakeModel())
     perf.dyn_mode[0] = 0
-    handled = perf.update_dynamics(traf, 1.0)
-    assert handled.tolist() == [False]
+    speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
+    assert speed_handled.tolist() == [False]
+    assert vertical_handled.tolist() == [False]
     assert traf.tas[0] == pytest.approx(200.0)
     assert traf.vs[0] == pytest.approx(0.0)
     assert perf.thrust[0] == pytest.approx(12000.0)
@@ -77,7 +80,8 @@ def test_interactive_failure_is_missing_and_native_fallback(monkeypatch):
     traf = traffic()
     monkeypatch.setattr(bs, 'traf', traf)
     perf = performance(FakeModel(fail=True))
-    assert perf.update_dynamics(traf, 1.0).tolist() == [False]
+    speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
+    assert not speed_handled.any() and not vertical_handled.any()
     assert np.isnan(perf.thrust[0]) and np.isnan(perf.drag[0]) and np.isnan(perf.fuelflow[0])
     assert perf.invalid[0] and perf.failure_count[0] == 1
 
@@ -100,3 +104,21 @@ def test_timestep_convergence_for_constant_reference(monkeypatch):
             perf.update_dynamics(traf, dt)
         final.append((traf.tas[0], perf.mass[0]))
     np.testing.assert_allclose(final, np.broadcast_to(final[0], (3, 2)), atol=1e-9)
+
+
+def test_split_dynamics_uses_native_speed_and_preserves_tem_vertical(monkeypatch):
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(simdt=1.0))
+    state = SimpleNamespace(
+        ntraf=1, tas=np.array([200.0]), ax=np.array([0.0]),
+        perf=SimpleNamespace(axmax=np.array([2.0])),
+        aporasas=SimpleNamespace(tas=np.array([210.0]), hdg=np.array([90.0]),
+                                alt=np.array([6000.0]), vs=np.array([10.0])),
+        ap=SimpleNamespace(turnphi=np.array([0.0]), bankdef=np.array([0.0])),
+        eps=np.array([1e-6]), hdg=np.array([90.0]), swhdgsel=np.array([False]),
+        alt=np.array([5000.0]), vs=np.array([5.0]), swaltsel=np.array([True]),
+        az=np.array([0.0]), _update_airdata=lambda: None)
+    Traffic.update_airspeed(
+        state, np.array([False]), np.array([True]))
+    assert state.tas[0] == pytest.approx(202.0)
+    assert state.ax[0] == pytest.approx(2.0)
+    assert state.vs[0] == pytest.approx(5.0)

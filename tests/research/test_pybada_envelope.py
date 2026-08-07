@@ -123,6 +123,23 @@ def test_unknown_bounds_reject_enabled_configuration_without_mutation(monkeypatc
     assert (perf.envelope_policy[0], perf.envelope_profile[0], perf.envelope_checks[0]) == old
 
 
+def test_envelope_configuration_event_reports_current_failed_state(monkeypatch):
+    traffic(monkeypatch)
+    messages = []
+    monkeypatch.setattr('bluesky.stack.echo', messages.append)
+    perf = make_perf(('OFF',))
+    failed = EnvelopeResult(EnvelopeStatus.INFEASIBLE,
+                            (EnvelopeCheck.LOW_SPEED,), 'LOW_SPEED')
+    monkeypatch.setattr(perf, 'evaluate_envelope',
+                        lambda *args, **kwargs: (failed, None, None, None))
+    success, _ = perf.configure_envelope(
+        0, policy=EnvelopePolicy.REPORT,
+        profile=EnvelopeProfile.CUSTOM, checks=(EnvelopeCheck.LOW_SPEED,))
+    assert success
+    assert 'requested={tas_m_s=120.00,cas_m_s=120.00}' in messages[0]
+    assert 'value=60000' not in messages[0]
+
+
 def test_badaconfig_failure_preserves_prior_mode(monkeypatch):
     perf = make_perf(('OFF',))
     perf.bada_configuration_mode = np.array(['PYBADA'], dtype='U8')
@@ -299,12 +316,16 @@ def test_tem_output_is_checked_before_state_mutation(monkeypatch):
     perf.fuelflow = np.zeros(2)
     perf.invalid = np.zeros(2, dtype=bool)
     perf.failure_count = np.zeros(2, dtype=int)
-    assert perf.update_dynamics(bs.traf, 1.0).tolist() == [True, True]
+    speed_handled, vertical_handled = perf.update_dynamics(bs.traf, 1.0)
+    assert speed_handled.tolist() == [False, False]
+    assert vertical_handled.tolist() == [True, True]
     np.testing.assert_allclose(bs.traf.vs, [20.0, 6.0])
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
     assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
     assert perf.envelope_event_count.tolist() == [1, 1]
-    assert perf.update_dynamics(bs.traf, 1.0).tolist() == [True, True]
+    speed_handled, vertical_handled = perf.update_dynamics(bs.traf, 1.0)
+    assert speed_handled.tolist() == [False, False]
+    assert vertical_handled.tolist() == [True, True]
     assert perf.envelope_event_count.tolist() == [1, 1]
 
 

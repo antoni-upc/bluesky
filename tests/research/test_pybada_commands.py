@@ -72,7 +72,7 @@ def test_perfstatus_reports_current_mass(monkeypatch):
 
 def test_perfstatus_reports_bada4_lateral_configuration_observation(monkeypatch):
     traffic = SimpleNamespace(id=['B42'], id2idx=lambda acid: 0,
-                              vs=[-5.0])
+                              alt=[3048.0], vs=[-5.0])
     perf = SimpleNamespace(
         family='4', version='4.2',
         resolutions=[Resolution('A320-232', 'A320-232', 'exact', False)],
@@ -90,8 +90,16 @@ def test_perfstatus_reports_bada4_lateral_configuration_observation(monkeypatch)
     monkeypatch.setattr('bluesky.plugins.pybada_tem.PyBadaTEM.implinstance', lambda: perf)
     success, message = perfstatus('B42')
     assert success
-    assert 'config=AP, HLid=1, gear=LGUP, DLM=nf3/nf1' in message
-    assert 'LOAD_FACTOR=0.00..2.00' in message
+    assert 'config=AP  HLid=1  gear=LGUP' in message
+    assert 'DLM=nf3/nf1  load=0.00..2.00' in message
+    assert 'alt=3048.0 m (10000 ft/FL100)' in message
+    assert 'alt_max=12000.0 m (39370 ft/FL394)' in message
+
+    success, current = perfstatus('B42', 'CURRENT')
+    assert success and 'CURRENT' in current and 'BOUNDS' not in current
+    success, bounds = perfstatus('B42', 'MAXS')
+    assert success and 'BOUNDS' in bounds and 'CURRENT' not in bounds
+    assert perfstatus('B42', 'unsupported')[0] is False
 
 
 def test_mass_fundamental_rejection_names_aircraft_and_preserved_state(monkeypatch):

@@ -32,6 +32,8 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     monkeypatch.setattr(bs, 'traf', traffic)
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(
         simt=10.0, utc=datetime(2026, 1, 1, tzinfo=timezone.utc)))
+    monkeypatch.setattr('bluesky.plugins.meteo.recorder.stack.get_scenname',
+                        lambda: 'recorder-test')
     recorder = StreamingRecorder()
     path = tmp_path / 'samples.csv'
     recorder.start(path)
@@ -59,6 +61,7 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert metadata['schema_version'] == 'samples-v7'
     assert metadata['rows'] == 1
     assert metadata['sample_intervals_s'] == []
+    assert metadata['scenario'] == 'recorder-test'
     assert metadata['effective_envelope'][0]['configuration_mode'] == 'CRUISE'
     assert not hasattr(recorder, '_rows')
     recorder.reset()
