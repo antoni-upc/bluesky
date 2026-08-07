@@ -187,6 +187,25 @@ def test_unavailable_speed_bound_does_not_hide_available_altitude_bound(monkeypa
     assert result['maximum_altitude'] == 12_000.0
 
 
+def test_configuration_mode_selects_pybada_or_forced_cruise(monkeypatch):
+    class AdaptiveEnvelope(FakeBada4Envelope):
+        def getConfig(self, **kwargs):
+            return 'AP'
+
+        def getAeroConfig(self, *, config):
+            return (1, 'LGUP') if config == 'AP' else (0, 'LGUP')
+
+    monkeypatch.setattr(BadaModelAdapter, '_atmosphere', staticmethod(
+        lambda h, tas, temperature: (FakeAtmosphere(), 2.0, 0.9, 0.7, 0.8, 0.5)))
+    adapter = BadaModelAdapter(SimpleNamespace(flightEnvelope=AdaptiveEnvelope()), '4')
+    state = dict(h=1000.0, cas=75.0, mach=0.25, mass=60_000.0,
+                 temperature=280.0, pressure=90_000.0, phase='Descent')
+    assert adapter.bluesky_envelope(**state, configuration_mode='PYBADA')[
+        'configuration'] == 'AP'
+    assert adapter.bluesky_envelope(**state, configuration_mode='CRUISE')[
+        'configuration'] == 'CR'
+
+
 def test_bada3_lateral_adapter_uses_phase_bank_limit():
     aircraft = SimpleNamespace(flightEnvelope=FakeBada3Envelope())
     result = BadaModelAdapter(aircraft, '3').bluesky_lateral_envelope(
@@ -214,9 +233,13 @@ def test_bada4_lateral_adapter_selects_clean_and_high_lift_dlm(tmp_path):
     clean = adapter.bluesky_lateral_envelope(configuration='CR', phase='Cruise')
     high_lift = adapter.bluesky_lateral_envelope(configuration='AP', phase='Descent')
     assert (clean['minimum_load_factor'], clean['maximum_load_factor']) == (-1.0, 2.5)
+    assert (clean['high_lift_id'], clean['landing_gear']) == (0.0, 'LGUP')
+    assert (clean['minimum_limit_name'], clean['maximum_limit_name']) == ('n3', 'n1')
     assert clean['maximum_bank_angle_deg'] == pytest.approx(
         np.degrees(np.arccos(1.0 / 2.5)))
     assert (high_lift['minimum_load_factor'], high_lift['maximum_load_factor']) == (0.0, 2.0)
+    assert (high_lift['high_lift_id'], high_lift['landing_gear']) == (1.0, 'LGUP')
+    assert (high_lift['minimum_limit_name'], high_lift['maximum_limit_name']) == ('nf3', 'nf1')
     assert high_lift['maximum_bank_angle_deg'] == pytest.approx(60.0)
     source.unlink()
     assert adapter.bluesky_lateral_envelope(

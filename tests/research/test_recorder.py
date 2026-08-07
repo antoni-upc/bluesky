@@ -26,6 +26,7 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
         perf=SimpleNamespace(
             family='4', version='4.2', thrust=np.array([np.nan]), rated_thrust=np.array([2.0]), drag=values,
             fuelflow=values, mass=np.array([60000.0]), dyn_mode=np.array([1]),
+            bada_configuration_mode=np.array(['CRUISE']),
             invalid=np.array([False]), failure_count=np.array([2]),
             resolutions=[Resolution('A320', 'DUMMY-TWIN', 'dummy', True)]))
     monkeypatch.setattr(bs, 'traf', traffic)
@@ -58,6 +59,7 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert metadata['schema_version'] == 'samples-v7'
     assert metadata['rows'] == 1
     assert metadata['sample_intervals_s'] == []
+    assert metadata['effective_envelope'][0]['configuration_mode'] == 'CRUISE'
     assert not hasattr(recorder, '_rows')
     recorder.reset()
     assert recorder.rows == 0

@@ -10,6 +10,7 @@ from bluesky.plugins.pybada.envelope import (
     evaluate_flight, evaluate_lateral, evaluate_mass, evaluate_vertical, expand_checks, mass_bounds,
     parse_checks)
 from bluesky.plugins.pybada.performance import PyBadaTEM
+from bluesky.plugins.pybada.model import EvaluationError
 
 
 def make_perf(policies=('OFF', 'OFF')):
@@ -120,6 +121,20 @@ def test_unknown_bounds_reject_enabled_configuration_without_mutation(monkeypatc
     ok, reason = perf.configure_envelope(0, policy=EnvelopePolicy.REPORT)
     assert not ok and 'OEW/MTOW' in reason
     assert (perf.envelope_policy[0], perf.envelope_profile[0], perf.envelope_checks[0]) == old
+
+
+def test_badaconfig_failure_preserves_prior_mode(monkeypatch):
+    perf = make_perf(('OFF',))
+    perf.bada_configuration_mode = np.array(['PYBADA'], dtype='U8')
+
+    def reject(*args, **kwargs):
+        raise EvaluationError('CR evaluation unavailable')
+
+    monkeypatch.setattr(perf, '_evaluate', reject)
+    success, reason = perf.configure_bada_configuration(0, 'CRUISE')
+    assert not success
+    assert 'CR evaluation unavailable' in reason
+    assert perf.bada_configuration_mode[0] == 'PYBADA'
 
 
 def test_fundamental_mass_validation_is_never_disabled(monkeypatch):
