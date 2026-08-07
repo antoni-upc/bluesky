@@ -65,8 +65,9 @@ class PerfBase(Entity, replaceable=True):
     def update_dynamics(self, traffic, dt):
         """Update optional non-native longitudinal/vertical dynamics.
 
-        Return a boolean mask identifying aircraft whose TAS and vertical
-        speed were handled. The base implementation handles none.
+        Return one boolean mask when TAS and vertical speed share ownership,
+        or ``(speed_mask, vertical_mask)`` when they differ. The base
+        implementation handles neither dimension.
         """
         return np.zeros(traffic.ntraf, dtype=bool)
 

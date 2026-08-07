@@ -451,10 +451,16 @@ class Traffic(Entity):
                              self.aporasas.alt, self.ax)
 
         #---------- Kinematics --------------------------------
-        handled = np.asarray(self.perf.update_dynamics(self, bs.sim.simdt), dtype=bool)
-        if handled.shape != (self.ntraf,):
+        handled = self.perf.update_dynamics(self, bs.sim.simdt)
+        if isinstance(handled, tuple) and len(handled) == 2:
+            speed_handled = np.asarray(handled[0], dtype=bool)
+            vertical_handled = np.asarray(handled[1], dtype=bool)
+        else:
+            speed_handled = vertical_handled = np.asarray(handled, dtype=bool)
+        if (speed_handled.shape != (self.ntraf,) or
+                vertical_handled.shape != (self.ntraf,)):
             raise ValueError('Performance dynamics hook returned an invalid mask shape')
-        self.update_airspeed(handled)
+        self.update_airspeed(speed_handled, vertical_handled)
         self.update_groundspeed()
         self.update_pos()
         if self.perf.requires_synced_direct_state:
@@ -502,17 +508,21 @@ class Traffic(Entity):
         self.dtemp[:] = self.Temp - isa_temperature
         self._update_airdata()
 
-    def update_airspeed(self, handled=None):
-        handled = np.zeros(self.ntraf, dtype=bool) if handled is None else handled
-        native = ~handled
+    def update_airspeed(self, speed_handled=None, vertical_handled=None):
+        speed_handled = (np.zeros(self.ntraf, dtype=bool)
+                         if speed_handled is None else speed_handled)
+        vertical_handled = (speed_handled if vertical_handled is None
+                            else vertical_handled)
+        native_speed = ~speed_handled
+        native_vertical = ~vertical_handled
         # Compute horizontal acceleration
         delta_spd = self.aporasas.tas - self.tas
         need_ax = np.abs(delta_spd) > np.abs(bs.sim.simdt * self.perf.axmax)
         native_ax = need_ax * np.sign(delta_spd) * self.perf.axmax
-        self.ax = np.where(native, native_ax, self.ax)
+        self.ax = np.where(native_speed, native_ax, self.ax)
         # Update velocities
         native_tas = np.where(need_ax, self.tas + native_ax * bs.sim.simdt, self.aporasas.tas)
-        self.tas = np.where(native, native_tas, self.tas)
+        self.tas = np.where(native_speed, native_tas, self.tas)
         self._update_airdata()
 
         # Turning bank triangle
@@ -543,7 +553,7 @@ class Traffic(Entity):
         need_az = np.abs(delta_vs) > 300 * fpm   # small threshold
         self.az = need_az * np.sign(delta_vs) * (300 * fpm)   # fixed vertical acc approx 1.6 m/s^2
         native_vs = np.where(need_az, self.vs+self.az*bs.sim.simdt, target_vs)
-        self.vs = np.where(native, native_vs, self.vs)
+        self.vs = np.where(native_vertical, native_vs, self.vs)
         self.vs = np.where(np.isfinite(self.vs), self.vs, 0)    # fix vs nan issue
 
     def _update_airdata(self):

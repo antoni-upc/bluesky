@@ -128,6 +128,7 @@ class PyBadaTEM(PerfBase):
         self.envelope_profile[-n:] = str(bs.settings.pybada_envelope_profile).upper()
         self.envelope_status[-n:] = EnvelopeStatus.VALID.value
         self.envelope_last_action[-n:] = EnvelopeAction.NONE.value
+        self.envelope_last_reason[-n:] = ''
         self.envelope_active_reason[-n:] = ''
         self.envelope_mass_reason[-n:] = ''
         self.envelope_state_reason[-n:] = ''
@@ -433,6 +434,19 @@ class PyBadaTEM(PerfBase):
         self.envelope_guidance_infeasible[idx] = False
         self._refresh_envelope_status(idx)
 
+    def _current_envelope_values(self, idx):
+        bank = self.effective_bank_angle(idx)
+        load = (1.0 / np.cos(np.radians(abs(bank)))
+                if np.isfinite(bank) and abs(bank) < 90.0 else np.inf)
+        return {'mass_kg': float(self.mass[idx]),
+                'tas_m_s': float(bs.traf.tas[idx]),
+                'cas_m_s': float(bs.traf.cas[idx]),
+                'mach': float(bs.traf.M[idx]),
+                'altitude_m': float(bs.traf.alt[idx]),
+                'vertical_rate_m_s': float(bs.traf.vs[idx]),
+                'bank_angle_deg': float(bank),
+                'load_factor': float(load)}
+
     def configure_envelope(self, idx, *, policy=None, profile=None, checks=None):
         old = (self.envelope_policy[idx], self.envelope_profile[idx], self.envelope_checks[idx])
         new_policy = parse_policy(policy or old[0])
@@ -455,7 +469,8 @@ class PyBadaTEM(PerfBase):
             self._clear_envelope_sources(idx)
         else:
             action = EnvelopeAction.ABORTED if new_policy == EnvelopePolicy.ABORT else EnvelopeAction.ACCEPTED
-            self._set_result(idx, evaluation, new_policy, action, self.mass[idx], self.mass[idx])
+            current = self._current_envelope_values(idx)
+            self._set_result(idx, evaluation, new_policy, action, current, current)
             if evaluation.status == EnvelopeStatus.INFEASIBLE and new_policy == EnvelopePolicy.ABORT:
                 bs.sim.hold()
         return True, ''
@@ -603,7 +618,8 @@ class PyBadaTEM(PerfBase):
             return 'unknown'
 
     def update_dynamics(self, traffic, dt):
-        handled = np.zeros(traffic.ntraf, dtype=bool)
+        speed_handled = np.zeros(traffic.ntraf, dtype=bool)
+        vertical_handled = np.zeros(traffic.ntraf, dtype=bool)
         # Performance is evaluated for every aircraft, like BlueSky's original
         # BADA implementation.  dyn_mode only decides whether those results
         # drive motion; KINEMATIC runs still retain usable performance/fuel data.
@@ -664,10 +680,8 @@ class PyBadaTEM(PerfBase):
                 else:  # Compatibility for minimal third-party/test implementations.
                     self.mass[idx] = max(1.0, candidate_mass)
                 if self.dyn_mode[idx] == 1:
-                    traffic.ax[idx] = result.acceleration
-                    traffic.tas[idx] = max(0.0, traffic.tas[idx] + result.acceleration * dt)
                     traffic.vs[idx] = candidate_vs
-                    handled[idx] = True
+                    vertical_handled[idx] = True
                 self.invalid[idx] = False
             except (ModelUnavailable, EvaluationError) as exc:
                 self.invalid[idx] = True
@@ -675,7 +689,11 @@ class PyBadaTEM(PerfBase):
                 self.thrust[idx] = self.rated_thrust[idx] = self.drag[idx] = self.fuelflow[idx] = np.nan
                 if self.strict:
                     raise RuntimeError(f'PYBADATEM strict evaluation failure: {exc}') from exc
-        return handled
+        # BlueSky retains horizontal speed ownership so SPD commands and
+        # waypoint constraints use its native selected-speed capture logic.
+        # TEM owns only vertical speed; pyBADA performance and fuel evaluation
+        # still run for every aircraft.
+        return speed_handled, vertical_handled
 
     def limits(self, intent_v, intent_vs, intent_h, ax):
         """Apply selected speed/Mach/altitude policies to resolved guidance."""

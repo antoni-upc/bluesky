@@ -9,6 +9,7 @@ from bluesky.plugins.pybada.model import parse_configuration_mode
 from bluesky.plugins.pybada.envelope import (EnvelopePolicy, EnvelopeProfile,
     expand_checks, parse_checks, parse_policy, parse_profile)
 from bluesky.stack.cmdparser import CommandRejected
+from bluesky.tools.aero import ft
 
 
 def init_plugin():
@@ -205,10 +206,19 @@ def envelopechecks(acid: str, profile: str = '', *checks):
                   f'checks={_checks_text(selected)}')
 
 
-@stack.command(name='PERFSTATUS', annotations='[txt]')
-def perfstatus(acid=None):
-    """Report model resolution, dynamics mode, validity, and miss count."""
+@stack.command(name='PERFSTATUS', annotations='[txt],[txt]')
+def perfstatus(acid=None, view=None):
+    """PERFSTATUS [acid] [CURRENT|BOUNDS|ALL] reports grouped performance."""
     perf = PyBadaTEM.implinstance()
+    views = {'CURRENT', 'BOUNDS', 'ALL'}
+    aliases = {'MAXS': 'BOUNDS', 'MAX': 'BOUNDS'}
+    if acid is not None and str(acid).upper() in views | set(aliases):
+        if view is not None:
+            return False, 'PERFSTATUS accepts one view: CURRENT, BOUNDS, or ALL'
+        view, acid = acid, None
+    selected_view = aliases.get(str(view or 'ALL').upper(), str(view or 'ALL').upper())
+    if selected_view not in views:
+        return False, 'PERFSTATUS view must be CURRENT, BOUNDS, or ALL'
     if acid is None:
         indices = range(len(bs.traf.id))
     else:
@@ -218,7 +228,7 @@ def perfstatus(acid=None):
         indices = (idx,)
     if not bs.traf.id:
         return True, f'PYBADATEM BADA {perf.version}: no aircraft'
-    lines = []
+    reports = []
     for idx in indices:
         resolution = perf.resolutions[idx]
         policy = getattr(perf, 'envelope_policy', ['OFF'] * len(bs.traf.id))[idx]
@@ -229,48 +239,78 @@ def perfstatus(acid=None):
         events = getattr(perf, 'envelope_event_count', [0] * len(bs.traf.id))[idx]
         violations = getattr(perf, 'envelope_violation_count', [0] * len(bs.traf.id))[idx]
         bounds = perf.bounds(idx) if hasattr(perf, 'bounds') else None
-        bounds_text = ('unknown' if bounds is None or not bounds.known else
-                       f'{bounds.minimum:.1f}..{bounds.maximum:.1f} kg')
         flight = perf.flight_bounds(idx) if hasattr(perf, 'flight_bounds') else None
         def value_text(value, digits):
-            return 'unknown' if value is None or not np.isfinite(value) else f'{value:.{digits}f}'
-        flight_text = ('unknown' if flight is None else
-                       f'CAS={value_text(flight.minimum_cas, 1)}..'
-                       f'{value_text(flight.maximum_cas, 1)} m/s, '
-                       f'Mach={value_text(flight.minimum_mach, 3)}..'
-                       f'{value_text(flight.maximum_mach, 3)}, '
-                       f'hmax={value_text(flight.maximum_altitude, 1)} m, '
-                       f'config={flight.configuration or "unknown"}')
+            try:
+                return ('unknown' if value is None or not np.isfinite(value)
+                        else f'{value:.{digits}f}')
+            except TypeError:
+                return 'unknown'
+        def altitude_text(value):
+            try:
+                if value is None or not np.isfinite(value):
+                    return 'unknown'
+                altitude_ft = float(value) / ft
+                return (f'{float(value):.1f} m '
+                        f'({altitude_ft:.0f} ft/FL{altitude_ft / 100.0:03.0f})')
+            except TypeError:
+                return 'unknown'
+        def array_value(owner, name, default=None):
+            values = getattr(owner, name, ())
+            return values[idx] if idx < len(values) else default
         vertical = perf.vertical_bounds(idx) if hasattr(perf, 'vertical_bounds') else None
         rod_max = (None if vertical is None or vertical.minimum_rocd is None
                    else abs(vertical.minimum_rocd))
-        vertical_text = ('unknown' if vertical is None else
-                         f'ROC_MAX={value_text(vertical.maximum_rocd, 2)} m/s, '
-                         f'ROD_MAX={value_text(rod_max, 2)} m/s')
         lateral = perf.lateral_bounds(idx) if hasattr(perf, 'lateral_bounds') else None
         bank = perf.effective_bank_angle(idx) if hasattr(perf, 'effective_bank_angle') else None
         load = (None if bank is None or not np.isfinite(bank) or abs(bank) >= 90.0
                 else 1.0 / np.cos(np.radians(abs(bank))))
-        lateral_text = ('unknown' if lateral is None else
-                        f'config={lateral.configuration or "unknown"}, '
-                        f'HLid={value_text(lateral.high_lift_id, 0)}, '
-                        f'gear={lateral.landing_gear or "unknown"}, '
-                        f'DLM={lateral.minimum_limit_name or "unknown"}/'
-                        f'{lateral.maximum_limit_name or "unknown"}, '
-                        f'BANK_MAX={value_text(lateral.maximum_bank_angle_deg, 2)} deg, '
-                        f'LOAD_FACTOR={value_text(lateral.minimum_load_factor, 2)}..'
-                        f'{value_text(lateral.maximum_load_factor, 2)}, '
-                        f'current_bank={value_text(bank, 2)} deg, '
-                        f'current_load={value_text(load, 3)}')
-        lines.append(
-            f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
-            f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
-            f'configuration_mode={getattr(perf, "bada_configuration_mode", ["PYBADA"])[idx]}, '
-            f'mass={perf.mass[idx]:.1f} kg, '
-            f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}, '
-            f'envelope={policy}/{status}, checks={_checks_text(checks)}, bounds={bounds_text}, '
-            f'flight_bounds={flight_text}, '
-            f'vertical_bounds={vertical_text}, '
-            f'lateral_bounds={lateral_text}, '
-            f'last={action}/{reason or "-"}, events={int(events)}, violations={int(violations)}')
-    return True, '\n'.join(lines)
+        config = (getattr(lateral, 'configuration', '') or
+                  getattr(flight, 'configuration', '') or 'unknown')
+        mode = array_value(perf, 'bada_configuration_mode', 'PYBADA')
+        dynamics_mode = _DYNAMICS_NAMES.get(int(array_value(perf, 'dyn_mode', 0)), 'unknown')
+        lines = [f'Performance on {bs.traf.id[idx]} {resolution.resolved}:',
+                 f'Model: BADA {perf.version} ({resolution.method})  '
+                 f'Dynamics: {dynamics_mode}  Configuration mode: {mode}']
+        if selected_view in ('CURRENT', 'ALL'):
+            lines.extend((
+                'CURRENT',
+                f'  State: mass={value_text(array_value(perf, "mass"), 1)} kg  '
+                f'CAS={value_text(array_value(bs.traf, "cas"), 1)} m/s  '
+                f'Mach={value_text(array_value(bs.traf, "M"), 3)}  '
+                f'alt={altitude_text(array_value(bs.traf, "alt"))}  '
+                f'VS={value_text(array_value(bs.traf, "vs"), 2)} m/s',
+                f'  Aero: config={config}  HLid={value_text(getattr(lateral, "high_lift_id", None), 0)}  '
+                f'gear={getattr(lateral, "landing_gear", "") or "unknown"}  '
+                f'bank={value_text(bank, 2)} deg  load={value_text(load, 3)}',
+                f'  Forces: thrust={value_text(array_value(perf, "thrust"), 1)} N  '
+                f'rated={value_text(array_value(perf, "rated_thrust"), 1)} N  '
+                f'drag={value_text(array_value(perf, "drag"), 1)} N  '
+                f'fuel={value_text(array_value(perf, "fuelflow"), 3)} kg/s'))
+        if selected_view in ('BOUNDS', 'ALL'):
+            mass_text = ('unknown' if bounds is None or not bounds.known else
+                         f'{bounds.minimum:.1f}..{bounds.maximum:.1f} kg')
+            lines.extend((
+                'BOUNDS',
+                f'  Mass: {mass_text}',
+                f'  Flight: CAS={value_text(getattr(flight, "minimum_cas", None), 1)}..'
+                f'{value_text(getattr(flight, "maximum_cas", None), 1)} m/s  '
+                f'Mach={value_text(getattr(flight, "minimum_mach", None), 3)}..'
+                f'{value_text(getattr(flight, "maximum_mach", None), 3)}  '
+                f'alt_max={altitude_text(getattr(flight, "maximum_altitude", None))}',
+                f'  Vertical: ROC_MAX={value_text(getattr(vertical, "maximum_rocd", None), 2)} m/s  '
+                f'ROD_MAX={value_text(rod_max, 2)} m/s',
+                f'  Lateral: DLM={getattr(lateral, "minimum_limit_name", "") or "unknown"}/'
+                f'{getattr(lateral, "maximum_limit_name", "") or "unknown"}  '
+                f'load={value_text(getattr(lateral, "minimum_load_factor", None), 2)}..'
+                f'{value_text(getattr(lateral, "maximum_load_factor", None), 2)}  '
+                f'bank_max={value_text(getattr(lateral, "maximum_bank_angle_deg", None), 2)} deg'))
+        if selected_view == 'ALL':
+            lines.extend((
+                'QUALITY',
+                f'  Envelope: {policy}/{status}  checks={_checks_text(checks)}',
+                f'  Last: {action}/{reason or "-"}  events={int(events)}  '
+                f'violations={int(violations)}  valid={not bool(array_value(perf, "invalid", False))}  '
+                f'misses={int(array_value(perf, "failure_count", 0))}'))
+        reports.append('\n'.join(lines))
+    return True, '\n\n'.join(reports)

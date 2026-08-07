@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 import bluesky as bs
+from bluesky import stack
 
 
 SCHEMA_VERSION = 'samples-v7'
@@ -253,7 +254,7 @@ class StreamingRecorder:
             'created_utc': self.started_utc, 'rows': self.rows,
             'csv': str(self.path), 'python': platform.python_version(),
             'dependencies': versions,
-            'scenario': getattr(bs.sim, 'scenname', ''),
+            'scenario': stack.get_scenname(),
             'sample_intervals_s': sorted(self.sample_intervals),
             'atmosphere_sources': sources, 'dataset_times': dataset_times,
             'columns': list(FIELDS), 'missing_value': 'empty CSV field',
