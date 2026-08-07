@@ -99,6 +99,10 @@ class LateralBounds:
     maximum_load_factor: Optional[float]
     maximum_bank_angle_deg: Optional[float]
     reason: str = ''
+    high_lift_id: Optional[float] = None
+    landing_gear: str = ''
+    minimum_limit_name: str = ''
+    maximum_limit_name: str = ''
 
 
 @dataclass(frozen=True)

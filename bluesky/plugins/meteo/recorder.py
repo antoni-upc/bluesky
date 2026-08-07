@@ -242,6 +242,10 @@ class StreamingRecorder:
             checks = getattr(perf, 'envelope_checks', ())
             effective.append({'aircraft': acid,
                               'policy': policies[idx] if idx < len(policies) else '',
+                              'configuration_mode': (
+                                  getattr(perf, 'bada_configuration_mode', ())[idx]
+                                  if idx < len(getattr(
+                                      perf, 'bada_configuration_mode', ())) else ''),
                               'checks': [getattr(c, 'value', str(c)) for c in checks[idx]]
                               if idx < len(checks) else []})
         metadata = {

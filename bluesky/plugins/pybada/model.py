@@ -1,6 +1,7 @@
 """Model resolution and typed pyBADA evaluation boundaries."""
 
 from dataclasses import dataclass
+from enum import Enum
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,20 @@ class ModelUnavailable(RuntimeError):
 
 class EvaluationError(RuntimeError):
     pass
+
+
+class BadaConfigurationMode(str, Enum):
+    CRUISE = 'CRUISE'
+    PYBADA = 'PYBADA'
+
+
+def parse_configuration_mode(value):
+    if isinstance(value, BadaConfigurationMode):
+        return value
+    try:
+        return BadaConfigurationMode(str(value).upper().strip())
+    except ValueError as exc:
+        raise ValueError('mode must be CRUISE or PYBADA') from exc
 
 
 @dataclass(frozen=True)
@@ -55,6 +70,14 @@ class BadaModelAdapter:
     def __getattr__(self, name):
         return getattr(self.model, name)
 
+    def _configuration(self, *, phase, h, mass, cas, delta_temp,
+                       configuration_mode=BadaConfigurationMode.PYBADA):
+        mode = parse_configuration_mode(configuration_mode)
+        if mode == BadaConfigurationMode.CRUISE:
+            return 'CR'
+        return (self.model.flightEnvelope.getConfig(
+            phase=phase, h=h, mass=mass, v=cas, deltaTemp=delta_temp) or 'CR')
+
     @staticmethod
     def _atmosphere(h, tas, temperature):
         atm = import_module('pyBADA.atmosphere')
@@ -65,15 +88,17 @@ class BadaModelAdapter:
         mach = atm.tas2Mach(v=tas, theta=theta)
         return atm, dtemp, theta, delta, sigma, mach
 
-    def bluesky_energy(self, *, h, tas, mass, temperature, pressure, phase, schedule):
+    def bluesky_energy(self, *, h, tas, mass, temperature, pressure, phase, schedule,
+                       configuration_mode=BadaConfigurationMode.PYBADA):
         ac = self.model
         atm, dtemp, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
         bada_phase = {'Climb': 'cl', 'Descent': 'des'}.get(phase)
         evolution = 'constCAS' if schedule == 'CONSCAS' or h <= 9144.0 else 'constM'
         if self.family == '3':
             cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
-            config = ac.flightEnvelope.getConfig(phase=phase, h=h, mass=mass,
-                                                  v=cas, deltaTemp=dtemp) or 'CR'
+            config = self._configuration(
+                phase=phase, h=h, mass=mass, cas=cas, delta_temp=dtemp,
+                configuration_mode=configuration_mode)
             lift = ac.flightEnvelope.CL(sigma=sigma, mass=mass, tas=tas)
             drag = ac.flightEnvelope.D(sigma=sigma, tas=tas,
                 CD=ac.flightEnvelope.CD(CL=lift, config=config))
@@ -88,8 +113,9 @@ class BadaModelAdapter:
             rocd = ac.ROCD(thrust, drag, tas, mass, esf, h, dtemp) if bada_phase else 0.0
         else:
             cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
-            config = ac.flightEnvelope.getConfig(phase=phase, h=h, mass=mass,
-                                                  v=cas, deltaTemp=dtemp) or 'CR'
+            config = self._configuration(
+                phase=phase, h=h, mass=mass, cas=cas, delta_temp=dtemp,
+                configuration_mode=configuration_mode)
             hlid, gear = ac.flightEnvelope.getAeroConfig(config=config)
             lift = ac.flightEnvelope.CL(delta=delta, mass=mass, M=mach)
             drag = ac.flightEnvelope.D(delta=delta, M=mach,
@@ -121,10 +147,12 @@ class BadaModelAdapter:
         return float(cas), float(mach)
 
     def bluesky_vertical_envelope(self, *, h, tas, mass, temperature, pressure,
-                                  schedule):
+                                  schedule,
+                                  configuration_mode=BadaConfigurationMode.PYBADA):
         """Return LIDL descent and MCMB climb ROCD at one operating point."""
         common = dict(h=h, tas=tas, mass=mass, temperature=temperature,
-                      pressure=pressure, schedule=schedule)
+                      pressure=pressure, schedule=schedule,
+                      configuration_mode=configuration_mode)
         minimum = float(self.bluesky_energy(phase='Descent', **common)['rocd'])
         maximum = float(self.bluesky_energy(phase='Climb', **common)['rocd'])
         if not np.all(np.isfinite((minimum, maximum))):
@@ -144,7 +172,9 @@ class BadaModelAdapter:
             maximum = 1.0 / np.cos(np.radians(bank))
             return dict(configuration=str(configuration), minimum_load_factor=None,
                         maximum_load_factor=float(maximum),
-                        maximum_bank_angle_deg=bank)
+                        maximum_bank_angle_deg=bank,
+                        minimum_limit_name='', maximum_limit_name='derived',
+                        high_lift_id=None, landing_gear='')
         if self._bada4_dlm_limits is None:
             base = Path(self.model.filePath)
             candidates = (base / self.model.acName / f'{self.model.acName}.xml',
@@ -161,7 +191,7 @@ class BadaModelAdapter:
                 node = dlm.find(name)
                 limits[name] = None if node is None else float(node.text)
             self._bada4_dlm_limits = limits
-        hlid, _ = self.model.flightEnvelope.getAeroConfig(config=configuration)
+        hlid, gear = self.model.flightEnvelope.getAeroConfig(config=configuration)
         minimum_name, maximum_name = ('n3', 'n1') if float(hlid) == 0.0 else ('nf3', 'nf1')
         minimum = self._bada4_dlm_limits[minimum_name]
         maximum = self._bada4_dlm_limits[maximum_name]
@@ -173,15 +203,19 @@ class BadaModelAdapter:
         bank = np.degrees(np.arccos(1.0 / maximum))
         return dict(configuration=str(configuration), minimum_load_factor=minimum,
                     maximum_load_factor=maximum,
-                    maximum_bank_angle_deg=float(bank))
+                    maximum_bank_angle_deg=float(bank), high_lift_id=float(hlid),
+                    landing_gear=str(gear), minimum_limit_name=minimum_name,
+                    maximum_limit_name=maximum_name)
 
-    def bluesky_envelope(self, *, h, cas, mach, mass, temperature, pressure, phase):
+    def bluesky_envelope(self, *, h, cas, mach, mass, temperature, pressure, phase,
+                         configuration_mode=BadaConfigurationMode.PYBADA):
         """Normalize BADA 3/4 longitudinal limits at one operating point."""
         ac = self.model
         tas = mach * np.sqrt(1.4 * 287.05287 * temperature)
         atm, dtemp, theta, delta, sigma, _ = self._atmosphere(h, tas, temperature)
-        config = ac.flightEnvelope.getConfig(
-            phase=phase, h=h, mass=mass, v=cas, deltaTemp=dtemp) or 'CR'
+        config = self._configuration(
+            phase=phase, h=h, mass=mass, cas=cas, delta_temp=dtemp,
+            configuration_mode=configuration_mode)
         if self.family == '3':
             minimum_cas = ac.flightEnvelope.VMin(
                 h=h, mass=mass, config=config, deltaTemp=dtemp)

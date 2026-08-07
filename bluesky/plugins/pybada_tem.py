@@ -5,6 +5,7 @@ import numpy as np
 import bluesky as bs
 from bluesky import stack
 from bluesky.plugins.pybada import PyBadaTEM
+from bluesky.plugins.pybada.model import parse_configuration_mode
 from bluesky.plugins.pybada.envelope import (EnvelopePolicy, EnvelopeProfile,
     expand_checks, parse_checks, parse_policy, parse_profile)
 from bluesky.stack.cmdparser import CommandRejected
@@ -75,6 +76,32 @@ def dynamics(acid=None, mode=None):
     perf.dyn_mode[idx] = value
     target = 'all aircraft' if isinstance(idx, slice) else bs.traf.id[idx]
     return True, f'{target}: dynamics set to {_DYNAMICS_NAMES[value]}'
+
+
+@stack.command(name='BADACONFIG', annotations='[txt],[txt]')
+def badaconfig(acid=None, mode=None):
+    """BADACONFIG [acid] [CRUISE|PYBADA] selects BADA configuration source."""
+    perf = PyBadaTEM.implinstance()
+    if acid is None:
+        if not bs.traf.id:
+            return True, 'BADACONFIG: no aircraft'
+        return True, '\n'.join(
+            f'{name}: {perf.bada_configuration_mode[idx]}'
+            for idx, name in enumerate(bs.traf.id))
+    idx = bs.traf.id2idx(acid)
+    if idx < 0:
+        return False, f'Aircraft {acid} not found'
+    if mode is None:
+        return True, f'{bs.traf.id[idx]}: {perf.bada_configuration_mode[idx]}'
+    try:
+        value = parse_configuration_mode(mode)
+    except ValueError as exc:
+        return False, f'BADACONFIG {exc}'
+    success, reason = perf.configure_bada_configuration(idx, value)
+    if not success:
+        return False, f'BADACONFIG unchanged: {reason}'
+    return True, (f'{bs.traf.id[idx]}: BADA configuration mode set to '
+                  f'{value.value}')
 
 
 @stack.command(name='SPDSCHED')
@@ -226,6 +253,10 @@ def perfstatus(acid=None):
                 else 1.0 / np.cos(np.radians(abs(bank))))
         lateral_text = ('unknown' if lateral is None else
                         f'config={lateral.configuration or "unknown"}, '
+                        f'HLid={value_text(lateral.high_lift_id, 0)}, '
+                        f'gear={lateral.landing_gear or "unknown"}, '
+                        f'DLM={lateral.minimum_limit_name or "unknown"}/'
+                        f'{lateral.maximum_limit_name or "unknown"}, '
                         f'BANK_MAX={value_text(lateral.maximum_bank_angle_deg, 2)} deg, '
                         f'LOAD_FACTOR={value_text(lateral.minimum_load_factor, 2)}..'
                         f'{value_text(lateral.maximum_load_factor, 2)}, '
@@ -234,6 +265,7 @@ def perfstatus(acid=None):
         lines.append(
             f'{bs.traf.id[idx]}: BADA {perf.version}/{resolution.resolved} '
             f'({resolution.method}), dynamics={_DYNAMICS_NAMES[int(perf.dyn_mode[idx])]}, '
+            f'configuration_mode={getattr(perf, "bada_configuration_mode", ["PYBADA"])[idx]}, '
             f'mass={perf.mass[idx]:.1f} kg, '
             f'valid={not bool(perf.invalid[idx])}, misses={int(perf.failure_count[idx])}, '
             f'envelope={policy}/{status}, checks={_checks_text(checks)}, bounds={bounds_text}, '

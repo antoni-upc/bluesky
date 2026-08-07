@@ -4,7 +4,8 @@ import numpy as np
 
 import bluesky as bs
 from bluesky.traffic.performance.perfbase import PerfBase
-from .model import EnergyResult, EvaluationError, ModelStore, ModelUnavailable
+from .model import (EnergyResult, EvaluationError, ModelStore, ModelUnavailable,
+                    parse_configuration_mode)
 from .envelope import (EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile,
                        EnvelopeResult, EnvelopeStatus, FlightBounds, QualityEvent,
                        LateralBounds, VerticalBounds, combine_results, evaluate_flight,
@@ -17,7 +18,7 @@ bs.settings.set_variable_defaults(
     pybada3_version='', pybada4_version='',
     pybada_strict=False, pybada_aircraft_aliases={}, pybada_speed_schedule='ICAO',
     pybada_envelope_policy='OFF', pybada_envelope_profile='LONGITUDINAL',
-    pybada_envelope_checks=[])
+    pybada_envelope_checks=[], pybada_configuration_mode='PYBADA')
 
 
 class PyBadaTEM(PerfBase):
@@ -41,6 +42,7 @@ class PyBadaTEM(PerfBase):
         self.envelope_guidance_failed_checks = []
         with self.settrafarrays():
             self.dyn_mode = np.array([], dtype=int)
+            self.bada_configuration_mode = np.array([], dtype='U8')
             self.rated_thrust = np.array([])
             self.mass_override = np.array([], dtype=bool)
             self.invalid = np.array([], dtype=bool)
@@ -106,6 +108,8 @@ class PyBadaTEM(PerfBase):
     def create(self, n):
         super().create(n)
         self.dyn_mode[-n:] = 1
+        self.bada_configuration_mode[-n:] = parse_configuration_mode(
+            bs.settings.pybada_configuration_mode).value
         if self.store is None:
             self.activate()
         for actype in bs.traf.type[-n:]:
@@ -178,10 +182,28 @@ class PyBadaTEM(PerfBase):
         return ('Climb' if target > bs.traf.alt[idx] + 1.0 else
                 ('Descent' if target < bs.traf.alt[idx] - 1.0 else 'Cruise'))
 
-    def flight_bounds(self, idx, *, mass=None, cas=None, mach=None, model=None):
+    def _configuration_mode(self, idx, override=None):
+        if override is not None:
+            return parse_configuration_mode(override).value
+        values = getattr(self, 'bada_configuration_mode', None)
+        return ('PYBADA' if values is None or idx >= len(values)
+                else parse_configuration_mode(values[idx]).value)
+
+    @staticmethod
+    def _call_configuration_aware(function, configuration_mode, **kwargs):
+        try:
+            return function(configuration_mode=configuration_mode, **kwargs)
+        except TypeError as exc:
+            if "unexpected keyword argument 'configuration_mode'" not in str(exc):
+                raise
+            return function(**kwargs)
+
+    def flight_bounds(self, idx, *, mass=None, cas=None, mach=None, model=None,
+                      configuration_mode=None):
         model = model or self.models[idx]
         try:
-            values = model.bluesky_envelope(
+            values = self._call_configuration_aware(model.bluesky_envelope,
+                self._configuration_mode(idx, configuration_mode),
                 h=float(bs.traf.pressure_alt[idx]),
                 cas=float(bs.traf.cas[idx] if cas is None else cas),
                 mach=float(bs.traf.M[idx] if mach is None else mach),
@@ -193,10 +215,12 @@ class PyBadaTEM(PerfBase):
             return FlightBounds('', None, None, None, None, None,
                                 reason=f'envelope evaluation failed: {exc}')
 
-    def vertical_bounds(self, idx, *, mass=None, tas=None, model=None):
+    def vertical_bounds(self, idx, *, mass=None, tas=None, model=None,
+                        configuration_mode=None):
         model = model or self.models[idx]
         try:
-            values = model.bluesky_vertical_envelope(
+            values = self._call_configuration_aware(model.bluesky_vertical_envelope,
+                self._configuration_mode(idx, configuration_mode),
                 h=float(bs.traf.pressure_alt[idx]),
                 tas=float(bs.traf.tas[idx] if tas is None else tas),
                 mass=float(self.mass[idx] if mass is None else mass),
@@ -215,11 +239,14 @@ class PyBadaTEM(PerfBase):
             float(bs.traf.ap.bankdef[idx])
         return float(np.degrees(bank))
 
-    def lateral_bounds(self, idx, *, model=None, configuration=None):
+    def lateral_bounds(self, idx, *, model=None, configuration=None,
+                       configuration_mode=None):
         model = model or self.models[idx]
         try:
             if configuration is None:
-                configuration = self.flight_bounds(idx, model=model).configuration
+                configuration = self.flight_bounds(
+                    idx, model=model,
+                    configuration_mode=configuration_mode).configuration
             values = model.bluesky_lateral_envelope(
                 configuration=configuration, phase=self._phase(idx))
             return LateralBounds(**values)
@@ -229,7 +256,7 @@ class PyBadaTEM(PerfBase):
 
     def evaluate_envelope(self, idx, *, mass=None, cas=None, mach=None,
                           altitude=None, vertical_rate=None, bank_angle=None,
-                          checks=None, model=None):
+                          checks=None, model=None, configuration_mode=None):
         checks = self.envelope_checks[idx] if checks is None else tuple(checks)
         candidate_mass = self.mass[idx] if mass is None else mass
         mbounds = mass_bounds(model or self.models[idx])
@@ -237,16 +264,20 @@ class PyBadaTEM(PerfBase):
                          EnvelopeCheck.MACH_MIN, EnvelopeCheck.MACH_MAX,
                          EnvelopeCheck.ALTITUDE_MAX}
         fbounds = (self.flight_bounds(idx, mass=candidate_mass, cas=cas,
-                                     mach=mach, model=model)
+                                     mach=mach, model=model,
+                                     configuration_mode=configuration_mode)
                    if set(checks).intersection(flight_checks)
                    else FlightBounds('', None, None, None, None, None))
         vertical_checks = {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX}
-        vbounds = (self.vertical_bounds(idx, mass=candidate_mass, model=model)
+        vbounds = (self.vertical_bounds(
+                       idx, mass=candidate_mass, model=model,
+                       configuration_mode=configuration_mode)
                    if set(checks).intersection(vertical_checks)
                    else VerticalBounds(None, None))
         lateral_checks = {EnvelopeCheck.BANK_ANGLE, EnvelopeCheck.LOAD_FACTOR}
         lbounds = (self.lateral_bounds(idx, model=model,
-                                      configuration=fbounds.configuration or None)
+                                      configuration=fbounds.configuration or None,
+                                      configuration_mode=configuration_mode)
                    if set(checks).intersection(lateral_checks)
                    else LateralBounds('', None, None, None))
         bank = ((self.effective_bank_angle(idx) if bank_angle is None else float(bank_angle))
@@ -429,6 +460,36 @@ class PyBadaTEM(PerfBase):
                 bs.sim.hold()
         return True, ''
 
+    def configure_bada_configuration(self, idx, mode):
+        """Change one aircraft's BADA configuration source transactionally."""
+        new_mode = parse_configuration_mode(mode)
+        try:
+            self._evaluate(idx, configuration_mode=new_mode.value)
+            policy = parse_policy(self.envelope_policy[idx])
+            evaluation = None
+            if policy != EnvelopePolicy.OFF:
+                evaluation, _, _, _ = self.evaluate_envelope(
+                    idx, configuration_mode=new_mode.value)
+                if evaluation.status == EnvelopeStatus.UNKNOWN:
+                    return False, evaluation.reason
+                if (policy == EnvelopePolicy.ENFORCE and
+                        evaluation.status == EnvelopeStatus.INFEASIBLE):
+                    return False, evaluation.reason
+        except (EvaluationError, ModelUnavailable) as exc:
+            return False, str(exc)
+        self.bada_configuration_mode[idx] = new_mode.value
+        if evaluation is not None:
+            action = (EnvelopeAction.ABORTED
+                      if policy == EnvelopePolicy.ABORT and
+                      evaluation.status == EnvelopeStatus.INFEASIBLE
+                      else EnvelopeAction.ACCEPTED)
+            self._set_result(idx, evaluation, policy, action,
+                             {'configuration_mode': new_mode.value},
+                             {'configuration_mode': new_mode.value})
+            if action == EnvelopeAction.ABORTED:
+                bs.sim.hold()
+        return True, ''
+
     def assign_mass(self, idx, value, override=True, runtime=False):
         try:
             value = float(value)
@@ -506,7 +567,7 @@ class PyBadaTEM(PerfBase):
             bs.sim.hold()
         return True, ''
 
-    def _evaluate(self, idx):
+    def _evaluate(self, idx, configuration_mode=None):
         """Evaluate the pyBADA API through one observable failure boundary."""
         ac = self.models[idx]
         h, tas, mass = bs.traf.pressure_alt[idx], bs.traf.tas[idx], self.mass[idx]
@@ -515,9 +576,12 @@ class PyBadaTEM(PerfBase):
             # Adapter-friendly hook used by dependency-free fakes and future
             # pyBADA-version-specific adapters.
             if hasattr(ac, 'bluesky_energy'):
-                return EnergyResult(**ac.bluesky_energy(h=h, tas=tas, mass=mass,
+                values = self._call_configuration_aware(ac.bluesky_energy,
+                    self._configuration_mode(idx, configuration_mode),
+                    h=h, tas=tas, mass=mass,
                     temperature=bs.traf.Temp[idx], pressure=bs.traf.p[idx], phase=phase,
-                    schedule=self.schedule)).validate()
+                    schedule=self.schedule)
+                return EnergyResult(**values).validate()
             raise EvaluationError('Installed pyBADA model needs a version-specific bluesky_energy adapter')
         except Exception as exc:
             raise EvaluationError(
