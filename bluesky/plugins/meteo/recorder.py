@@ -241,12 +241,26 @@ class StreamingRecorder:
         for idx, acid in enumerate(getattr(bs.traf, 'id', ())):
             policies = getattr(perf, 'envelope_policy', ())
             checks = getattr(perf, 'envelope_checks', ())
+            lateral = perf.lateral_bounds(idx) if hasattr(perf, 'lateral_bounds') else None
             effective.append({'aircraft': acid,
                               'policy': policies[idx] if idx < len(policies) else '',
                               'configuration_mode': (
                                   getattr(perf, 'bada_configuration_mode', ())[idx]
                                   if idx < len(getattr(
                                       perf, 'bada_configuration_mode', ())) else ''),
+                              'configuration': '' if lateral is None else lateral.configuration,
+                              'high_lift_id': '' if lateral is None else _finite(lateral.high_lift_id),
+                              'landing_gear': '' if lateral is None else lateral.landing_gear,
+                              'minimum_limit_name': (
+                                  '' if lateral is None else lateral.minimum_limit_name),
+                              'maximum_limit_name': (
+                                  '' if lateral is None else lateral.maximum_limit_name),
+                              'minimum_load_factor': (
+                                  '' if lateral is None else _finite(lateral.minimum_load_factor)),
+                              'maximum_load_factor': (
+                                  '' if lateral is None else _finite(lateral.maximum_load_factor)),
+                              'maximum_bank_angle_deg': (
+                                  '' if lateral is None else _finite(lateral.maximum_bank_angle_deg)),
                               'checks': [getattr(c, 'value', str(c)) for c in checks[idx]]
                               if idx < len(checks) else []})
         metadata = {

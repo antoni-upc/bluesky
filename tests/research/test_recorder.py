@@ -11,6 +11,7 @@ from bluesky.plugins.meteo.recorder import StreamingRecorder
 from bluesky.plugins.research_recorder import atmosstatus
 from bluesky.plugins.pybada.model import Resolution
 from bluesky.plugins.pybada.envelope import QualityEvent
+from bluesky.plugins.pybada.envelope import LateralBounds
 
 
 @pytest.mark.smoke
@@ -28,7 +29,11 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
             fuelflow=values, mass=np.array([60000.0]), dyn_mode=np.array([1]),
             bada_configuration_mode=np.array(['CRUISE']),
             invalid=np.array([False]), failure_count=np.array([2]),
-            resolutions=[Resolution('A320', 'DUMMY-TWIN', 'dummy', True)]))
+            resolutions=[Resolution('A320', 'DUMMY-TWIN', 'dummy', True)],
+            lateral_bounds=lambda idx: LateralBounds(
+                'CR', -1.0, 2.5, 66.4218, high_lift_id=0.0,
+                landing_gear='LGUP', minimum_limit_name='n3',
+                maximum_limit_name='n1')))
     monkeypatch.setattr(bs, 'traf', traffic)
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(
         simt=10.0, utc=datetime(2026, 1, 1, tzinfo=timezone.utc)))
@@ -62,7 +67,16 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert metadata['rows'] == 1
     assert metadata['sample_intervals_s'] == []
     assert metadata['scenario'] == 'recorder-test'
-    assert metadata['effective_envelope'][0]['configuration_mode'] == 'CRUISE'
+    effective = metadata['effective_envelope'][0]
+    assert effective['configuration_mode'] == 'CRUISE'
+    assert effective['configuration'] == 'CR'
+    assert effective['high_lift_id'] == 0.0
+    assert effective['landing_gear'] == 'LGUP'
+    assert effective['minimum_limit_name'] == 'n3'
+    assert effective['maximum_limit_name'] == 'n1'
+    assert effective['minimum_load_factor'] == -1.0
+    assert effective['maximum_load_factor'] == 2.5
+    assert effective['maximum_bank_angle_deg'] == 66.4218
     assert not hasattr(recorder, '_rows')
     recorder.reset()
     assert recorder.rows == 0
