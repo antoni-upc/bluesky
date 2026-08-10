@@ -1,0 +1,46 @@
+# Interactive BADA bank-angle/load-factor envelope gate for licensed BADA 4.2.
+# Run with: IC research/pybada-envelope-lateral
+00:00:00.00>ECHO TEST INFO === PYBADATEM LATERAL ENVELOPE INTERACTIVE GATE ===
+00:00:00.05>ECHO TEST INFO This gate uses BADA 4 DLM structural load factors for the active aerodynamic configuration.
+00:00:00.10>ECHO TEST INFO In a coordinated level turn load factor is 1 divided by cosine of bank angle.
+00:00:00.15>ECHO TEST INFO A clean A320 maximum load factor near 2.5 corresponds to a bank limit near 66.42 degrees.
+00:00:00.18>ECHO TEST INFO The default LONGITUDINAL profile excludes lateral checks. ENVELOPE acid OFF disables selected BADA checks while fundamental validation remains active.
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.30>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.40>PERFMODEL BADA4
+00:00:01.00>CRE LATR,A320-232,41.30,2.10,90,FL200,250
+00:00:01.10>CRE LATE,A320-232,41.32,2.10,90,FL200,250
+00:00:01.20>DYNAMICS LATR KINEMATIC
+00:00:01.30>DYNAMICS LATE TEM
+00:00:01.35>BADACONFIG LATR CRUISE
+00:00:01.36>BADACONFIG LATE CRUISE
+00:00:01.40>PAN 41.31 2.10
+00:00:01.50>ZOOM 20
+00:00:01.60>TRAIL ON 0.20
+00:00:01.70>TRAIL LATR RED
+00:00:01.80>TRAIL LATE BLUE
+00:00:01.90>ECHO TEST INFO GUI trails are active. LATR is red and LATE is blue.
+00:00:02.00>ECHO TEST INFO Configuring a 75 degree BlueSky bank limit while neither aircraft is turning.
+00:00:02.10>BANK LATR 75
+00:00:02.20>BANK LATE 75
+00:00:02.30>ENVELOPECHECKS LATR CUSTOM BANK_ANGLE LOAD_FACTOR
+00:00:02.40>ENVELOPECHECKS LATE CUSTOM BANK_ANGLE LOAD_FACTOR
+00:00:02.50>ENVELOPE LATR REPORT
+00:00:02.60>ENVELOPE LATE ENFORCE
+00:00:03.00>RECORDRESEARCH START pybada-envelope-lateral.csv
+00:00:03.10>ECHO TEST EXPECT No QUALITY event yet because effective bank is zero outside a turn.
+00:00:04.00>ECHO TEST ACTION Commanding both aircraft to turn from heading 90 to heading 270 using the requested 75 degree bank.
+00:00:04.05>ECHO TEST EXPECT LATR REPORT accepts about 75 degrees and load factor 3.864.
+00:00:04.10>ECHO TEST EXPECT LATE ENFORCE limits bank near 66.42 degrees and load factor near 2.500.
+00:00:04.20>HDG LATR 270
+00:00:04.30>HDG LATE 270
+00:00:07.00>ECHO TEST EXPECT Exactly one transition QUALITY event per aircraft despite repeated simulation updates.
+00:00:07.10>ECHO TEST EXPECT LATR is REPORT INFEASIBLE and LATE is ENFORCE VALID.
+00:00:07.20>PERFSTATUS LATR
+00:00:07.30>PERFSTATUS LATE
+00:00:08.00>RECORDRESEARCH STOP
+00:00:08.10>ECHO TEST INFO Evidence recording is complete while both aircraft are still in their turns.
+00:00:08.20>ECHO TEST INFO The simulation will continue so the red 75 degree and blue BADA-limited turn paths remain visible.
+00:00:25.00>ECHO TEST EXPECT The red REPORT path should have a visibly tighter turn radius than the blue ENFORCE path.
+00:00:27.00>ECHO TEST INFO Run validate_lateral_envelope_run.py on pybada-envelope-lateral.csv.
+00:00:28.00>HOLD

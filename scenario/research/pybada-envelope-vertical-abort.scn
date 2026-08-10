@@ -1,0 +1,20 @@
+# Interactive vertical-envelope ABORT and synchronous evidence gate.
+# Run with: IC research/pybada-envelope-vertical-abort
+00:00:00.00>ECHO TEST INFO === PYBADATEM VERTICAL ENVELOPE ABORT GATE ===
+00:00:00.10>ECHO TEST INFO This gate starts safely, records, and then commands an excessive climb rate.
+00:00:00.15>ECHO TEST INFO VS command inputs are feet per minute. 10000 fpm equals 50.80 m/s.
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.30>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.40>PERFMODEL BADA4
+00:00:01.00>CRE VABT,A320-232,41.30,2.10,90,FL200,250
+00:00:01.10>DYNAMICS VABT KINEMATIC
+00:00:01.20>ALT VABT FL300 500
+00:00:02.00>ENVELOPECHECKS VABT CUSTOM ROC_MAX
+00:00:02.10>ENVELOPE VABT ABORT
+00:00:03.00>RECORDRESEARCH START pybada-envelope-vertical-abort.csv
+00:00:03.10>ECHO TEST EXPECT No QUALITY event should have occurred yet. The recorder is active.
+00:00:04.00>ECHO TEST ACTION Commanding +10000 fpm. Expect one ABORTED ROC_MAX event followed by HOLD.
+00:00:04.10>VS VABT 10000
+# BlueSky ramps VS. At the dynamic MCMB boundary PYBADATEM flushes CSV,
+# JSONL, and samples-v7 metadata synchronously before placing simulation in HOLD.
+00:00:20.00>ECHO TEST ERROR Expected ROC_MAX ABORT did not place the simulation in HOLD.
