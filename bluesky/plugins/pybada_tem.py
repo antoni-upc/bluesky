@@ -14,12 +14,22 @@ from bluesky.tools.aero import ft
 
 def init_plugin():
     perf = PyBadaTEM()
-    try:
-        perf.activate()
-    except Exception as exc:
-        raise ImportError(f'PYBADATEM unavailable: {exc}') from exc
+    # Loading the plugin must not require the configured default family when
+    # the scenario will explicitly select another family before creating
+    # traffic. Existing traffic still requires immediate, transactional model
+    # resolution; otherwise activation is deferred to PERFMODEL or CRE.
+    if bs.traf.id:
+        try:
+            perf.activate()
+        except Exception as exc:
+            raise ImportError(f'PYBADATEM unavailable: {exc}') from exc
     PyBadaTEM.select(perf)
-    stack.echo(f'PYBADATEM active: BADA {perf.version}, data={perf.store.data_path}, strict={perf.strict}')
+    if perf.store is None:
+        stack.echo('PYBADATEM loaded: no dataset selected; use PERFMODEL BADA3 or BADA4')
+    else:
+        stack.echo(
+            f'PYBADATEM active: BADA {perf.version}, '
+            f'data={perf.store.data_path}, strict={perf.strict}')
     return {'plugin_name': 'PYBADATEM', 'plugin_type': 'sim'}
 
 
@@ -27,7 +37,8 @@ def init_plugin():
 def perfmodel(model: str = ''):
     perf = PyBadaTEM.implinstance()
     if not model:
-        return True, f'Active pyBADA dataset: BADA {perf.version}'
+        return True, ('No active pyBADA dataset' if perf.store is None else
+                      f'Active pyBADA dataset: BADA {perf.version}')
     try:
         perf.activate(model.upper())
     except Exception as exc:
@@ -290,6 +301,10 @@ def perfstatus(acid=None, view=None):
         if selected_view in ('BOUNDS', 'ALL'):
             mass_text = ('unknown' if bounds is None or not bounds.known else
                          f'{bounds.minimum:.1f}..{bounds.maximum:.1f} kg')
+            lateral_source = (
+                'source=GPF-civilian/derived' if str(getattr(perf, 'family', '')) == '3'
+                else f'DLM={getattr(lateral, "minimum_limit_name", "") or "unknown"}/'
+                     f'{getattr(lateral, "maximum_limit_name", "") or "unknown"}')
             lines.extend((
                 'BOUNDS',
                 f'  Mass: {mass_text}',
@@ -300,8 +315,7 @@ def perfstatus(acid=None, view=None):
                 f'alt_max={altitude_text(getattr(flight, "maximum_altitude", None))}',
                 f'  Vertical: ROC_MAX={value_text(getattr(vertical, "maximum_rocd", None), 2)} m/s  '
                 f'ROD_MAX={value_text(rod_max, 2)} m/s',
-                f'  Lateral: DLM={getattr(lateral, "minimum_limit_name", "") or "unknown"}/'
-                f'{getattr(lateral, "maximum_limit_name", "") or "unknown"}  '
+                f'  Lateral: {lateral_source}  '
                 f'load={value_text(getattr(lateral, "minimum_load_factor", None), 2)}..'
                 f'{value_text(getattr(lateral, "maximum_load_factor", None), 2)}  '
                 f'bank_max={value_text(getattr(lateral, "maximum_bank_angle_deg", None), 2)} deg'))

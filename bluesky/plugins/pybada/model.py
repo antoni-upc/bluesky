@@ -165,10 +165,37 @@ class BadaModelAdapter:
     def bluesky_lateral_envelope(self, *, configuration, phase):
         """Return documented BADA lateral/load limits without defaults."""
         if self.family == '3':
-            phase_code = {'Climb': 'cl', 'Descent': 'des',
-                          'Cruise': 'cr'}.get(phase, 'cr')
-            bank = float(self.model.flightEnvelope.getBankAngle(
-                phase=phase_code, flightUnit='civ', value='max'))
+            # getConfig is pyBADA's direct aerodynamic-state observation. Its
+            # terminal states select the matching documented GPF phase; the
+            # broad BlueSky phase remains the source for clean configurations.
+            phase_code = {'TO': 'to', 'IC': 'ic', 'AP': 'app', 'LD': 'lnd'}.get(
+                str(configuration).upper(),
+                {'Climb': 'cl', 'Descent': 'des', 'Cruise': 'cr'}.get(phase, 'cr'))
+            try:
+                bank = self.model.flightEnvelope.getBankAngle(
+                    phase=phase_code, flightUnit='civ', value='max')
+            except TypeError as exc:
+                # pyBADA 0.1.12's BADA 3 wrapper calls getGPFValue with the
+                # obsolete ``flightUnit`` keyword. Read the same documented
+                # GPF record narrowly until that upstream compatibility bug is
+                # fixed; never substitute a default bank angle.
+                if 'flightUnit' not in str(exc):
+                    raise
+                records = getattr(self.model.flightEnvelope.AC, 'GPFdata', ())
+                matches = [item.get('value') for item in records
+                           if item.get('name') == 'ang_bank_max'
+                           and phase_code in item.get('phase', ())
+                           and 'civ' in item.get('flight', ())
+                           and any(engine in item.get('engine', ())
+                                   for engine in ('JET', 'jet'))]
+                if len(matches) != 1:
+                    raise EvaluationError(
+                        f'BADA 3 GPF has {len(matches)} civilian maximum-bank '
+                        f'records for phase {phase_code}') from exc
+                bank = matches[0]
+            bank = float(bank)
+            if not np.isfinite(bank) or bank < 0.0 or bank >= 90.0:
+                raise EvaluationError(f'invalid BADA 3 maximum bank angle {bank!r}')
             maximum = 1.0 / np.cos(np.radians(bank))
             return dict(configuration=str(configuration), minimum_load_factor=None,
                         maximum_load_factor=float(maximum),
