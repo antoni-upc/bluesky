@@ -216,6 +216,40 @@ def test_bada3_lateral_adapter_uses_phase_bank_limit():
     assert result['minimum_load_factor'] is None
 
 
+def test_bada3_lateral_adapter_handles_pybada_0112_gpf_keyword_bug():
+    class BrokenEnvelope:
+        AC = SimpleNamespace(GPFdata=[
+            {'name': 'ang_bank_max', 'value': 45.0,
+             'engine': ['jet'], 'phase': ['cl', 'cr', 'des'], 'flight': 'civ'},
+            {'name': 'ang_bank_max', 'value': 70.0,
+             'engine': ['jet'], 'phase': ['cl', 'cr', 'des'], 'flight': 'mil'},
+        ])
+
+        def getBankAngle(self, **kwargs):
+            raise TypeError("getGPFValue() got an unexpected keyword argument 'flightUnit'")
+
+    result = BadaModelAdapter(
+        SimpleNamespace(flightEnvelope=BrokenEnvelope()), '3').bluesky_lateral_envelope(
+            configuration='CR', phase='Descent')
+    assert result['maximum_bank_angle_deg'] == 45.0
+    assert result['maximum_load_factor'] == pytest.approx(np.sqrt(2.0))
+    assert result['minimum_load_factor'] is None
+
+
+def test_bada3_lateral_adapter_uses_observed_terminal_configuration_phase():
+    class TerminalEnvelope(FakeBada3Envelope):
+        def getBankAngle(self, *, phase, flightUnit, value):
+            assert (phase, flightUnit, value) == ('lnd', 'civ', 'max')
+            return 25.0
+
+    result = BadaModelAdapter(
+        SimpleNamespace(flightEnvelope=TerminalEnvelope()), '3').bluesky_lateral_envelope(
+            configuration='LD', phase='Descent')
+    assert result['maximum_bank_angle_deg'] == 25.0
+    assert result['maximum_load_factor'] == pytest.approx(
+        1.0 / np.cos(np.radians(25.0)))
+
+
 def test_bada4_lateral_adapter_selects_clean_and_high_lift_dlm(tmp_path):
     aircraft_dir = tmp_path / 'A320-232'
     aircraft_dir.mkdir()

@@ -6,8 +6,8 @@ import bluesky as bs
 from bluesky.plugins.pybada.model import ModelUnavailable, Resolution
 from bluesky.plugins.pybada.envelope import (FlightBounds, LateralBounds,
                                               MassBounds, VerticalBounds)
-from bluesky.plugins.pybada_tem import (badaconfig, _parse_dynamics_mode, mass,
-                                        perfmodel, perfstatus)
+from bluesky.plugins.pybada_tem import (badaconfig, _parse_dynamics_mode, init_plugin,
+                                        mass, perfmodel, perfstatus)
 from bluesky.stack.cmdparser import CommandRejected
 
 
@@ -17,6 +17,29 @@ def test_kinematic_mode_name():
 
 def test_tem_mode_name():
     assert _parse_dynamics_mode('TEM') == 1
+
+
+def test_plugin_load_without_traffic_defers_default_family_activation(monkeypatch):
+    calls = []
+
+    class FakePerformance:
+        store = None
+        strict = True
+
+        def activate(self):
+            calls.append('activate')
+
+        @classmethod
+        def select(cls, instance):
+            calls.append(('select', instance))
+
+    monkeypatch.setattr('bluesky.plugins.pybada_tem.PyBadaTEM', FakePerformance)
+    monkeypatch.setattr(bs, 'traf', SimpleNamespace(id=[]))
+    monkeypatch.setattr('bluesky.plugins.pybada_tem.stack.echo', calls.append)
+    result = init_plugin()
+    assert result['plugin_name'] == 'PYBADATEM'
+    assert 'activate' not in calls
+    assert any('no dataset selected' in item for item in calls if isinstance(item, str))
 
 
 def test_unknown_dynamics_mode_is_actionable():
@@ -100,6 +123,29 @@ def test_perfstatus_reports_bada4_lateral_configuration_observation(monkeypatch)
     success, bounds = perfstatus('B42', 'MAXS')
     assert success and 'BOUNDS' in bounds and 'CURRENT' not in bounds
     assert perfstatus('B42', 'unsupported')[0] is False
+
+
+def test_perfstatus_labels_bada3_lateral_source_as_gpf(monkeypatch):
+    traffic = SimpleNamespace(id=['B3'], id2idx=lambda acid: 0,
+                              alt=[3048.0], vs=[0.0])
+    perf = SimpleNamespace(
+        family='3', version='3.15',
+        resolutions=[Resolution('A320', 'A320__', 'bada3-code', False)],
+        dyn_mode=[0], mass=[64000.0], invalid=[False], failure_count=[0],
+        bounds=lambda idx: MassBounds(39000.0, 77000.0),
+        flight_bounds=lambda idx: FlightBounds('CR', 100.0, 200.0, 0.3,
+                                                0.82, 11800.0),
+        vertical_bounds=lambda idx: VerticalBounds(-8.0, 6.0),
+        lateral_bounds=lambda idx: LateralBounds(
+            'CR', None, 2.0 ** 0.5, 45.0,
+            maximum_limit_name='derived'),
+        effective_bank_angle=lambda idx: 0.0)
+    monkeypatch.setattr(bs, 'traf', traffic)
+    monkeypatch.setattr('bluesky.plugins.pybada_tem.PyBadaTEM.implinstance', lambda: perf)
+    success, message = perfstatus('B3', 'BOUNDS')
+    assert success
+    assert 'Lateral: source=GPF-civilian/derived' in message
+    assert 'DLM=' not in message
 
 
 def test_mass_fundamental_rejection_names_aircraft_and_preserved_state(monkeypatch):
