@@ -99,6 +99,16 @@ def test_report_accepts_and_recovers_without_cross_aircraft_mutation(monkeypatch
     assert perf.envelope_last_reason[0] == 'MASS_MAX'
 
 
+def test_runtime_mass_update_does_not_duplicate_active_state_transition(monkeypatch):
+    traffic(monkeypatch)
+    perf = make_perf(('OFF',))
+    assert perf.assign_mass(0, 90_000.0)[0]
+    assert perf.configure_envelope(0, policy=EnvelopePolicy.REPORT)[0]
+    assert perf.envelope_event_count[0] == 1
+    assert perf.assign_mass(0, 89_999.0, runtime=True)[0]
+    assert perf.envelope_event_count[0] == 1
+
+
 def test_quality_event_is_published_to_interactive_console(monkeypatch):
     traffic(monkeypatch)
     messages = []

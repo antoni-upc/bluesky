@@ -132,7 +132,7 @@ def test_perfstatus_labels_bada3_lateral_source_as_gpf(monkeypatch):
         family='3', version='3.15',
         resolutions=[Resolution('A320', 'A320__', 'bada3-code', False)],
         dyn_mode=[0], mass=[64000.0], invalid=[False], failure_count=[0],
-        bounds=lambda idx: MassBounds(39000.0, 77000.0),
+        bounds=lambda idx: MassBounds(40000.0, 80000.0),
         flight_bounds=lambda idx: FlightBounds('CR', 100.0, 200.0, 0.3,
                                                 0.82, 11800.0),
         vertical_bounds=lambda idx: VerticalBounds(-8.0, 6.0),

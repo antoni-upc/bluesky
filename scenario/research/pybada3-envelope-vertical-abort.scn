@@ -1,0 +1,19 @@
+# BADA 3 vertical-envelope ABORT and synchronous evidence gate.
+# Run with: IC research/pybada3-envelope-vertical-abort
+00:00:00.00>ECHO TEST INFO === BADA 3 VERTICAL ENVELOPE ABORT GATE ===
+00:00:00.10>ECHO TEST INFO Runtime model bounds decide the violation and generated evidence is ignored.
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.30>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.40>PERFMODEL BADA3
+00:00:00.50>DT 0.05
+00:00:00.60>DATE 11,8,2026,12:00:00
+00:00:01.00>CRE B3VA,A320,41.30,2.10,90,FL200,250
+00:00:01.10>DYNAMICS B3VA KINEMATIC
+00:00:01.20>ALT B3VA FL300 500
+00:00:02.00>ENVELOPECHECKS B3VA CUSTOM ROC_MAX
+00:00:02.10>ENVELOPE B3VA ABORT
+00:00:03.00>RECORDRESEARCH START pybada3-envelope-vertical-abort.csv
+00:00:03.10>ECHO TEST ACTION Commanding an excessive climb rate under ABORT.
+00:00:04.10>VS B3VA 10000
+# BlueSky ramps VS. Evidence is flushed synchronously before HOLD.
+00:00:20.00>ECHO TEST ERROR Expected ROC_MAX ABORT did not place the simulation in HOLD.
