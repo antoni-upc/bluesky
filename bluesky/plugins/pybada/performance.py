@@ -405,11 +405,20 @@ class PyBadaTEM(PerfBase):
             reason_array = self.envelope_dynamics_reason
             failed_list = None
         previous_reason = reason_array[idx]
-        other_active_reason = ''
-        if source == 'state' and self.envelope_guidance_infeasible[idx]:
-            other_active_reason = self.envelope_guidance_reason[idx]
-        elif source == 'guidance':
-            other_active_reason = self.envelope_state_reason[idx]
+        other_active_reasons = [
+            self.envelope_mass_reason[idx], self.envelope_state_reason[idx],
+            self.envelope_dynamics_reason[idx]]
+        if self.envelope_guidance_infeasible[idx]:
+            other_active_reasons.append(self.envelope_guidance_reason[idx])
+        source_reason = {'mass': self.envelope_mass_reason,
+                         'state': self.envelope_state_reason,
+                         'guidance': self.envelope_guidance_reason,
+                         'dynamics': self.envelope_dynamics_reason}.get(source)
+        if source_reason is not None:
+            try:
+                other_active_reasons.remove(source_reason[idx])
+            except ValueError:
+                pass
         reason_array[idx] = '' if result.status == EnvelopeStatus.VALID else result.reason
         if failed_list is not None:
             failed_list[idx] = (() if result.status == EnvelopeStatus.VALID
@@ -419,7 +428,7 @@ class PyBadaTEM(PerfBase):
                 contributes and result.status == EnvelopeStatus.INFEASIBLE)
         self._refresh_envelope_status(idx)
         if (result.status != EnvelopeStatus.VALID and previous_reason != result.reason
-                and (source == 'attempt' or other_active_reason != result.reason)):
+                and (source == 'attempt' or result.reason not in other_active_reasons)):
             self._emit_event(idx, result.reason, action, requested, applied)
 
     def _clear_envelope_sources(self, idx):
@@ -562,9 +571,11 @@ class PyBadaTEM(PerfBase):
             self._set_result(idx, result, policy, EnvelopeAction.REJECTED,
                              requested, applied, source='attempt', contributes=False)
             return False, (f'policy=ENFORCE, reason={result.reason}, '
-                           f'CAS bounds={bounds.minimum_cas}..{bounds.maximum_cas} m/s, '
-                           f'Mach bounds={bounds.minimum_mach}..{bounds.maximum_mach}, '
-                           f'altitude max={bounds.maximum_altitude} m, '
+                           f'CAS bounds={self._bound_text(bounds.minimum_cas)}..'
+                           f'{self._bound_text(bounds.maximum_cas)} m/s, '
+                           f'Mach bounds={self._bound_text(bounds.minimum_mach)}..'
+                           f'{self._bound_text(bounds.maximum_mach)}, '
+                           f'altitude max={self._bound_text(bounds.maximum_altitude)} m, '
                            f'vertical bounds=ROC_MAX '
                            f'{self._bound_text(vertical.maximum_rocd)} m/s, ROD_MAX '
                            f'{self._bound_text_abs(vertical.minimum_rocd)} m/s; '
