@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pytest
 
+import bluesky as bs
 from bluesky.plugins.meteo import GridValidationError, MeteorologyProvider, WeatherCube, previous_slot
+from bluesky.plugins.windecmwf import WindECMWF
 from bluesky.plugins.windgfs import WindGFS
 from bluesky.tools.aero import R
 
@@ -75,6 +77,136 @@ def test_provider_specific_analysis_cycle():
     assert provider.desired_slot(utc.replace(hour=6)).hour == 6
 
 
+def test_disabled_time_update_expires_weather_with_explicit_reason(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.set_cube(cube(), bounds=(10.0, 179.0, 11.0, -179.0))
+    monkeypatch.setattr(provider, 'strict', False)
+    provider.expire_time_slot(datetime(2026, 1, 1, 1, tzinfo=timezone.utc))
+    sample = provider.get_atmosphere([10.5], [179.5], [500.0], None)
+    assert not sample.valid[0]
+    assert sample.fallback_reason.startswith('TIME_SLOT_EXPIRED:')
+
+
+def test_strict_provider_rejects_outside_requested_bounds(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.set_cube(cube(), bounds=(10.0, 179.0, 11.0, -179.0))
+    monkeypatch.setattr(provider, 'strict', True)
+    with pytest.raises(RuntimeError, match='validated domain'):
+        provider.get_atmosphere([10.5], [0.0], [500.0], None)
+
+
+def test_failed_time_update_discards_stale_cube_and_reports_fallback(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.set_cube(cube(), bounds=(10.0, 179.0, 11.0, -179.0))
+    monkeypatch.setattr(provider, 'strict', False)
+    slot = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
+    success, reason = provider.advance_time_slot(
+        slot, lambda: (_ for _ in ()).throw(OSError('download failed')))
+    assert not success
+    assert reason.startswith('TIME_SLOT_UNAVAILABLE:')
+    assert provider.cube is None
+    sample = provider.get_atmosphere([10.5], [179.5], [500.0], None)
+    assert not sample.valid[0]
+    assert sample.fallback_reason == reason
+
+
+def test_failed_time_update_stops_strict_provider(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.set_cube(cube(), bounds=(10.0, 179.0, 11.0, -179.0))
+    monkeypatch.setattr(provider, 'strict', True)
+    slot = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
+    with pytest.raises(RuntimeError, match='no valid weather'):
+        provider.advance_time_slot(
+            slot, lambda: (_ for _ in ()).throw(OSError('download failed')))
+    assert provider.cube is None
+
+
+def test_point_status_reports_loaded_weather():
+    provider = MeteorologyProvider()
+    provider.set_cube(cube(), bounds=(10.0, 179.0, 11.0, -179.0))
+    success, message = provider.point_status(10.5, 179.5, 500.0)
+    assert success
+    assert all(field in message for field in
+               ('lat=10.500000 deg', 'lon=179.500000 deg', 'alt=500.0 m/1640.4 ft',
+                'valid=True', 'wind_north=', 'wind_east=', 'T=', 'p=', 'rho='))
+
+
+def test_slot_changes_synchronously_at_exact_utc_boundary(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.slot_hours = 1
+    start = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    provider.request_bounds = (10.0, 179.0, 11.0, -179.0)
+    provider.set_cube(cube(), provider.request_bounds, start)
+    loaded = []
+
+    def load(*bounds, slot=None):
+        loaded.append(slot)
+        replacement = cube()
+        replacement.dataset_time = slot.isoformat()
+        provider.set_cube(replacement, bounds, slot)
+        return True, 'loaded'
+
+    monkeypatch.setattr(provider, 'load', load, raising=False)
+    monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', True)
+    provider.get_atmosphere([10.5], [179.5], [500.0], start + timedelta(hours=1))
+    assert loaded == [start + timedelta(hours=1)]
+    assert provider.active_slot == (start + timedelta(hours=1)).isoformat()
+
+
+def test_temporal_interpolation_is_explicit_and_thermodynamically_consistent(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.slot_hours = 1
+    provider.request_bounds = None
+    start = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    first = cube()
+    second = WeatherCube(
+        first.altitude, first.latitude, first.longitude,
+        first.east_wind + 2.0, first.north_wind + 4.0,
+        first.temperature + 10.0, first.pressure - 1000.0,
+        'SYNTHETIC', '2026-01-01T13:00:00+00:00')
+    provider.set_cube(first, None, start, second)
+    monkeypatch.setattr('bluesky.settings.meteo_time_interpolation', True)
+    north, east, sample = provider._interpolate(
+        [10.5], [180.0], [500.0], start + timedelta(minutes=30))
+    first_north, first_east, first_sample = first.interpolate([10.5], [180.0], [500.0])
+    assert north[0] == pytest.approx(first_north[0] + 2.0)
+    assert east[0] == pytest.approx(first_east[0] + 1.0)
+    assert sample.temperature[0] == pytest.approx(first_sample.temperature[0] + 5.0)
+    assert sample.pressure[0] == pytest.approx(first_sample.pressure[0] - 500.0)
+    assert sample.density[0] == pytest.approx(
+        sample.pressure[0] / (R * sample.temperature[0]))
+    assert sample.dataset_time.endswith('@0.500000')
+
+
+def test_meteoconfig_controls_runtime_policy(monkeypatch):
+    provider = MeteorologyProvider()
+    monkeypatch.setattr(provider, 'strict', False)
+    success, message = provider.configure('STRICT', 'ON')
+    assert success and provider.strict and 'strict=True' in message
+    success, message = provider.configure('TIMEUPDATE', 'OFF')
+    assert success and not bs.settings.meteo_time_autoupdate
+    success, message = provider.configure('INTERPOLATION', 'ON')
+    assert success and bs.settings.meteo_time_interpolation
+    success, message = provider.configure('UNKNOWN', 'ON')
+    assert not success and 'STRICT' in message
+
+
+def test_provider_default_caches_resolve_to_concrete_paths(monkeypatch, tmp_path):
+    class MultipleRoots:
+        def as_posix(self):
+            return str(tmp_path)
+
+    monkeypatch.setattr(bs, 'resource', lambda name: MultipleRoots())
+    monkeypatch.setattr('bluesky.settings.era5_cache_path', '')
+    monkeypatch.setattr('bluesky.settings.gfs_cache_path', '')
+    era5 = object.__new__(WindECMWF)
+    WindECMWF.__init__(era5)
+    gfs = object.__new__(WindGFS)
+    WindGFS.__init__(gfs)
+    assert era5.cache == tmp_path / 'weather' / 'era5'
+    assert gfs.cache == tmp_path / 'weather' / 'gfs'
+
+
 def test_gfs_command_accepts_explicit_analysis_cycle(monkeypatch):
     provider = object.__new__(WindGFS)
     captured = {}
@@ -119,3 +251,28 @@ def test_gfs_source_location_rejects_unknown_source(monkeypatch, tmp_path):
     monkeypatch.setattr('bluesky.settings.windgfs_source', 'UNKNOWN')
     with pytest.raises(ValueError, match='NCEI or AWS'):
         provider._location(datetime(2026, 8, 4, 6))
+
+
+def test_gfs_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
+    provider = object.__new__(WindGFS)
+    provider.cache = tmp_path
+    slot = datetime(2026, 8, 4, 6)
+    target = tmp_path / 'weather.grb2'
+    target.write_bytes(b'cached')
+    monkeypatch.setattr(provider, '_location', lambda ignored: ('url', target))
+    monkeypatch.setattr(provider, '_validate', lambda path: None)
+    monkeypatch.setattr('bluesky.plugins.windgfs.atomic_download',
+                        lambda *args: pytest.fail('cache hit opened the network'))
+    assert provider._fetch(slot) == target
+
+
+def test_era5_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
+    provider = object.__new__(WindECMWF)
+    provider.cache = tmp_path
+    slot = datetime(2026, 8, 4, 6)
+    bounds = (40.0, -5.0, 45.0, 5.0)
+    target = provider._path(slot, bounds, 0)
+    target.write_bytes(b'cached')
+    sentinel = object()
+    monkeypatch.setattr(provider, '_read', lambda path, ignored: sentinel)
+    assert provider._fetch(slot, bounds) is sentinel

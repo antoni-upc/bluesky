@@ -43,7 +43,10 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     path = tmp_path / 'samples.csv'
     recorder.start(path)
     recorder.sample()
-    assert recorder.rows == 1
+    traffic.atmos_source[0] = 'ERA5'
+    traffic.atmos_dataset_time[0] = '2026-01-01T01:00:00+00:00'
+    recorder.sample()
+    assert recorder.rows == 2
     csv_path, metadata_path = recorder.stop()
     with csv_path.open(newline='') as stream:
         row = next(csv.DictReader(stream))
@@ -64,7 +67,10 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
         assert field in row
     metadata = json.loads(metadata_path.read_text())
     assert metadata['schema_version'] == 'samples-v7'
-    assert metadata['rows'] == 1
+    assert metadata['rows'] == 2
+    assert metadata['atmosphere_sources'] == ['ERA5', 'SYNTHETIC']
+    assert metadata['dataset_times'] == [
+        '2026-01-01T00:00:00+00:00', '2026-01-01T01:00:00+00:00']
     assert metadata['sample_intervals_s'] == []
     assert metadata['scenario'] == 'recorder-test'
     effective = metadata['effective_envelope'][0]
