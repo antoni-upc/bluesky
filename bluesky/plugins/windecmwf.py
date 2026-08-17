@@ -3,12 +3,12 @@
 from pathlib import Path
 import hashlib
 import os
+from datetime import timedelta
 
 import numpy as np
 
 import bluesky as bs
 from bluesky import stack
-from bluesky.core import timed_function
 from bluesky.plugins.meteo import MeteorologyProvider, WeatherCube
 
 
@@ -38,7 +38,9 @@ class WindECMWF(MeteorologyProvider):
     def __init__(self):
         super().__init__()
         configured = bs.settings.era5_cache_path
-        self.cache = Path(configured).expanduser() if configured else bs.resource('NetCDF')
+        cache_root = Path(bs.resource('cache').as_posix())
+        self.cache = (Path(configured).expanduser() if configured else
+                      cache_root / 'weather' / 'era5')
         self.cache.mkdir(parents=True, exist_ok=True)
         probe = self.cache / '.write-capability'
         probe.write_text('ok', encoding='ascii')
@@ -81,14 +83,20 @@ class WindECMWF(MeteorologyProvider):
                     cubes.append(self._read(target, slot))
                     continue
                 except (OSError, ValueError, KeyError, IndexError):
+                    stack.echo(f'ERA5: cached file is invalid; removing {target}')
                     target.unlink()
             part = target.with_suffix('.nc.part')
             part.unlink(missing_ok=True)
             try:
+                levels = ','.join(str(level) for level in bs.settings.era5_pressure_levels)
+                stack.echo(
+                    f'ERA5: not in cache; downloading slot={slot.isoformat()} '
+                    f'area={list(area)} pressure_levels_hPa=[{levels}] to {target}')
                 cdsapi.Client().retrieve('reanalysis-era5-pressure-levels',
                                          self._request(slot, area), str(part))
                 cube = self._read(part, slot)  # validate before accepting cache
                 part.replace(target)
+                stack.echo(f'ERA5: download validated and cached at {target}')
                 cubes.append(cube)
             except Exception:
                 part.unlink(missing_ok=True)
@@ -166,15 +174,14 @@ class WindECMWF(MeteorologyProvider):
         slot = self.desired_slot(slot or bs.sim.utc)
         self.request_bounds = (lat0, lon0, lat1, lon1)
         cube = self._fetch(slot, self.request_bounds)
-        self.set_cube(cube, self.request_bounds)
-        return True, f'ERA5 {slot.isoformat()} loaded and validated'
+        next_cube = None
+        if bs.settings.meteo_time_interpolation:
+            next_slot = slot + timedelta(hours=self.slot_hours)
+            next_cube = self._fetch(next_slot, self.request_bounds)
+        self.set_cube(cube, self.request_bounds, slot, next_cube)
+        mode = ' with temporal interpolation' if next_cube is not None else ''
+        return True, f'ERA5 {slot.isoformat()} loaded and validated{mode}'
 
     @stack.command(name='WINDECMWF')
     def load_command(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon'):
         return self.load(lat0, lon0, lat1, lon1)
-
-    @timed_function(name='WINDECMWF_update', dt=60)
-    def update(self):
-        slot = self.desired_slot(bs.sim.utc)
-        if self.request_bounds and slot.isoformat() != self.active_slot:
-            self.load(*self.request_bounds, slot=slot)

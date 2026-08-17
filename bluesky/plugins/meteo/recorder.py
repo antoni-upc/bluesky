@@ -64,6 +64,8 @@ class StreamingRecorder:
         self.rows = 0
         self.started_utc = ''
         self.sample_intervals = set()
+        self.atmosphere_sources = set()
+        self.dataset_times = set()
         self.event_stream = None
         self.event_path = None
         self.event_count = 0
@@ -87,6 +89,8 @@ class StreamingRecorder:
         self.writer.writeheader()
         self.rows = 0
         self.sample_intervals.clear()
+        self.atmosphere_sources.clear()
+        self.dataset_times.clear()
         self.event_count = 0
         self.reason_totals.clear()
         self.quality_status = 'VALID'
@@ -128,6 +132,12 @@ class StreamingRecorder:
         if sample_interval is not None:
             self.sample_intervals.add(sample_interval)
         for idx, acid in enumerate(bs.traf.id):
+            source = bs.traf.atmos_source[idx]
+            dataset_time = bs.traf.atmos_dataset_time[idx]
+            if source:
+                self.atmosphere_sources.add(source)
+            if dataset_time:
+                self.dataset_times.add(dataset_time)
             def perf_value(name):
                 value = getattr(perf, name, None)
                 return '' if value is None or idx >= len(value) else _finite(value[idx])
@@ -170,9 +180,9 @@ class StreamingRecorder:
                 'track_deg': bs.traf.trk[idx], 'temperature_k': bs.traf.Temp[idx],
                 'pressure_pa': bs.traf.p[idx], 'density_kg_m3': bs.traf.rho[idx],
                 'wind_north_m_s': bs.traf.windnorth[idx], 'wind_east_m_s': bs.traf.windeast[idx],
-                'atmosphere_source': bs.traf.atmos_source[idx],
+                'atmosphere_source': source,
                 'atmosphere_valid': bool(bs.traf.atmos_valid[idx]),
-                'dataset_time': bs.traf.atmos_dataset_time[idx],
+                'dataset_time': dataset_time,
                 'fallback_reason': bs.traf.atmos_fallback_reason[idx],
                 'performance_model': model_name,
                 'performance_dataset_version': getattr(perf_impl, 'version', ''),
@@ -229,8 +239,8 @@ class StreamingRecorder:
                 versions[package] = importlib.metadata.version(package)
             except importlib.metadata.PackageNotFoundError:
                 versions[package] = None
-        sources = sorted(set(getattr(bs.traf, 'atmos_source', [])))
-        dataset_times = sorted(set(filter(None, getattr(bs.traf, 'atmos_dataset_time', []))))
+        sources = sorted(self.atmosphere_sources)
+        dataset_times = sorted(self.dataset_times)
         perf = getattr(bs.traf, 'perf', None)
         try:
             from bluesky.core.entity import getproxied
@@ -285,6 +295,8 @@ class StreamingRecorder:
         self.path = None
         self.rows = 0
         self.sample_intervals.clear()
+        self.atmosphere_sources.clear()
+        self.dataset_times.clear()
         self.event_path = None
         self.event_count = 0
         self.reason_totals.clear()

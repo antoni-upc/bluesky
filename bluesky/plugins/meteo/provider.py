@@ -7,9 +7,13 @@ from bluesky import stack
 from bluesky.traffic.windsim import WindSim
 from bluesky.traffic.atmosphere import AtmosphereSample
 from bluesky.traffic.windfield import Windfield
+from bluesky.tools.aero import R
 
 
-bs.settings.set_variable_defaults(meteo_strict=False)
+bs.settings.set_variable_defaults(
+    meteo_strict=False,
+    meteo_time_autoupdate=True,
+    meteo_time_interpolation=False)
 
 
 def previous_slot(utc, hours=3):
@@ -24,10 +28,14 @@ class MeteorologyProvider(WindSim):
     def __init__(self):
         super().__init__()
         self.cube = None
+        self.next_cube = None
+        self.current_slot = None
         self.active_slot = None
         self.bounds = None
         self.strict = bool(bs.settings.meteo_strict)
         self.failure_counts = {}
+        self.unavailable_reason = ''
+        self.expired_slot = ''
 
     @property
     def winddim(self):
@@ -38,16 +46,23 @@ class MeteorologyProvider(WindSim):
         # Windfield initialization writes this value; cube presence is authoritative.
         pass
 
-    def clear(self):
+    def clear(self, reason=''):
         Windfield.clear(self)
         self.cube = None
+        self.next_cube = None
+        self.current_slot = None
         self.active_slot = None
+        self.unavailable_reason = reason
         if getattr(bs, 'traf', None) is not None:
             bs.traf.update_atmosphere()
 
-    def set_cube(self, cube, bounds=None):
+    def set_cube(self, cube, bounds=None, current_slot=None, next_cube=None):
         self.cube = cube
-        self.active_slot = cube.dataset_time
+        self.next_cube = next_cube
+        self.current_slot = current_slot
+        self.unavailable_reason = ''
+        self.expired_slot = ''
+        self.active_slot = current_slot.isoformat() if current_slot is not None else cube.dataset_time
         self.bounds = bounds
         if getattr(bs, 'traf', None) is not None:
             bs.traf.update_atmosphere()
@@ -63,11 +78,51 @@ class MeteorologyProvider(WindSim):
             ((wrapped >= west) | (wrapped <= east))
         return (np.asarray(lat) >= lat_lo) & (np.asarray(lat) <= lat_hi) & lon_ok
 
-    def getdata(self, lat, lon, alt=0.0):
+    def _ensure_time_slot(self, utc):
+        """Select the dataset whose validity interval contains simulation UTC.
+
+        A file stamped T is assumed to represent the complete half-open interval
+        [T, T + slot_hours). For ERA5 this is T:00:00 through T:59:59.999...;
+        for GFS it is the corresponding six-hour analysis interval.
+        """
+        if utc is None or getattr(self, 'request_bounds', None) is None:
+            return
+        slot = self.desired_slot(utc)
+        if slot.isoformat() == self.active_slot:
+            return
+        if bs.settings.meteo_time_autoupdate:
+            self.advance_time_slot(
+                slot, lambda: self.load(*self.request_bounds, slot=slot))
+        else:
+            self.expire_time_slot(slot)
+
+    def _interpolate(self, lat, lon, alt, utc):
+        self._ensure_time_slot(utc)
         if self.cube is None:
+            return None
+        north, east, sample = self.cube.interpolate(lat, lon, alt)
+        if not bs.settings.meteo_time_interpolation or self.next_cube is None:
+            return north, east, sample
+        next_north, next_east, next_sample = self.next_cube.interpolate(lat, lon, alt)
+        elapsed = max(0.0, (utc - self.current_slot).total_seconds())
+        weight = min(1.0, elapsed / (self.slot_hours * 3600.0))
+        blend = lambda left, right: (1.0 - weight) * left + weight * right
+        valid = sample.valid & next_sample.valid
+        temperature = blend(sample.temperature, next_sample.temperature)
+        pressure = blend(sample.pressure, next_sample.pressure)
+        interpolated = AtmosphereSample(
+            temperature, pressure, pressure / (R * temperature),
+            valid, self.source,
+            f'{sample.dataset_time}->{next_sample.dataset_time}@{weight:.6f}',
+            '' if np.all(valid) else 'OUTSIDE_DOMAIN')
+        return blend(north, next_north), blend(east, next_east), interpolated
+
+    def getdata(self, lat, lon, alt=0.0):
+        result = self._interpolate(lat, lon, alt, getattr(bs.sim, 'utc', None))
+        if result is None:
             shape = np.broadcast(lat, lon, alt).shape
             return np.zeros(shape), np.zeros(shape)
-        north, east, _ = self.cube.interpolate(lat, lon, alt)
+        north, east, _ = result
         inside = self._inside_bounds(lat, lon)
         # Out-of-domain wind is an explicit zero only because Traffic also
         # receives an invalid atmosphere flag for the same point.
@@ -75,9 +130,16 @@ class MeteorologyProvider(WindSim):
             np.where(inside, np.nan_to_num(east), 0.0)
 
     def get_atmosphere(self, lat, lon, alt, utc):
-        if self.cube is None:
+        result = self._interpolate(lat, lon, alt, utc)
+        if result is None:
+            if self.unavailable_reason:
+                shape = np.broadcast(lat, lon, alt).shape
+                invalid = np.full(shape, np.nan)
+                return AtmosphereSample(invalid, invalid.copy(), invalid.copy(),
+                                        np.zeros(shape, dtype=bool), self.source, '',
+                                        self.unavailable_reason)
             return None
-        _, _, sample = self.cube.interpolate(lat, lon, alt)
+        _, _, sample = result
         valid = sample.valid & self._inside_bounds(lat, lon)
         sample = AtmosphereSample(sample.temperature, sample.pressure, sample.density,
                                   valid, sample.source, sample.dataset_time,
@@ -92,6 +154,74 @@ class MeteorologyProvider(WindSim):
         if self.strict and not np.all(sample.valid):
             raise RuntimeError(f'{self.source} requested outside its validated domain')
         return sample
+
+    def expire_time_slot(self, requested_slot):
+        if self.expired_slot == requested_slot.isoformat():
+            return
+        reason = f'TIME_SLOT_EXPIRED:{self.active_slot}->{requested_slot.isoformat()}'
+        stack.echo(f'{self.source}: automatic time update disabled; {reason}')
+        self.clear(reason)
+        self.expired_slot = requested_slot.isoformat()
+        if self.strict:
+            raise RuntimeError(f'{self.source} has no valid weather for the new time slot')
+
+    def advance_time_slot(self, requested_slot, loader):
+        """Load a new slot without ever retaining stale weather on failure."""
+        try:
+            return loader()
+        except Exception as exc:
+            reason = f'TIME_SLOT_UNAVAILABLE:{requested_slot.isoformat()}:{exc}'
+            stack.echo(f'{self.source}: next time slot unavailable; using ISA: {reason}')
+            self.clear(reason)
+            if self.strict:
+                raise RuntimeError(
+                    f'{self.source} has no valid weather for {requested_slot.isoformat()}') from exc
+            return False, reason
+
+    @stack.command(name='METEOCONFIG')
+    def configure(self, option: str = '', value: str = ''):
+        """Inspect or set runtime meteorology policy for reproducible scenarios."""
+        if not option:
+            return True, (
+                f'Meteorology: strict={self.strict} '
+                f'time_autoupdate={bool(bs.settings.meteo_time_autoupdate)} '
+                f'time_interpolation={bool(bs.settings.meteo_time_interpolation)}')
+        option = option.upper()
+        values = {'ON': True, 'TRUE': True, '1': True,
+                  'OFF': False, 'FALSE': False, '0': False}
+        if value.upper() not in values:
+            return False, 'METEOCONFIG value must be ON or OFF'
+        enabled = values[value.upper()]
+        if option == 'STRICT':
+            self.strict = enabled
+        elif option == 'TIMEUPDATE':
+            bs.settings.meteo_time_autoupdate = enabled
+        elif option == 'INTERPOLATION':
+            bs.settings.meteo_time_interpolation = enabled
+            if not enabled:
+                self.next_cube = None
+        else:
+            return False, 'METEOCONFIG option must be STRICT, TIMEUPDATE, or INTERPOLATION'
+        return self.configure()
+
+    @stack.command(name='METEOSTATUS')
+    def point_status(self, lat: 'lat', lon: 'lon', alt: 'alt'):
+        """Show the loaded weather at one latitude, longitude, and altitude."""
+        result = self._interpolate([lat], [lon], [alt], getattr(bs.sim, 'utc', None))
+        if result is None:
+            return False, f'{self.source}: no active weather dataset'
+        north, east, sample = result
+        inside = bool(self._inside_bounds([lat], [lon])[0])
+        valid = bool(sample.valid[0] and inside)
+        reason = '-' if valid else ('OUTSIDE_REQUESTED_DOMAIN' if not inside else
+                                    sample.fallback_reason or 'OUTSIDE_SOURCE_DOMAIN')
+        return True, (
+            f'{self.source}: lat={lat:.6f} deg lon={lon:.6f} deg '
+            f'alt={alt:.1f} m/{alt / 0.3048:.1f} ft '
+            f'valid={valid} dataset={sample.dataset_time} fallback={reason}\n'
+            f'  wind_north={north[0]:.3f} m/s wind_east={east[0]:.3f} m/s '
+            f'T={sample.temperature[0]:.3f} K p={sample.pressure[0]:.3f} Pa '
+            f'rho={sample.density[0]:.6f} kg/m3')
 
     def desired_slot(self, utc):
         return previous_slot(utc, self.slot_hours)

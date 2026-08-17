@@ -507,6 +507,11 @@ class Traffic(Entity):
         self.pressure_alt[:] = pressure_altitude(self.p)
         self.dtemp[:] = self.Temp - isa_temperature
         self._update_airdata()
+        if sample is not None:
+            # Keep recorded/applied wind and ground state synchronized with the
+            # same current position used for the atmosphere sample. The normal
+            # pre-position update already accounts for propulsion work.
+            self.update_groundspeed(accumulate_work=False)
 
     def update_airspeed(self, speed_handled=None, vertical_handled=None):
         speed_handled = (np.zeros(self.ntraf, dtype=bool)
@@ -569,7 +574,7 @@ class Traffic(Entity):
         else:
             self.M, self.cas = isa_mach, isa_cas
 
-    def update_groundspeed(self):
+    def update_groundspeed(self, accumulate_work=True):
         # Compute ground speed and track from heading, airspeed and wind
         if self.wind.winddim == 0:  # no wind
             self.gsnorth  = self.tas * np.cos(np.radians(self.hdg))
@@ -593,7 +598,9 @@ class Traffic(Entity):
             self.trk = np.logical_not(applywind)*self.hdg + \
                        applywind*np.degrees(np.arctan2(self.gseast, self.gsnorth)) % 360.
 
-        self.work += (self.perf.thrust * bs.sim.simdt * np.sqrt(self.gs * self.gs + self.vs * self.vs))
+        if accumulate_work:
+            self.work += (self.perf.thrust * bs.sim.simdt *
+                          np.sqrt(self.gs * self.gs + self.vs * self.vs))
 
 
     def update_pos(self):

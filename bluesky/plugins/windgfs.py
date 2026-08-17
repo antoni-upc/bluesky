@@ -1,13 +1,12 @@
 """GFS atmosphere/wind provider backed by shared validated interpolation."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 
 import bluesky as bs
 from bluesky import stack
-from bluesky.core import timed_function
 from bluesky.plugins.meteo import MeteorologyProvider, WeatherCube
 from bluesky.plugins.meteo.download import atomic_download
 
@@ -41,7 +40,9 @@ class WindGFS(MeteorologyProvider):
     def __init__(self):
         super().__init__()
         configured = bs.settings.gfs_cache_path
-        self.cache = Path(configured).expanduser() if configured else bs.resource('grib')
+        cache_root = Path(bs.resource('cache').as_posix())
+        self.cache = (Path(configured).expanduser() if configured else
+                      cache_root / 'weather' / 'gfs')
         self.cache.mkdir(parents=True, exist_ok=True)
         probe = self.cache / '.write-capability'
         probe.write_text('ok', encoding='ascii')
@@ -79,8 +80,14 @@ class WindGFS(MeteorologyProvider):
                 self._validate(target)
                 return target
             except (OSError, ValueError, RuntimeError):
+                stack.echo(f'GFS: cached file is invalid; removing {target}')
                 target.unlink()
-        return atomic_download(requests.Session(), url, target, self._validate)
+        stack.echo(
+            f'GFS: not in cache; downloading slot={slot.isoformat()} '
+            f'source={bs.settings.windgfs_source} url={url} to {target}')
+        result = atomic_download(requests.Session(), url, target, self._validate)
+        stack.echo(f'GFS: download validated and cached at {target}')
+        return result
 
     def _read(self, path, slot):
         import pygrib
@@ -104,8 +111,13 @@ class WindGFS(MeteorologyProvider):
         slot = self.desired_slot(slot or bs.sim.utc)
         cube = self._read(self._fetch(slot), slot)
         self.request_bounds = (lat0, lon0, lat1, lon1)
-        self.set_cube(cube, self.request_bounds)
-        return True, f'GFS {slot.isoformat()} loaded and validated'
+        next_cube = None
+        if bs.settings.meteo_time_interpolation:
+            next_slot = slot + timedelta(hours=self.slot_hours)
+            next_cube = self._read(self._fetch(next_slot), next_slot)
+        self.set_cube(cube, self.request_bounds, slot, next_cube)
+        mode = ' with temporal interpolation' if next_cube is not None else ''
+        return True, f'GFS {slot.isoformat()} loaded and validated{mode}'
 
     @stack.command(name='WINDGFS')
     def load_command(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon',
@@ -122,9 +134,3 @@ class WindGFS(MeteorologyProvider):
         if slot.hour not in (0, 6, 12, 18):
             return False, 'Invalid GFS cycle; expected 00, 06, 12, or 18'
         return self.load(lat0, lon0, lat1, lon1, slot=slot)
-
-    @timed_function(name='WINDGFS_update', dt=60)
-    def update(self):
-        slot = self.desired_slot(bs.sim.utc)
-        if self.request_bounds and slot.isoformat() != self.active_slot:
-            self.load(*self.request_bounds, slot=slot)
