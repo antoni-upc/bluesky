@@ -266,6 +266,33 @@ def test_gfs_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
     assert provider._fetch(slot) == target
 
 
+def test_gfs_interpolation_loads_exact_six_hour_successor(monkeypatch):
+    provider = object.__new__(WindGFS)
+    MeteorologyProvider.__init__(provider)
+    provider.request_bounds = None
+    start = datetime(2025, 8, 15, 12, tzinfo=timezone.utc)
+    fetched = []
+
+    def fetch(slot):
+        fetched.append(slot)
+        return slot
+
+    def read(path, slot):
+        result = cube()
+        result.source = 'GFS'
+        result.dataset_time = slot.isoformat()
+        return result
+
+    monkeypatch.setattr(provider, '_fetch', fetch)
+    monkeypatch.setattr(provider, '_read', read)
+    monkeypatch.setattr('bluesky.settings.meteo_time_interpolation', True)
+    success, _ = provider.load(10.0, 179.0, 11.0, -179.0, slot=start)
+    assert success
+    assert fetched == [start, start + timedelta(hours=6)]
+    assert provider.current_slot == start
+    assert provider.next_cube.dataset_time == (start + timedelta(hours=6)).isoformat()
+
+
 def test_era5_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
     provider = object.__new__(WindECMWF)
     provider.cache = tmp_path
