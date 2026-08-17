@@ -13,7 +13,7 @@ from bluesky.plugins.meteo.download import atomic_download
 
 bs.settings.set_variable_defaults(
     gfs_cache_path='',
-    windgfs_source='NCEI',
+    windgfs_source='AWS',
     windgfs_url='')
 
 GFS_BASE_URLS = {

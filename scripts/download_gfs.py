@@ -13,7 +13,7 @@ def parser():
     command = argparse.ArgumentParser(description=__doc__)
     command.add_argument('date', help='analysis date in YYYYMMDD form')
     command.add_argument('cycle', choices=('00', '06', '12', '18'))
-    command.add_argument('--source', choices=('NCEI', 'AWS'), default='NCEI')
+    command.add_argument('--source', choices=('NCEI', 'AWS'), default='AWS')
     command.add_argument('--base-url', default='', help='optional source URL override')
     command.add_argument('--cache', type=Path,
                          default=Path('cache/weather/gfs'),
