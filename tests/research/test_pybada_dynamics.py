@@ -10,15 +10,19 @@ from bluesky.traffic.traffic import Traffic
 
 
 class FakeModel:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, limited=False):
         self.fail = fail
+        self.limited = limited
 
     def bluesky_energy(self, **state):
         if self.fail:
             raise ValueError('injected thrust failure')
         return dict(thrust=12000.0, rated_thrust=14000.0,
                     drag=10000.0, fuel_flow=0.5,
-                    esf=0.5, rocd=5.0, acceleration=0.2)
+                    esf=0.5, rocd=5.0, acceleration=0.2,
+                    idle_thrust=4000.0, maximum_thrust=11000.0,
+                    thrust_limited=self.limited,
+                    limitation_reason='ABOVE_MAXIMUM_THRUST' if self.limited else '')
 
 
 def performance(model, strict=False):
@@ -87,12 +91,31 @@ def test_interactive_failure_is_missing_and_native_fallback(monkeypatch):
     assert perf.invalid[0] and perf.failure_count[0] == 1
 
 
-def test_strict_failure_aborts_with_context(monkeypatch):
+def test_strict_failure_holds_without_terminating_process(monkeypatch):
     traf = traffic()
     monkeypatch.setattr(bs, 'traf', traf)
+    held = []
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(hold=lambda: held.append(True)))
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
     perf = performance(FakeModel(fail=True), strict=True)
-    with pytest.raises(RuntimeError, match='TST1/A320'):
-        perf.update_dynamics(traf, 1.0)
+    speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
+    assert held == [True]
+    assert not speed_handled.any() and not vertical_handled.any()
+    assert perf.invalid[0] and perf.failure_count[0] == 1
+    assert np.isnan(perf.thrust[0]) and np.isnan(perf.drag[0])
+
+
+def test_strict_thrust_limit_holds_without_terminating_process(monkeypatch):
+    traf = traffic()
+    monkeypatch.setattr(bs, 'traf', traf)
+    held = []
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(hold=lambda: held.append(True)))
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    perf = performance(FakeModel(limited=True), strict=True)
+    speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
+    assert held == [True]
+    assert not speed_handled.any() and not vertical_handled.any()
+    assert perf.invalid[0] and perf.failure_count[0] == 1
 
 
 def test_timestep_convergence_for_constant_reference(monkeypatch):
