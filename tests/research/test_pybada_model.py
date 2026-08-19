@@ -323,3 +323,26 @@ def test_packaged_dummy_uses_equilibrium_cruise_and_rated_phase_thrust(
     descent = EnergyResult(**model.bluesky_energy(phase='Descent', **state)).validate()
     assert descent.thrust == pytest.approx(descent.rated_thrust)
     assert descent.rocd < 0.0
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+def test_packaged_dummy_cruise_adapted_thrust_matches_requested_acceleration(
+        family, dummy_name):
+    pybada = pytest.importorskip('pyBADA')
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    mass = 64791.0
+    requested = 0.1
+    result = EnergyResult(**model.bluesky_energy(
+        h=3048.0, tas=148.526, mass=mass, temperature=268.338,
+        pressure=69676.8, phase='Cruise', schedule='ICAO',
+        requested_acceleration=requested)).validate()
+    assert (result.thrust - result.drag) / mass == pytest.approx(requested)
+    assert result.requested_acceleration == pytest.approx(requested)
+    assert result.applied_acceleration == pytest.approx(requested)
+    assert result.fuel_flow >= 0.0
+    assert np.isfinite(result.idle_thrust)
+    assert np.isfinite(result.maximum_thrust)
