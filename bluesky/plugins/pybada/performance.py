@@ -730,7 +730,14 @@ class PyBadaTEM(PerfBase):
                     self.thrust_limited[idx] = False
                     self.thrust_limitation_reason[idx] = ''
                 if self.strict:
-                    raise RuntimeError(f'PYBADATEM strict evaluation failure: {exc}') from exc
+                    message = (f'PYBADATEM strict evaluation failure: {exc}; simulation held. '
+                               'If recording, use RECORDRESEARCH STOP to finalize partial evidence')
+                    print(message)
+                    from bluesky import stack
+                    stack.echo(message)
+                    bs.sim.hold()
+                    # A strict failure stops propagation without terminating the BlueSky process.
+                    break
         # BlueSky retains horizontal speed ownership so SPD commands and
         # waypoint constraints use its native selected-speed capture logic.
         # TEM owns only vertical speed; pyBADA performance and fuel evaluation
