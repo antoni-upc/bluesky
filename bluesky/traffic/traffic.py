@@ -26,6 +26,7 @@ from .turbulence import Turbulence
 from .trafficgroups import TrafficGroups
 from .performance.perfbase import PerfBase
 from .atmosphere import mach_to_cas, pressure_altitude, tas_to_mach
+from .dynamics import SpeedStepRequest
 
 # Register settings defaults
 bs.settings.set_variable_defaults(performance_model='openap', asas_dt=1.0)
@@ -451,6 +452,11 @@ class Traffic(Entity):
                              self.aporasas.alt, self.ax)
 
         #---------- Kinematics --------------------------------
+        # Resolve the native speed step once, before the performance hook.
+        # Replaceable models can inspect the current-tick request without
+        # relying on the previous tick's ``self.ax``. Native propagation below
+        # consumes the exact same request, preserving target-capture behavior.
+        self.speed_request = self.native_speed_request()
         handled = self.perf.update_dynamics(self, bs.sim.simdt)
         if isinstance(handled, tuple) and len(handled) == 2:
             speed_handled = np.asarray(handled[0], dtype=bool)
@@ -460,7 +466,7 @@ class Traffic(Entity):
         if (speed_handled.shape != (self.ntraf,) or
                 vertical_handled.shape != (self.ntraf,)):
             raise ValueError('Performance dynamics hook returned an invalid mask shape')
-        self.update_airspeed(speed_handled, vertical_handled)
+        self.update_airspeed(speed_handled, vertical_handled, self.speed_request)
         self.update_groundspeed()
         self.update_pos()
         if self.perf.requires_synced_direct_state:
@@ -513,20 +519,38 @@ class Traffic(Entity):
             # pre-position update already accounts for propulsion work.
             self.update_groundspeed(accumulate_work=False)
 
-    def update_airspeed(self, speed_handled=None, vertical_handled=None):
+    def native_speed_request(self, dt=None):
+        """Return the side-effect-free native selected-speed step for this tick."""
+        dt = bs.sim.simdt if dt is None else float(dt)
+        delta_spd = self.aporasas.tas - self.tas
+        maximum_step = np.abs(dt * self.perf.axmax)
+        capture = np.abs(delta_spd) <= maximum_step
+        acceleration = np.where(
+            capture, np.divide(delta_spd, dt, out=np.zeros_like(delta_spd), where=dt != 0.0),
+            np.sign(delta_spd) * self.perf.axmax)
+        next_tas = np.where(capture, self.aporasas.tas,
+                            self.tas + acceleration * dt)
+        return SpeedStepRequest(
+            target_tas=np.asarray(self.aporasas.tas, dtype=float).copy(),
+            requested_acceleration=np.asarray(acceleration, dtype=float),
+            capture=np.asarray(capture, dtype=bool),
+            next_tas=np.asarray(next_tas, dtype=float)).validate(self.ntraf)
+
+    def update_airspeed(self, speed_handled=None, vertical_handled=None,
+                        speed_request=None):
         speed_handled = (np.zeros(self.ntraf, dtype=bool)
                          if speed_handled is None else speed_handled)
         vertical_handled = (speed_handled if vertical_handled is None
                             else vertical_handled)
         native_speed = ~speed_handled
         native_vertical = ~vertical_handled
-        # Compute horizontal acceleration
-        delta_spd = self.aporasas.tas - self.tas
-        need_ax = np.abs(delta_spd) > np.abs(bs.sim.simdt * self.perf.axmax)
-        native_ax = need_ax * np.sign(delta_spd) * self.perf.axmax
+        request = (Traffic.native_speed_request(self)
+                   if speed_request is None else speed_request)
+        request.validate(self.ntraf)
+        native_ax = request.requested_acceleration
         self.ax = np.where(native_speed, native_ax, self.ax)
         # Update velocities
-        native_tas = np.where(need_ax, self.tas + native_ax * bs.sim.simdt, self.aporasas.tas)
+        native_tas = request.next_tas
         self.tas = np.where(native_speed, native_tas, self.tas)
         self._update_airdata()
 

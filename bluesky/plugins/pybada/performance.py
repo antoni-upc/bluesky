@@ -44,6 +44,13 @@ class PyBadaTEM(PerfBase):
             self.dyn_mode = np.array([], dtype=int)
             self.bada_configuration_mode = np.array([], dtype='U8')
             self.rated_thrust = np.array([])
+            self.idle_thrust = np.array([])
+            self.maximum_thrust = np.array([])
+            self.target_tas = np.array([])
+            self.requested_acceleration = np.array([])
+            self.applied_acceleration = np.array([])
+            self.thrust_limited = np.array([], dtype=bool)
+            self.thrust_limitation_reason = np.array([], dtype='U32')
             self.mass_override = np.array([], dtype=bool)
             self.invalid = np.array([], dtype=bool)
             self.failure_count = np.array([], dtype=int)
@@ -598,6 +605,9 @@ class PyBadaTEM(PerfBase):
         ac = self.models[idx]
         h, tas, mass = bs.traf.pressure_alt[idx], bs.traf.tas[idx], self.mass[idx]
         phase = self._phase(idx)
+        speed_request = getattr(bs.traf, 'speed_request', None)
+        requested_acceleration = (0.0 if speed_request is None else
+                                  float(speed_request.requested_acceleration[idx]))
         try:
             # Adapter-friendly hook used by dependency-free fakes and future
             # pyBADA-version-specific adapters.
@@ -606,7 +616,8 @@ class PyBadaTEM(PerfBase):
                     self._configuration_mode(idx, configuration_mode),
                     h=h, tas=tas, mass=mass,
                     temperature=bs.traf.Temp[idx], pressure=bs.traf.p[idx], phase=phase,
-                    schedule=self.schedule)
+                    schedule=self.schedule,
+                    requested_acceleration=requested_acceleration)
                 return EnergyResult(**values).validate()
             raise EvaluationError('Installed pyBADA model needs a version-specific bluesky_energy adapter')
         except Exception as exc:
@@ -639,6 +650,21 @@ class PyBadaTEM(PerfBase):
                 result = self._evaluate(idx)
                 self.thrust[idx], self.rated_thrust[idx], self.drag[idx], self.fuelflow[idx] = \
                     result.thrust, result.rated_thrust, result.drag, result.fuel_flow
+                if hasattr(self, 'requested_acceleration'):
+                    self.idle_thrust[idx] = result.idle_thrust
+                    self.maximum_thrust[idx] = result.maximum_thrust
+                    self.requested_acceleration[idx] = result.requested_acceleration
+                    self.applied_acceleration[idx] = result.applied_acceleration
+                    self.thrust_limited[idx] = result.thrust_limited
+                    self.thrust_limitation_reason[idx] = result.limitation_reason
+                    speed_request = getattr(traffic, 'speed_request', None)
+                    self.target_tas[idx] = (traffic.aporasas.tas[idx] if speed_request is None
+                                            else speed_request.target_tas[idx])
+                if result.thrust_limited and self.strict:
+                    raise EvaluationError(
+                        f'horizontal request infeasible: {result.limitation_reason}; '
+                        f'required={result.thrust:.3f} N, bounds='
+                        f'{result.idle_thrust:.3f}..{result.maximum_thrust:.3f} N')
                 candidate_vs = None
                 if self.dyn_mode[idx] == 1:
                     delta_alt = traffic.aporasas.alt[idx] - traffic.alt[idx]
@@ -698,6 +724,11 @@ class PyBadaTEM(PerfBase):
                 self.invalid[idx] = True
                 self.failure_count[idx] += 1
                 self.thrust[idx] = self.rated_thrust[idx] = self.drag[idx] = self.fuelflow[idx] = np.nan
+                if hasattr(self, 'requested_acceleration'):
+                    self.idle_thrust[idx] = self.maximum_thrust[idx] = np.nan
+                    self.requested_acceleration[idx] = self.applied_acceleration[idx] = np.nan
+                    self.thrust_limited[idx] = False
+                    self.thrust_limitation_reason[idx] = ''
                 if self.strict:
                     raise RuntimeError(f'PYBADATEM strict evaluation failure: {exc}') from exc
         # BlueSky retains horizontal speed ownership so SPD commands and
