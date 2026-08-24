@@ -55,6 +55,10 @@ class EnergyResult:
     applied_acceleration: float = 0.0
     thrust_limited: bool = False
     limitation_reason: str = ''
+    required_thrust: float = np.nan
+    requested_vertical_rate: float = 0.0
+    applied_vertical_rate: float = 0.0
+    allocation_policy: str = 'HORIZONTAL_ADAPTED'
 
     def validate(self):
         values = np.asarray((self.thrust, self.rated_thrust, self.drag,
@@ -96,7 +100,7 @@ class BadaModelAdapter:
 
     def bluesky_energy(self, *, h, tas, mass, temperature, pressure, phase, schedule,
                        configuration_mode=BadaConfigurationMode.PYBADA,
-                       requested_acceleration=0.0):
+                       requested_acceleration=0.0, requested_vertical_rate=0.0):
         ac = self.model
         atm, dtemp, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
         bada_phase = {'Climb': 'cl', 'Descent': 'des'}.get(phase)
@@ -117,18 +121,16 @@ class BadaModelAdapter:
             maximum_thrust = ac.Thrust(h=h, deltaTemp=dtemp, rating='MCMB',
                                        v=tas, config=config)
             if phase == 'Cruise' and requested_acceleration:
-                thrust = ac.TAdapted(h=h, deltaTemp=dtemp, ROCD=0.0, mass=mass,
-                                     v=tas, acc=requested_acceleration, Drag=drag)
-                fuel = max(ac.ff(h=h, v=tas, T=thrust, config=config,
-                                 flightPhase=phase, adapted=True), ac.ffMin(h=h))
+                required_thrust = ac.TAdapted(
+                    h=h, deltaTemp=dtemp, ROCD=0.0, mass=mass,
+                    v=tas, acc=requested_acceleration, Drag=drag)
             else:
-                thrust = drag if phase == 'Cruise' else rated_thrust
-                fuel = max(ac.ff(h=h, v=tas, T=thrust, config=config,
-                                 flightPhase=phase), ac.ffMin(h=h))
+                required_thrust = drag if phase == 'Cruise' else rated_thrust
             airplane = import_module('pyBADA.aircraft').Airplane
             esf = airplane.esf(flightEvolution=evolution, h=h, M=mach, deltaTemp=dtemp) \
                 if bada_phase else 1.0
-            rocd = ac.ROCD(thrust, drag, tas, mass, esf, h, dtemp) if bada_phase else 0.0
+            rocd = ac.ROCD(required_thrust, drag, tas, mass, esf, h, dtemp) \
+                if bada_phase else 0.0
         else:
             cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
             config = self._configuration(
@@ -145,24 +147,30 @@ class BadaModelAdapter:
                 delta=delta, theta=theta, M=mach, deltaTemp=dtemp, rating='LIDL')
             maximum_thrust = ac.flightEnvelope.Thrust(
                 delta=delta, theta=theta, M=mach, deltaTemp=dtemp, rating='MCMB')
-            thrust = (drag + mass * requested_acceleration
-                      if phase == 'Cruise' and requested_acceleration else
-                      (drag if phase == 'Cruise' else rated_thrust))
-            fuel_args = {'M': mach, 'rating': rating}
-            if phase == 'Cruise':
-                fuel_args = {'M': mach, 'CT': thrust / (delta * ac.WREF)}
-            fuel = ac.flightEnvelope.ff(delta=delta, theta=theta,
-                                         deltaTemp=dtemp, **fuel_args)
+            required_thrust = (drag + mass * requested_acceleration
+                               if phase == 'Cruise' and requested_acceleration else
+                               (drag if phase == 'Cruise' else rated_thrust))
             esf = ac.esf(flightEvolution=evolution, h=h, M=mach, deltaTemp=dtemp) \
                 if bada_phase else 1.0
-            rocd = ac.ROCD(T=thrust, D=drag, v=tas, mass=mass, ESF=esf,
+            rocd = ac.ROCD(T=required_thrust, D=drag, v=tas, mass=mass, ESF=esf,
                            h=h, deltaTemp=dtemp) if bada_phase else 0.0
+        lower, upper = sorted((float(idle_thrust), float(maximum_thrust)))
+        limited = bool(required_thrust < lower or required_thrust > upper)
+        reason = ('BELOW_IDLE_THRUST' if required_thrust < lower else
+                  ('ABOVE_MAXIMUM_THRUST' if required_thrust > upper else ''))
+        thrust = float(np.clip(required_thrust, lower, upper))
+        if self.family == '3':
+            fuel = max(ac.ff(h=h, v=tas, T=thrust, config=config,
+                             flightPhase=phase,
+                             adapted=phase == 'Cruise' and bool(requested_acceleration)),
+                       ac.ffMin(h=h))
+        else:
+            fuel_args = ({'M': mach, 'CT': thrust / (delta * ac.WREF)}
+                         if phase == 'Cruise' else {'M': mach, 'rating': rating})
+            fuel = ac.flightEnvelope.ff(delta=delta, theta=theta,
+                                         deltaTemp=dtemp, **fuel_args)
         acceleration = ((thrust - drag) / mass if phase == 'Cruise' else
                         (thrust - drag) * (1.0 - esf) / mass)
-        lower, upper = sorted((float(idle_thrust), float(maximum_thrust)))
-        limited = bool(thrust < lower or thrust > upper)
-        reason = ('BELOW_IDLE_THRUST' if thrust < lower else
-                  ('ABOVE_MAXIMUM_THRUST' if thrust > upper else ''))
         if abs(rocd) > 100.0 or abs(acceleration) > 50.0:
             raise EvaluationError(f'Unbounded TEM output: ROCD={rocd}, acceleration={acceleration}')
         return dict(thrust=float(thrust), rated_thrust=float(rated_thrust),
@@ -171,7 +179,11 @@ class BadaModelAdapter:
                     idle_thrust=float(idle_thrust), maximum_thrust=float(maximum_thrust),
                     requested_acceleration=float(requested_acceleration),
                     applied_acceleration=float(acceleration), thrust_limited=limited,
-                    limitation_reason=reason)
+                    limitation_reason=reason, required_thrust=float(required_thrust),
+                    requested_vertical_rate=float(requested_vertical_rate),
+                    applied_vertical_rate=float(rocd),
+                    allocation_policy=('HORIZONTAL_ADAPTED' if phase == 'Cruise'
+                                       else 'BADA_ESF'))
 
     def bluesky_airdata(self, *, h, tas, temperature):
         """Convert TAS with the same applied-atmosphere convention as TEM."""

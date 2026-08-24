@@ -547,11 +547,16 @@ class Traffic(Entity):
         request = (Traffic.native_speed_request(self)
                    if speed_request is None else speed_request)
         request.validate(self.ntraf)
+        result = getattr(self, 'speed_result', None)
+        if result is not None:
+            result.validate(self.ntraf)
         native_ax = request.requested_acceleration
-        self.ax = np.where(native_speed, native_ax, self.ax)
+        handled_ax = self.ax if result is None else result.applied_acceleration
+        self.ax = np.where(native_speed, native_ax, handled_ax)
         # Update velocities
         native_tas = request.next_tas
-        self.tas = np.where(native_speed, native_tas, self.tas)
+        handled_tas = self.tas if result is None else result.next_tas
+        self.tas = np.where(native_speed, native_tas, handled_tas)
         self._update_airdata()
 
         # Turning bank triangle
