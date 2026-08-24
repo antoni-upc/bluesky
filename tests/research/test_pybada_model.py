@@ -346,3 +346,60 @@ def test_packaged_dummy_cruise_adapted_thrust_matches_requested_acceleration(
     assert result.fuel_flow >= 0.0
     assert np.isfinite(result.idle_thrust)
     assert np.isfinite(result.maximum_thrust)
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+@pytest.mark.parametrize(('requested', 'bound_name', 'reason'), [
+    (10.0, 'maximum_thrust', 'ABOVE_MAXIMUM_THRUST'),
+    (-10.0, 'idle_thrust', 'BELOW_IDLE_THRUST'),
+])
+def test_packaged_dummy_cruise_clamps_thrust_and_reports_feasible_acceleration(
+        family, dummy_name, requested, bound_name, reason):
+    pybada = pytest.importorskip('pyBADA')
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    mass = 64791.0
+    result = EnergyResult(**model.bluesky_energy(
+        h=3048.0, tas=148.526, mass=mass, temperature=268.338,
+        pressure=69676.8, phase='Cruise', schedule='ICAO',
+        requested_acceleration=requested)).validate()
+    assert result.thrust_limited
+    assert result.limitation_reason == reason
+    assert result.thrust == pytest.approx(getattr(result, bound_name))
+    assert result.applied_acceleration == pytest.approx(
+        (result.thrust - result.drag) / mass)
+    assert abs(result.applied_acceleration) < abs(requested)
+    assert result.required_thrust != pytest.approx(result.thrust)
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+@pytest.mark.parametrize(('phase', 'requested_vs'), [('Climb', 8.0), ('Descent', -6.0)])
+def test_packaged_dummy_bada_esf_joint_energy_balance(
+        family, dummy_name, phase, requested_vs):
+    pybada = pytest.importorskip('pyBADA')
+    from pyBADA import atmosphere as atm
+    from pyBADA import constants
+
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    state = dict(h=3048.0, tas=148.526, mass=64791.0,
+                 temperature=268.338, pressure=69676.8, schedule='ICAO')
+    result = EnergyResult(**model.bluesky_energy(
+        phase=phase, requested_acceleration=2.0,
+        requested_vertical_rate=requested_vs, **state)).validate()
+    delta_temp = atm.ISATemperatureDeviation(
+        temperature=state['temperature'], pressureAltitude=state['h'])
+    temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
+    specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
+    allocated_power = (state['tas'] * result.applied_acceleration +
+                       constants.g * result.applied_vertical_rate / temperature_factor)
+    assert allocated_power == pytest.approx(specific_power, rel=1e-10, abs=1e-10)
+    assert result.requested_vertical_rate == pytest.approx(requested_vs)
+    assert result.applied_vertical_rate == pytest.approx(result.rocd)
+    assert result.allocation_policy == 'BADA_ESF'

@@ -62,8 +62,8 @@ def _check_metadata(metadata, expected, errors):
 def validate(path, abort=None):
     rows, events, metadata = _load(path)
     errors = []
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     latest = {row.get('acid'): row for row in rows}
 
     if abort:

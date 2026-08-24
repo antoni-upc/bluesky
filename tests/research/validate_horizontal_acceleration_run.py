@@ -25,8 +25,8 @@ def validate(path, family, acceleration_threshold=0.05, balance_tolerance=0.03):
     scenario = f'pybada-acceleration-bada{family}'
     expected_model = f'PYBADATEM-BADA{family}'
     expected_aircraft = {'3': 'A320__', '4': 'A320-232'}[family]
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     if metadata.get('scenario') != scenario:
         errors.append(f'metadata scenario is not {scenario}')
     intervals = metadata.get('sample_intervals_s')

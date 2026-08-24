@@ -21,15 +21,15 @@ def load(path):
 def validate(path, abort=False):
     rows, events, metadata = load(path)
     errors = []
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     required = ('bank_angle_deg', 'load_factor', 'minimum_load_factor',
                 'maximum_load_factor', 'maximum_bank_angle_deg',
                 'envelope_lateral_configuration')
     if not rows:
         errors.append('no samples were recorded')
     elif any(field not in rows[0] for field in required):
-        errors.append('one or more lateral samples-v7 columns are missing')
+        errors.append('one or more lateral samples-v9 columns are missing')
     if abort:
         matching = [event for event in events if event.get('aircraft') == 'LABT'
                     and event.get('action') == 'ABORTED'

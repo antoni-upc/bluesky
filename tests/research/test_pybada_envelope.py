@@ -305,7 +305,8 @@ def test_enforce_recovers_current_vertical_overshoot_as_a_limit(monkeypatch):
 class FakeVerticalEnergyModel(FakeFlightModel):
     def bluesky_energy(self, **state):
         return dict(thrust=12_000.0, rated_thrust=14_000.0, drag=10_000.0,
-                    fuel_flow=0.0, esf=0.5, rocd=20.0, acceleration=0.0)
+                    fuel_flow=0.0, esf=0.5, rocd=20.0, acceleration=0.0,
+                    applied_vertical_rate=20.0, allocation_policy='BADA_ESF')
 
 
 def test_tem_output_is_checked_before_state_mutation(monkeypatch):
@@ -327,14 +328,14 @@ def test_tem_output_is_checked_before_state_mutation(monkeypatch):
     perf.invalid = np.zeros(2, dtype=bool)
     perf.failure_count = np.zeros(2, dtype=int)
     speed_handled, vertical_handled = perf.update_dynamics(bs.traf, 1.0)
-    assert speed_handled.tolist() == [False, False]
+    assert speed_handled.tolist() == [True, True]
     assert vertical_handled.tolist() == [True, True]
     np.testing.assert_allclose(bs.traf.vs, [20.0, 6.0])
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
     assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
     assert perf.envelope_event_count.tolist() == [1, 1]
     speed_handled, vertical_handled = perf.update_dynamics(bs.traf, 1.0)
-    assert speed_handled.tolist() == [False, False]
+    assert speed_handled.tolist() == [True, True]
     assert vertical_handled.tolist() == [True, True]
     assert perf.envelope_event_count.tolist() == [1, 1]
 

@@ -41,8 +41,8 @@ def validate(path, abort=False, direct=False):
         errors.append(f'metadata unavailable: {exc}')
         metadata = {}
 
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('schema is not samples-v9')
     if abort:
         if len(events) != 1:
             errors.append(f'expected 1 ABORT event, got {len(events)}')
@@ -57,7 +57,7 @@ def validate(path, abort=False, direct=False):
         if latest.get('envelope_last_action') != 'ABORTED':
             errors.append('final CSV row does not capture ABORTED action')
         fail(errors)
-        return 'VALID: flight-envelope event and samples-v7 metadata finalized before HOLD'
+        return 'VALID: flight-envelope event and samples-v9 metadata finalized before HOLD'
 
     if direct:
         if len(events) != 3:

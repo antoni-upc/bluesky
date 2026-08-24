@@ -29,8 +29,8 @@ def validate(path):
               path.with_suffix('.events.jsonl').read_text(encoding='utf-8').splitlines()]
     metadata = json.loads(path.with_suffix('.metadata.json').read_text(encoding='utf-8'))
     errors = []
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     if metadata.get('scenario') != 'pybada-route-speed-gui':
         errors.append('metadata scenario is not pybada-route-speed-gui')
     if metadata.get('event_total') != len(events):

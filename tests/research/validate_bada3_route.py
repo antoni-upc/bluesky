@@ -33,8 +33,8 @@ def validate(path):
     events = [json.loads(line) for line in raw.splitlines() if line.strip()]
     metadata = json.loads(path.with_suffix('.metadata.json').read_text(encoding='utf-8'))
     errors = []
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     if metadata.get('scenario') != 'pybada3-route':
         errors.append('metadata scenario is not pybada3-route')
     if metadata.get('event_total') != len(events):

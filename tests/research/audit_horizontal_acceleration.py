@@ -46,7 +46,7 @@ def audit(path, minimum_acceleration=0.05, maximum_vertical_speed=0.05):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('csv', nargs='+', help='samples-v7 CSV evidence')
+    parser.add_argument('csv', nargs='+', help='samples-v9 CSV evidence')
     args = parser.parse_args(argv)
     findings = []
     for value in args.csv:

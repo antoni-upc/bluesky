@@ -27,7 +27,7 @@ def _evidence(tmp_path, force_error=0.0):
             if force_error and acid == 'B4AK' and second == 5:
                 thrust += previous_mass * force_error
             rows.append({
-                'schema_version': 'samples-v7', 'sim_time_s': second,
+                'schema_version': 'samples-v9', 'sim_time_s': second,
                 'acid': acid, 'tas_m_s': tas, 'vertical_speed_m_s': 0.0,
                 'performance_model': 'PYBADATEM-BADA4',
                 'performance_aircraft': 'A320-232', 'performance_dummy': False,
@@ -39,7 +39,7 @@ def _evidence(tmp_path, force_error=0.0):
         writer.writeheader()
         writer.writerows(rows)
     path.with_suffix('.metadata.json').write_text(json.dumps({
-        'schema_version': 'samples-v7',
+        'schema_version': 'samples-v9',
         'scenario': 'pybada-acceleration-bada4',
         'sample_intervals_s': [1.0]}), encoding='utf-8')
     return path

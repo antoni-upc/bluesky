@@ -26,8 +26,8 @@ def validate(path):
         by_acid[row.get('acid')].append(row)
     if set(by_acid) != ACIDS:
         errors.append(f'aircraft are {sorted(by_acid)}, expected {sorted(ACIDS)}')
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
 
     for acid in ACIDS:
         samples = sorted(by_acid[acid], key=lambda row: float(row['sim_time_s']))

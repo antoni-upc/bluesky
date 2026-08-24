@@ -19,8 +19,8 @@ def validate(path):
     raw_events = path.with_suffix('.events.jsonl').read_text(encoding='utf-8')
     events = [json.loads(line) for line in raw_events.splitlines() if line.strip()]
     errors = []
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     if metadata.get('scenario') != 'pybada3-envelope-mass':
         errors.append('metadata scenario is not pybada3-envelope-mass')
     if not raw_events.endswith('\n'):
@@ -130,8 +130,8 @@ def validate_abort(path):
                 errors.append('final mass is not above valid runtime-derived bounds')
         except (KeyError, TypeError, ValueError):
             errors.append('final CSV lacks numeric runtime mass evidence')
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     if metadata.get('scenario') != 'pybada3-envelope-mass-abort':
         errors.append('metadata scenario is not pybada3-envelope-mass-abort')
     if metadata.get('event_total') != 1 or metadata.get('reason_totals') != {'MASS_MAX': 1}:

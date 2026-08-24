@@ -53,8 +53,8 @@ def validate(path, direct=False, abort=False):
     finite(rows, events, metadata, errors)
     if not raw.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     suffix = '-abort' if abort else '-direct' if direct else ''
     scenario = f'pybada3-envelope-vertical{suffix}'
     if metadata.get('scenario') != scenario:

@@ -38,8 +38,8 @@ def validate(path):
         encoding='utf-8').splitlines() if line.strip()]
     errors = []
     expected_acids = {acid for pair, _ in PAIRS.values() for acid in pair}
-    if metadata.get('schema_version') != 'samples-v7':
-        errors.append('metadata schema is not samples-v7')
+    if metadata.get('schema_version') != 'samples-v9':
+        errors.append('metadata schema is not samples-v9')
     if metadata.get('scenario') != 'pybada3-envelope-observe':
         errors.append('metadata scenario is not pybada3-envelope-observe')
     if events or metadata.get('event_total') != 0:

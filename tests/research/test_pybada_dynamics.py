@@ -17,10 +17,15 @@ class FakeModel:
     def bluesky_energy(self, **state):
         if self.fail:
             raise ValueError('injected thrust failure')
+        requested = state.get('requested_acceleration', 0.0)
         return dict(thrust=12000.0, rated_thrust=14000.0,
                     drag=10000.0, fuel_flow=0.5,
-                    esf=0.5, rocd=5.0, acceleration=0.2,
+                    esf=0.5, rocd=5.0, acceleration=requested,
                     idle_thrust=4000.0, maximum_thrust=11000.0,
+                    requested_acceleration=requested,
+                    applied_acceleration=requested,
+                    requested_vertical_rate=state.get('requested_vertical_rate', 0.0),
+                    applied_vertical_rate=5.0, allocation_policy='BADA_ESF',
                     thrust_limited=self.limited,
                     limitation_reason='ABOVE_MAXIMUM_THRUST' if self.limited else '')
 
@@ -37,17 +42,34 @@ def performance(model, strict=False):
     perf.rated_thrust = np.zeros(1)
     perf.drag = np.zeros(1)
     perf.fuelflow = np.zeros(1)
+    perf.required_thrust = np.zeros(1)
+    perf.idle_thrust = np.zeros(1)
+    perf.maximum_thrust = np.zeros(1)
+    perf.target_tas = np.zeros(1)
+    perf.requested_acceleration = np.zeros(1)
+    perf.applied_acceleration = np.zeros(1)
+    perf.thrust_limited = np.zeros(1, dtype=bool)
+    perf.thrust_limitation_reason = np.array([''], dtype='U32')
+    perf.speed_capture = np.zeros(1, dtype=bool)
+    perf.requested_vertical_rate = np.zeros(1)
+    perf.applied_vertical_rate = np.zeros(1)
+    perf.energy_share_factor = np.zeros(1)
+    perf.energy_allocation_policy = np.array([''], dtype='U24')
     perf.invalid = np.zeros(1, dtype=bool)
     perf.failure_count = np.zeros(1, dtype=int)
     return perf
 
 
 def traffic():
-    return SimpleNamespace(
+    traf = SimpleNamespace(
         ntraf=1, id=['TST1'], type=['A320'], pressure_alt=np.array([5000.0]),
         tas=np.array([200.0]), Temp=np.array([260.0]), p=np.array([54000.0]),
         alt=np.array([5000.0]), ax=np.zeros(1), vs=np.zeros(1),
-        aporasas=SimpleNamespace(alt=np.array([6000.0])))
+        aporasas=SimpleNamespace(alt=np.array([6000.0]), tas=np.array([210.0])))
+    traf.speed_request = SpeedStepRequest(
+        target_tas=np.array([210.0]), requested_acceleration=np.array([1.0]),
+        capture=np.array([False]), next_tas=np.array([201.0]))
+    return traf
 
 
 @pytest.mark.smoke
@@ -56,7 +78,7 @@ def test_tem_updates_once_and_depletes_mass(monkeypatch):
     monkeypatch.setattr(bs, 'traf', traf)
     perf = performance(FakeModel())
     speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
-    assert speed_handled.tolist() == [False]
+    assert speed_handled.tolist() == [True]
     assert vertical_handled.tolist() == [True]
     assert traf.tas[0] == pytest.approx(200.0)
     assert traf.vs[0] == pytest.approx(5.0)
@@ -112,10 +134,53 @@ def test_strict_thrust_limit_holds_without_terminating_process(monkeypatch):
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(hold=lambda: held.append(True)))
     monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
     perf = performance(FakeModel(limited=True), strict=True)
+    perf.dyn_mode[0] = 0
     speed_handled, vertical_handled = perf.update_dynamics(traf, 1.0)
     assert held == [True]
     assert not speed_handled.any() and not vertical_handled.any()
     assert perf.invalid[0] and perf.failure_count[0] == 1
+
+
+@pytest.mark.parametrize(('applied', 'target', 'expected'), [
+    (0.25, 210.0, 200.25),
+    (-0.4, 190.0, 199.6),
+])
+def test_tem_applies_thrust_feasible_acceleration(monkeypatch, applied, target, expected):
+    traf = traffic()
+    traf.aporasas.tas[0] = target
+    traf.speed_request = SpeedStepRequest(
+        target_tas=np.array([target]), requested_acceleration=np.array([np.sign(applied) * 2.0]),
+        capture=np.array([False]), next_tas=np.array([200.0 + np.sign(applied) * 2.0]))
+    model = FakeModel(limited=True)
+    model.bluesky_energy = lambda **state: dict(
+        thrust=11000.0 if applied > 0.0 else 4000.0,
+        rated_thrust=14000.0, drag=10000.0, fuel_flow=0.5,
+        esf=0.5, rocd=5.0, acceleration=applied,
+        requested_acceleration=state['requested_acceleration'],
+        applied_acceleration=applied, idle_thrust=4000.0,
+        maximum_thrust=11000.0, thrust_limited=True,
+        limitation_reason=('ABOVE_MAXIMUM_THRUST' if applied > 0.0
+                           else 'BELOW_IDLE_THRUST'))
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(model)
+    speed_handled, _ = perf.update_dynamics(traf, 1.0)
+    assert speed_handled.tolist() == [True]
+    assert traf.speed_result.next_tas[0] == pytest.approx(expected)
+    assert traf.speed_result.applied_acceleration[0] == pytest.approx(applied)
+
+
+def test_tem_capture_does_not_overshoot_target(monkeypatch):
+    traf = traffic()
+    traf.aporasas.tas[0] = 200.1
+    traf.speed_request = SpeedStepRequest(
+        target_tas=np.array([200.1]), requested_acceleration=np.array([0.1]),
+        capture=np.array([True]), next_tas=np.array([200.1]))
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(FakeModel())
+    perf.update_dynamics(traf, 1.0)
+    assert traf.speed_result.capture.tolist() == [True]
+    assert traf.speed_result.next_tas[0] == pytest.approx(200.1)
+    assert traf.speed_result.applied_acceleration[0] == pytest.approx(0.1)
 
 
 def test_timestep_convergence_for_constant_reference(monkeypatch):

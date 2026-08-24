@@ -61,12 +61,12 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert row['performance_dummy'] == 'True'
     assert row['performance_valid'] == 'True'
     assert row['performance_miss_count'] == '2'
-    assert row['schema_version'] == 'samples-v7'
+    assert row['schema_version'] == 'samples-v9'
     for field in ('bank_angle_deg', 'load_factor', 'minimum_load_factor',
                   'maximum_load_factor', 'maximum_bank_angle_deg'):
         assert field in row
     metadata = json.loads(metadata_path.read_text())
-    assert metadata['schema_version'] == 'samples-v7'
+    assert metadata['schema_version'] == 'samples-v9'
     assert metadata['rows'] == 2
     assert metadata['atmosphere_sources'] == ['ERA5', 'SYNTHETIC']
     assert metadata['dataset_times'] == [
