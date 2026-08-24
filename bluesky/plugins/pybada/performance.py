@@ -59,6 +59,8 @@ class PyBadaTEM(PerfBase):
             self.applied_vertical_rate = np.array([])
             self.energy_share_factor = np.array([])
             self.energy_allocation_policy = np.array([], dtype='U24')
+            self.propulsion_bank_angle = np.array([])
+            self.propulsion_load_factor = np.array([])
             self.mass_override = np.array([], dtype=bool)
             self.invalid = np.array([], dtype=bool)
             self.failure_count = np.array([], dtype=int)
@@ -257,6 +259,20 @@ class PyBadaTEM(PerfBase):
         bank = selected if selected > float(bs.traf.eps[idx]) ** 2 else \
             float(bs.traf.ap.bankdef[idx])
         return float(np.degrees(bank))
+
+    def propulsion_turn_state(self, idx):
+        """Return the finite coordinated-turn state requested this tick."""
+        selected = float(bs.traf.ap.turnphi[idx])
+        default = float(bs.traf.ap.bankdef[idx])
+        bank = selected if selected > float(bs.traf.eps[idx]) ** 2 else default
+        delta = (float(bs.traf.aporasas.hdg[idx]) - float(bs.traf.hdg[idx]) + 180.0) % 360.0 - 180.0
+        bank_deg = 0.0 if abs(delta) <= float(bs.traf.eps[idx]) else float(np.degrees(bank))
+        if not np.isfinite(bank_deg) or abs(bank_deg) >= 90.0:
+            raise EvaluationError('current-tick bank angle must be finite and below 90 degrees')
+        load = 1.0 / np.cos(np.radians(abs(bank_deg)))
+        if not np.isfinite(load) or load < 1.0:
+            raise EvaluationError('current-tick load factor is not physical')
+        return bank_deg, float(load)
 
     def lateral_bounds(self, idx, *, model=None, configuration=None,
                        configuration_mode=None):
@@ -624,6 +640,7 @@ class PyBadaTEM(PerfBase):
         requested_vertical_rate = (0.0 if abs(delta_alt) <= 1.0 else
                                    float(np.sign(delta_alt) * abs(selected_vs)))
         try:
+            propulsion_bank_angle, load_factor = self.propulsion_turn_state(idx)
             # Adapter-friendly hook used by dependency-free fakes and future
             # pyBADA-version-specific adapters.
             if hasattr(ac, 'bluesky_energy'):
@@ -633,7 +650,9 @@ class PyBadaTEM(PerfBase):
                     temperature=bs.traf.Temp[idx], pressure=bs.traf.p[idx], phase=phase,
                     schedule=self.schedule,
                     requested_acceleration=requested_acceleration,
-                    requested_vertical_rate=requested_vertical_rate)
+                    requested_vertical_rate=requested_vertical_rate,
+                    propulsion_bank_angle=propulsion_bank_angle,
+                    load_factor=load_factor)
                 return EnergyResult(**values).validate()
             raise EvaluationError('Installed pyBADA model needs a version-specific bluesky_energy adapter')
         except Exception as exc:
@@ -689,6 +708,8 @@ class PyBadaTEM(PerfBase):
                     self.applied_vertical_rate[idx] = result.applied_vertical_rate
                     self.energy_share_factor[idx] = result.esf
                     self.energy_allocation_policy[idx] = result.allocation_policy
+                    self.propulsion_bank_angle[idx] = result.propulsion_bank_angle
+                    self.propulsion_load_factor[idx] = result.load_factor
                     speed_request = getattr(traffic, 'speed_request', None)
                     self.target_tas[idx] = (traffic.aporasas.tas[idx] if speed_request is None
                                             else speed_request.target_tas[idx])
@@ -815,6 +836,8 @@ class PyBadaTEM(PerfBase):
                     self.applied_vertical_rate[idx] = np.nan
                     self.energy_share_factor[idx] = np.nan
                     self.energy_allocation_policy[idx] = ''
+                    self.propulsion_bank_angle[idx] = np.nan
+                    self.propulsion_load_factor[idx] = np.nan
                     if hasattr(self, 'speed_capture'):
                         self.speed_capture[idx] = False
                 if self.strict:

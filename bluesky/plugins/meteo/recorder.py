@@ -14,7 +14,7 @@ import bluesky as bs
 from bluesky import stack
 
 
-SCHEMA_VERSION = 'samples-v9'
+SCHEMA_VERSION = 'samples-v10'
 FIELDS = (
     'schema_version', 'run_id', 'sim_time_s', 'sample_interval_s', 'sim_utc', 'acid', 'actype',
     'lat_deg', 'lon_deg', 'geometric_alt_m', 'pressure_alt_m', 'tas_m_s',
@@ -30,6 +30,7 @@ FIELDS = (
     'thrust_limited', 'thrust_limitation_reason', 'speed_capture',
     'requested_vertical_rate_m_s', 'applied_vertical_rate_m_s',
     'energy_share_factor', 'energy_allocation_policy',
+    'propulsion_bank_angle_deg', 'propulsion_load_factor',
     'envelope_policy', 'envelope_profile', 'envelope_checks',
     'envelope_status', 'envelope_failed_checks', 'envelope_last_action',
     'envelope_last_reason', 'envelope_event_count', 'envelope_violation_count',
@@ -51,6 +52,7 @@ UNITS = {
     'applied_acceleration_m_s2': 'm/s^2',
     'requested_vertical_rate_m_s': 'm/s', 'applied_vertical_rate_m_s': 'm/s',
     'energy_share_factor': '1',
+    'propulsion_bank_angle_deg': 'deg', 'propulsion_load_factor': '1',
     'mass_max_kg': 'kg', 'minimum_cas_m_s': 'm/s', 'maximum_cas_m_s': 'm/s',
     'minimum_mach': '1', 'maximum_mach': '1', 'maximum_altitude_m': 'm',
     'minimum_rocd_m_s': 'm/s', 'maximum_rocd_m_s': 'm/s',
@@ -219,6 +221,8 @@ class StreamingRecorder:
                 'applied_vertical_rate_m_s': perf_value('applied_vertical_rate'),
                 'energy_share_factor': perf_value('energy_share_factor'),
                 'energy_allocation_policy': perf_value('energy_allocation_policy'),
+                'propulsion_bank_angle_deg': perf_value('propulsion_bank_angle'),
+                'propulsion_load_factor': perf_value('propulsion_load_factor'),
                 'envelope_policy': policies[idx] if idx < len(policies) else '',
                 'envelope_profile': profiles[idx] if idx < len(profiles) else '',
                 'envelope_checks': names(checks[idx]) if idx < len(checks) else '',

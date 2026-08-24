@@ -59,12 +59,16 @@ class EnergyResult:
     requested_vertical_rate: float = 0.0
     applied_vertical_rate: float = 0.0
     allocation_policy: str = 'HORIZONTAL_ADAPTED'
+    propulsion_bank_angle: float = 0.0
+    load_factor: float = 1.0
 
     def validate(self):
         values = np.asarray((self.thrust, self.rated_thrust, self.drag,
                              self.fuel_flow, self.esf, self.rocd,
-                             self.acceleration), dtype=float)
-        if not np.all(np.isfinite(values)) or self.fuel_flow < 0.0:
+                             self.acceleration, self.propulsion_bank_angle,
+                             self.load_factor), dtype=float)
+        if (not np.all(np.isfinite(values)) or self.fuel_flow < 0.0 or
+                self.load_factor < 1.0):
             raise EvaluationError(f'Non-physical pyBADA result: {values!r}')
         return self
 
@@ -100,7 +104,19 @@ class BadaModelAdapter:
 
     def bluesky_energy(self, *, h, tas, mass, temperature, pressure, phase, schedule,
                        configuration_mode=BadaConfigurationMode.PYBADA,
-                       requested_acceleration=0.0, requested_vertical_rate=0.0):
+                       requested_acceleration=0.0, requested_vertical_rate=0.0,
+                       propulsion_bank_angle=0.0, load_factor=1.0):
+        try:
+            propulsion_bank_angle = float(propulsion_bank_angle)
+            load_factor = float(load_factor)
+        except (TypeError, ValueError) as exc:
+            raise EvaluationError('bank angle/load factor must be numeric') from exc
+        if (not np.all(np.isfinite((propulsion_bank_angle, load_factor))) or
+                abs(propulsion_bank_angle) >= 90.0 or load_factor < 1.0):
+            raise EvaluationError('bank angle/load factor must be finite and physical')
+        expected_load = 1.0 / np.cos(np.radians(abs(propulsion_bank_angle)))
+        if not np.isclose(load_factor, expected_load, rtol=1e-10, atol=1e-12):
+            raise EvaluationError('load factor is inconsistent with bank angle')
         ac = self.model
         atm, dtemp, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
         bada_phase = {'Climb': 'cl', 'Descent': 'des'}.get(phase)
@@ -110,7 +126,8 @@ class BadaModelAdapter:
             config = self._configuration(
                 phase=phase, h=h, mass=mass, cas=cas, delta_temp=dtemp,
                 configuration_mode=configuration_mode)
-            lift = ac.flightEnvelope.CL(sigma=sigma, mass=mass, tas=tas)
+            lift = ac.flightEnvelope.CL(
+                sigma=sigma, mass=mass, tas=tas, nz=load_factor)
             drag = ac.flightEnvelope.D(sigma=sigma, tas=tas,
                 CD=ac.flightEnvelope.CD(CL=lift, config=config))
             rating = 'MCMB' if phase == 'Climb' else ('LIDL' if phase == 'Descent' else 'MCRZ')
@@ -137,7 +154,8 @@ class BadaModelAdapter:
                 phase=phase, h=h, mass=mass, cas=cas, delta_temp=dtemp,
                 configuration_mode=configuration_mode)
             hlid, gear = ac.flightEnvelope.getAeroConfig(config=config)
-            lift = ac.flightEnvelope.CL(delta=delta, mass=mass, M=mach)
+            lift = ac.flightEnvelope.CL(
+                delta=delta, mass=mass, M=mach, nz=load_factor)
             drag = ac.flightEnvelope.D(delta=delta, M=mach,
                 CD=ac.flightEnvelope.CD(HLid=hlid, LG=gear, CL=lift, M=mach))
             rating = 'MCMB' if phase == 'Climb' else ('LIDL' if phase == 'Descent' else 'MCRZ')
@@ -182,6 +200,8 @@ class BadaModelAdapter:
                     limitation_reason=reason, required_thrust=float(required_thrust),
                     requested_vertical_rate=float(requested_vertical_rate),
                     applied_vertical_rate=float(rocd),
+                    propulsion_bank_angle=float(propulsion_bank_angle),
+                    load_factor=float(load_factor),
                     allocation_policy=('HORIZONTAL_ADAPTED' if phase == 'Cruise'
                                        else 'BADA_ESF'))
 
