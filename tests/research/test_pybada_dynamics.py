@@ -26,6 +26,8 @@ class FakeModel:
                     applied_acceleration=requested,
                     requested_vertical_rate=state.get('requested_vertical_rate', 0.0),
                     applied_vertical_rate=5.0, allocation_policy='BADA_ESF',
+                    propulsion_bank_angle=state.get('propulsion_bank_angle', 0.0),
+                    load_factor=state.get('load_factor', 1.0),
                     thrust_limited=self.limited,
                     limitation_reason='ABOVE_MAXIMUM_THRUST' if self.limited else '')
 
@@ -55,6 +57,8 @@ def performance(model, strict=False):
     perf.applied_vertical_rate = np.zeros(1)
     perf.energy_share_factor = np.zeros(1)
     perf.energy_allocation_policy = np.array([''], dtype='U24')
+    perf.propulsion_bank_angle = np.zeros(1)
+    perf.propulsion_load_factor = np.ones(1)
     perf.invalid = np.zeros(1, dtype=bool)
     perf.failure_count = np.zeros(1, dtype=int)
     return perf
@@ -65,7 +69,10 @@ def traffic():
         ntraf=1, id=['TST1'], type=['A320'], pressure_alt=np.array([5000.0]),
         tas=np.array([200.0]), Temp=np.array([260.0]), p=np.array([54000.0]),
         alt=np.array([5000.0]), ax=np.zeros(1), vs=np.zeros(1),
-        aporasas=SimpleNamespace(alt=np.array([6000.0]), tas=np.array([210.0])))
+        hdg=np.array([90.0]), eps=np.array([0.01]),
+        ap=SimpleNamespace(turnphi=np.array([0.0]), bankdef=np.radians([25.0])),
+        aporasas=SimpleNamespace(alt=np.array([6000.0]), tas=np.array([210.0]),
+                                vs=np.array([5.0]), hdg=np.array([90.0])))
     traf.speed_request = SpeedStepRequest(
         target_tas=np.array([210.0]), requested_acceleration=np.array([1.0]),
         capture=np.array([False]), next_tas=np.array([201.0]))
@@ -101,6 +108,44 @@ def test_kinematic_computes_performance_without_driving_motion(monkeypatch):
     assert perf.drag[0] == pytest.approx(10000.0)
     assert perf.fuelflow[0] == pytest.approx(0.5)
     assert perf.mass[0] == pytest.approx(59999.5)
+
+
+def test_current_tick_turn_load_is_passed_without_stale_heading_mask(monkeypatch):
+    traf = traffic()
+    traf.aporasas.hdg[0] = 180.0
+    captured = {}
+    model = FakeModel()
+    original = model.bluesky_energy
+    model.bluesky_energy = lambda **state: (captured.update(state) or original(**state))
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(model)
+    perf.update_dynamics(traf, 1.0)
+    assert captured['propulsion_bank_angle'] == pytest.approx(25.0)
+    assert captured['load_factor'] == pytest.approx(1.0 / np.cos(np.radians(25.0)))
+    assert perf.propulsion_load_factor[0] == pytest.approx(captured['load_factor'])
+
+
+def test_straight_flight_uses_exact_unit_load(monkeypatch):
+    traf = traffic()
+    captured = {}
+    model = FakeModel()
+    original = model.bluesky_energy
+    model.bluesky_energy = lambda **state: (captured.update(state) or original(**state))
+    monkeypatch.setattr(bs, 'traf', traf)
+    performance(model).update_dynamics(traf, 1.0)
+    assert captured['propulsion_bank_angle'] == 0.0
+    assert captured['load_factor'] == 1.0
+
+
+def test_invalid_turn_bank_fails_explicitly(monkeypatch):
+    traf = traffic()
+    traf.aporasas.hdg[0] = 180.0
+    traf.ap.bankdef[0] = np.radians(90.0)
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(FakeModel())
+    perf.update_dynamics(traf, 1.0)
+    assert perf.invalid[0]
+    assert perf.failure_count[0] == 1
 
 
 def test_interactive_failure_is_missing_and_native_fallback(monkeypatch):

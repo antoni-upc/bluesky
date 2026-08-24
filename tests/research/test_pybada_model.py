@@ -350,6 +350,43 @@ def test_packaged_dummy_cruise_adapted_thrust_matches_requested_acceleration(
 
 @pytest.mark.smoke
 @pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+def test_packaged_dummy_turn_load_increases_drag_and_closes_force_balance(
+        family, dummy_name):
+    pybada = pytest.importorskip('pyBADA')
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    state = dict(h=3048.0, tas=148.526, mass=64791.0,
+                 temperature=268.338, pressure=69676.8, phase='Cruise',
+                 schedule='ICAO', requested_acceleration=0.1)
+    straight = EnergyResult(**model.bluesky_energy(**state)).validate()
+    bank = 35.0
+    load = 1.0 / np.cos(np.radians(bank))
+    turning = EnergyResult(**model.bluesky_energy(
+        **state, propulsion_bank_angle=bank, load_factor=load)).validate()
+    assert straight.load_factor == 1.0
+    assert turning.load_factor == pytest.approx(load)
+    assert turning.propulsion_bank_angle == pytest.approx(bank)
+    assert turning.drag > straight.drag
+    assert turning.thrust > straight.thrust
+    assert (turning.thrust - turning.drag) / state['mass'] == pytest.approx(0.1)
+
+
+def test_energy_adapter_rejects_inconsistent_or_invalid_turn_load():
+    adapter = BadaModelAdapter(SimpleNamespace(), '4')
+    state = dict(h=3048.0, tas=148.526, mass=64791.0,
+                 temperature=268.338, pressure=69676.8, phase='Cruise',
+                 schedule='ICAO')
+    with pytest.raises(EvaluationError, match='inconsistent'):
+        adapter.bluesky_energy(**state, propulsion_bank_angle=30.0, load_factor=1.0)
+    with pytest.raises(EvaluationError, match='finite and physical'):
+        adapter.bluesky_energy(**state, propulsion_bank_angle=90.0,
+                               load_factor=float('inf'))
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
 @pytest.mark.parametrize(('requested', 'bound_name', 'reason'), [
     (10.0, 'maximum_thrust', 'ABOVE_MAXIMUM_THRUST'),
     (-10.0, 'idle_thrust', 'BELOW_IDLE_THRUST'),

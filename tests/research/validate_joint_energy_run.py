@@ -26,8 +26,8 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
     errors = []
     acid = f'B{family}JE'
     expected_aircraft = {'3': 'A320__', '4': 'A320-232'}[family]
-    if metadata.get('schema_version') != 'samples-v9':
-        errors.append('metadata schema is not samples-v9')
+    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v9/v10')
     if metadata.get('scenario') != f'pybada-joint-energy-bada{family}':
         errors.append('metadata scenario is incorrect')
     if metadata.get('sample_intervals_s') != [0.05]:

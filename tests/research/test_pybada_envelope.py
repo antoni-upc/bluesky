@@ -49,9 +49,11 @@ def traffic(monkeypatch):
         id=['A1', 'A2'], cas=np.array([120.0, 120.0]), M=np.array([0.4, 0.4]),
         alt=np.array([3000.0, 3000.0]), pressure_alt=np.array([3000.0, 3000.0]),
         vs=np.array([0.0, 0.0]), tas=np.array([120.0, 120.0]),
+        hdg=np.array([90.0, 90.0]),
         Temp=np.array([268.0, 268.0]), p=np.array([70000.0, 70000.0]),
         swhdgsel=np.array([False, False]), eps=np.full(2, 1e-6), ap=autopilot,
-        aporasas=SimpleNamespace(alt=np.array([3000.0, 3000.0]))))
+        aporasas=SimpleNamespace(alt=np.array([3000.0, 3000.0]),
+                                hdg=np.array([90.0, 90.0]))))
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(simt=4.0, hold=lambda: None))
 
 
