@@ -440,3 +440,39 @@ def test_packaged_dummy_bada_esf_joint_energy_balance(
     assert result.requested_vertical_rate == pytest.approx(requested_vs)
     assert result.applied_vertical_rate == pytest.approx(result.rocd)
     assert result.allocation_policy == 'BADA_ESF'
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+def test_packaged_dummy_turn_load_participates_in_joint_energy_balance(
+        family, dummy_name):
+    pybada = pytest.importorskip('pyBADA')
+    from pyBADA import atmosphere as atm
+    from pyBADA import constants
+
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    state = dict(h=3048.0, tas=148.526, mass=64791.0,
+                 temperature=268.338, pressure=69676.8, schedule='ICAO',
+                 phase='Climb', requested_acceleration=2.0,
+                 requested_vertical_rate=8.0)
+    straight = EnergyResult(**model.bluesky_energy(**state)).validate()
+    bank = 35.0
+    load = 1.0 / np.cos(np.radians(bank))
+    turning = EnergyResult(**model.bluesky_energy(
+        **state, propulsion_bank_angle=bank, load_factor=load)).validate()
+    assert turning.drag > straight.drag
+    assert turning.load_factor == pytest.approx(load)
+    delta_temp = atm.ISATemperatureDeviation(
+        temperature=state['temperature'], pressureAltitude=state['h'])
+    temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
+    specific_power = ((turning.thrust - turning.drag) * state['tas'] /
+                      state['mass'])
+    allocated_power = (
+        state['tas'] * turning.applied_acceleration +
+        constants.g * turning.applied_vertical_rate / temperature_factor)
+    assert allocated_power == pytest.approx(specific_power, rel=1e-10, abs=1e-10)
+    assert allocated_power < (
+        (straight.thrust - straight.drag) * state['tas'] / state['mass'])
