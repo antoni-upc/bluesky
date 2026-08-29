@@ -444,6 +444,79 @@ def test_packaged_dummy_bada_esf_joint_energy_balance(
 
 @pytest.mark.smoke
 @pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+def test_packaged_dummy_bada_esf_deceleration_descent_closes_signed_energy_balance(
+        family, dummy_name):
+    pybada = pytest.importorskip('pyBADA')
+    from pyBADA import atmosphere as atm
+    from pyBADA import constants
+
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    state = dict(h=3657.6, tas=148.526, mass=64791.0,
+                 temperature=264.374, pressure=64440.0, schedule='ICAO')
+    requested_acceleration = -2.0
+    requested_vertical_rate = -8.0
+    result = EnergyResult(**model.bluesky_energy(
+        phase='Descent', requested_acceleration=requested_acceleration,
+        requested_vertical_rate=requested_vertical_rate, **state)).validate()
+    delta_temp = atm.ISATemperatureDeviation(
+        temperature=state['temperature'], pressureAltitude=state['h'])
+    temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
+    specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
+    allocated_power = (state['tas'] * result.applied_acceleration +
+                       constants.g * result.applied_vertical_rate / temperature_factor)
+    assert result.requested_acceleration == pytest.approx(requested_acceleration)
+    assert result.requested_vertical_rate == pytest.approx(requested_vertical_rate)
+    assert result.applied_acceleration < 0.0
+    assert result.applied_vertical_rate < 0.0
+    assert result.applied_vertical_rate == pytest.approx(result.rocd)
+    assert result.thrust == pytest.approx(result.idle_thrust)
+    assert result.allocation_policy == 'BADA_ESF'
+    assert allocated_power < 0.0
+    assert allocated_power == pytest.approx(specific_power, rel=1e-10, abs=1e-10)
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
+def test_packaged_dummy_bada_esf_climb_overrides_conflicting_deceleration_request(
+        family, dummy_name):
+    pybada = pytest.importorskip('pyBADA')
+    from pyBADA import atmosphere as atm
+    from pyBADA import constants
+
+    data_path = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    version = '3.15' if family == '3' else '4.2'
+    model, resolution = ModelStore(family, str(data_path), version=version).resolve('A320')
+    assert resolution.resolved == dummy_name
+    state = dict(h=3048.0, tas=148.526, mass=64791.0,
+                 temperature=268.338, pressure=69676.8, schedule='ICAO')
+    requested_acceleration = -2.0
+    requested_vertical_rate = 8.0
+    result = EnergyResult(**model.bluesky_energy(
+        phase='Climb', requested_acceleration=requested_acceleration,
+        requested_vertical_rate=requested_vertical_rate, **state)).validate()
+    delta_temp = atm.ISATemperatureDeviation(
+        temperature=state['temperature'], pressureAltitude=state['h'])
+    temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
+    specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
+    requested_power = (state['tas'] * requested_acceleration +
+                       constants.g * requested_vertical_rate / temperature_factor)
+    allocated_power = (state['tas'] * result.applied_acceleration +
+                       constants.g * result.applied_vertical_rate / temperature_factor)
+    assert result.requested_acceleration == pytest.approx(requested_acceleration)
+    assert result.requested_vertical_rate == pytest.approx(requested_vertical_rate)
+    assert result.applied_acceleration > 0.0
+    assert result.applied_vertical_rate > 0.0
+    assert result.thrust == pytest.approx(result.maximum_thrust)
+    assert result.allocation_policy == 'BADA_ESF'
+    assert requested_power < 0.0 < allocated_power
+    assert allocated_power == pytest.approx(specific_power, rel=1e-10, abs=1e-10)
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(('family', 'dummy_name'), [('3', 'J2M___'), ('4', 'Dummy-TWIN')])
 def test_packaged_dummy_turn_load_participates_in_joint_energy_balance(
         family, dummy_name):
     pybada = pytest.importorskip('pyBADA')
