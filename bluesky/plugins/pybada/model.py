@@ -18,6 +18,22 @@ class EvaluationError(RuntimeError):
     pass
 
 
+def _clamp_thrust(required_thrust, idle_thrust, maximum_thrust):
+    """Clamp against only the finite thrust bounds supplied by pyBADA."""
+    idle_thrust = float(idle_thrust)
+    maximum_thrust = float(maximum_thrust)
+    if not np.isfinite(maximum_thrust):
+        raise EvaluationError('maximum thrust is unavailable')
+    below_idle = np.isfinite(idle_thrust) and required_thrust < idle_thrust
+    above_maximum = required_thrust > maximum_thrust
+    reason = ('BELOW_IDLE_THRUST' if below_idle else
+              ('ABOVE_MAXIMUM_THRUST' if above_maximum else ''))
+    thrust = float(min(required_thrust, maximum_thrust))
+    if np.isfinite(idle_thrust):
+        thrust = float(max(thrust, idle_thrust))
+    return thrust, bool(below_idle or above_maximum), reason, idle_thrust, maximum_thrust
+
+
 class BadaConfigurationMode(str, Enum):
     CRUISE = 'CRUISE'
     PYBADA = 'PYBADA'
@@ -172,11 +188,8 @@ class BadaModelAdapter:
                 if bada_phase else 1.0
             rocd = ac.ROCD(T=required_thrust, D=drag, v=tas, mass=mass, ESF=esf,
                            h=h, deltaTemp=dtemp) if bada_phase else 0.0
-        lower, upper = sorted((float(idle_thrust), float(maximum_thrust)))
-        limited = bool(required_thrust < lower or required_thrust > upper)
-        reason = ('BELOW_IDLE_THRUST' if required_thrust < lower else
-                  ('ABOVE_MAXIMUM_THRUST' if required_thrust > upper else ''))
-        thrust = float(np.clip(required_thrust, lower, upper))
+        thrust, limited, reason, idle_thrust, maximum_thrust = _clamp_thrust(
+            required_thrust, idle_thrust, maximum_thrust)
         if self.family == '3':
             fuel = max(ac.ff(h=h, v=tas, T=thrust, config=config,
                              flightPhase=phase,
@@ -194,7 +207,7 @@ class BadaModelAdapter:
         return dict(thrust=float(thrust), rated_thrust=float(rated_thrust),
                     drag=float(drag), fuel_flow=float(fuel), esf=float(esf),
                     rocd=float(rocd), acceleration=float(acceleration),
-                    idle_thrust=float(idle_thrust), maximum_thrust=float(maximum_thrust),
+                    idle_thrust=idle_thrust, maximum_thrust=maximum_thrust,
                     requested_acceleration=float(requested_acceleration),
                     applied_acceleration=float(acceleration), thrust_limited=limited,
                     limitation_reason=reason, required_thrust=float(required_thrust),
