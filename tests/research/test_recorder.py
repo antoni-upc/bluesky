@@ -36,7 +36,8 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
                 maximum_limit_name='n1')))
     monkeypatch.setattr(bs, 'traf', traffic)
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(
-        simt=10.0, utc=datetime(2026, 1, 1, tzinfo=timezone.utc)))
+        simt=10.0, simdt=0.05,
+        utc=datetime(2026, 1, 1, tzinfo=timezone.utc)))
     monkeypatch.setattr('bluesky.plugins.meteo.recorder.stack.get_scenname',
                         lambda: 'recorder-test')
     recorder = StreamingRecorder()
@@ -72,6 +73,7 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert metadata['dataset_times'] == [
         '2026-01-01T00:00:00+00:00', '2026-01-01T01:00:00+00:00']
     assert metadata['sample_intervals_s'] == []
+    assert metadata['base_timestep_s'] == 0.05
     assert metadata['scenario'] == 'recorder-test'
     effective = metadata['effective_envelope'][0]
     assert effective['configuration_mode'] == 'CRUISE'
@@ -113,7 +115,7 @@ def test_quality_events_are_optional_synchronous_and_summarized(tmp_path, monkey
     assert not list(tmp_path.iterdir())
     monkeypatch.setattr(bs, 'traf', SimpleNamespace(id=[], atmos_source=[],
                                                     atmos_dataset_time=[], perf=None))
-    monkeypatch.setattr(bs, 'sim', SimpleNamespace(scenname='quality-test'))
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(scenname='quality-test', simdt=0.02))
     recorder.start(tmp_path / 'run.csv')
     recorder.observe_event(event)
     assert recorder.event_path.read_text().endswith('\n')
@@ -127,7 +129,7 @@ def test_quality_events_are_optional_synchronous_and_summarized(tmp_path, monkey
 def test_abort_event_auto_finalizes_evidence_before_return(tmp_path, monkeypatch):
     monkeypatch.setattr(bs, 'traf', SimpleNamespace(id=[], atmos_source=[],
                                                     atmos_dataset_time=[], perf=None))
-    monkeypatch.setattr(bs, 'sim', SimpleNamespace(scenname='abort-test'))
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(scenname='abort-test', simdt=0.1))
     recorder = StreamingRecorder()
     csv_path = tmp_path / 'abort.csv'
     recorder.start(csv_path)

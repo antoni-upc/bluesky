@@ -230,14 +230,54 @@ def test_tem_capture_does_not_overshoot_target(monkeypatch):
 
 def test_timestep_convergence_for_constant_reference(monkeypatch):
     final = []
-    for dt in (1.0, 0.5, 0.25):
+    for dt in (0.10, 0.05, 0.02):
         traf = traffic()
+        traf.aporasas.alt[0] = traf.alt[0]
+        traf.aporasas.tas[0] = 200.37
+        model = FakeModel()
+        original = model.bluesky_energy
+        model.bluesky_energy = lambda **state: dict(
+            original(**state), applied_vertical_rate=0.0,
+            requested_vertical_rate=0.0,
+            allocation_policy='HORIZONTAL_ADAPTED')
         monkeypatch.setattr(bs, 'traf', traf)
-        perf = performance(FakeModel())
-        for _ in range(round(4.0 / dt)):
+        perf = performance(model)
+        for _ in range(round(2.0 / dt)):
+            delta = traf.aporasas.tas - traf.tas
+            requested = np.where(abs(delta) <= 0.5 * dt, delta / dt,
+                                 np.sign(delta) * 0.5)
+            capture = abs(delta) <= 0.5 * dt
+            traf.speed_request = SpeedStepRequest(
+                target_tas=traf.aporasas.tas.copy(),
+                requested_acceleration=requested,
+                capture=capture,
+                next_tas=np.where(capture, traf.aporasas.tas,
+                                  traf.tas + requested * dt))
             perf.update_dynamics(traf, dt)
+            traf.tas[:] = traf.speed_result.next_tas
+            traf.alt[:] += traf.vs * dt
         final.append((traf.tas[0], perf.mass[0]))
-    np.testing.assert_allclose(final, np.broadcast_to(final[0], (3, 2)), atol=1e-9)
+    independently_calculated = np.array([200.37, 59999.0])
+    np.testing.assert_allclose(final, np.broadcast_to(
+        independently_calculated, (3, 2)), atol=1e-9)
+
+
+@pytest.mark.parametrize('dt', (0.10, 0.05, 0.02))
+def test_native_speed_partial_final_step_is_exact_and_not_stale(monkeypatch, dt):
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(simdt=dt))
+    state = SimpleNamespace(
+        ntraf=1, tas=np.array([200.0]),
+        aporasas=SimpleNamespace(tas=np.array([200.037])),
+        perf=SimpleNamespace(axmax=np.array([2.0])))
+    request = Traffic.native_speed_request(state)
+    assert request.capture.tolist() == [True]
+    assert request.next_tas[0] == pytest.approx(200.037)
+    assert request.requested_acceleration[0] == pytest.approx(0.037 / dt)
+    state.tas[:] = request.next_tas
+    second = Traffic.native_speed_request(state)
+    assert second.capture.tolist() == [True]
+    assert second.requested_acceleration[0] == 0.0
+    assert second.next_tas[0] == pytest.approx(200.037)
 
 
 def test_split_dynamics_uses_native_speed_and_preserves_tem_vertical(monkeypatch):

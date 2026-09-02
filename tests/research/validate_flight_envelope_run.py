@@ -41,8 +41,8 @@ def validate(path, abort=False, direct=False):
         errors.append(f'metadata unavailable: {exc}')
         metadata = {}
 
-    if metadata.get('schema_version') != 'samples-v9':
-        errors.append('schema is not samples-v9')
+    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
+        errors.append('schema is not compatible samples-v9/v10')
     if abort:
         if len(events) != 1:
             errors.append(f'expected 1 ABORT event, got {len(events)}')
@@ -57,7 +57,7 @@ def validate(path, abort=False, direct=False):
         if latest.get('envelope_last_action') != 'ABORTED':
             errors.append('final CSV row does not capture ABORTED action')
         fail(errors)
-        return 'VALID: flight-envelope event and samples-v9 metadata finalized before HOLD'
+        return 'VALID: flight-envelope event and compatible metadata finalized before HOLD'
 
     if direct:
         if len(events) != 3:
@@ -67,13 +67,13 @@ def validate(path, abort=False, direct=False):
             errors.append('DRPT direct REPORT event is missing')
         if ('DENF', 'REJECTED') not in actions:
             errors.append('DENF direct ENFORCE rejection event is missing')
-        if ('CREBAD', 'REJECTED') not in actions:
-            errors.append('CREBAD transactional creation rejection event is missing')
+        if ('CRBAD', 'REJECTED') not in actions:
+            errors.append('CRBAD transactional creation rejection event is missing')
         latest = {row.get('acid'): row for row in rows}
         report = latest.get('DRPT', {})
         enforce = latest.get('DENF', {})
-        if 'CREBAD' in latest:
-            errors.append('CREBAD appears in sampled traffic after rejected CRE')
+        if 'CRBAD' in latest:
+            errors.append('CRBAD appears in sampled traffic after rejected CRE')
         if report.get('envelope_status') != 'INFEASIBLE':
             errors.append('DRPT accepted state is not sampled as INFEASIBLE')
         if enforce.get('envelope_status') != 'VALID':

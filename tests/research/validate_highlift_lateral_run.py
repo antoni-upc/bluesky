@@ -16,8 +16,8 @@ def validate(path, abort=False):
     metadata = json.loads(
         path.with_suffix('.metadata.json').read_text(encoding='utf-8'))
     errors = []
-    if metadata.get('schema_version') != 'samples-v9':
-        errors.append('metadata schema is not samples-v9')
+    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v9/v10')
     expected_scenario = ('pybada-envelope-highlift-abort' if abort
                          else 'pybada-envelope-highlift')
     if metadata.get('scenario') != expected_scenario:

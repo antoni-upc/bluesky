@@ -50,6 +50,15 @@ def test_horizontal_acceleration_validator_accepts_balanced_evidence(tmp_path):
     assert result.startswith('VALID:')
 
 
+def test_horizontal_acceleration_validator_accepts_samples_v10(tmp_path):
+    path = _evidence(tmp_path)
+    metadata_path = path.with_suffix('.metadata.json')
+    metadata = json.loads(metadata_path.read_text())
+    metadata['schema_version'] = 'samples-v10'
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+    assert validate(path, '4').startswith('VALID:')
+
+
 def test_horizontal_acceleration_validator_rejects_force_mismatch(tmp_path):
     result = validate(_evidence(tmp_path, force_error=0.2), '4')
     assert result.startswith('INVALID evidence:')

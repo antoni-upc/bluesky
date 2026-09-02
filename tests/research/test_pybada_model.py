@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from bluesky.plugins.pybada.model import (BadaModelAdapter, EnergyResult,
-                                          EvaluationError, ModelStore, ModelUnavailable)
+                                          EvaluationError, ModelStore, ModelUnavailable,
+                                          _clamp_thrust)
 from bluesky.plugins.pybada.performance import PyBadaTEM
 
 
@@ -15,6 +16,15 @@ def test_energy_result_rejects_missing_or_negative_physics():
         EnergyResult(10, 12, 8, -0.2, 1, 2, 0.1).validate()
     with pytest.raises(EvaluationError):
         EnergyResult(float('nan'), 12, 8, 0.2, 1, 2, 0.1).validate()
+
+
+def test_unavailable_idle_does_not_poison_finite_climb_thrust():
+    thrust, limited, reason, idle, maximum = _clamp_thrust(
+        140_000.0, float('nan'), 140_000.0)
+    assert thrust == 140_000.0
+    assert not limited and reason == ''
+    assert np.isnan(idle)
+    assert maximum == 140_000.0
 
 
 def test_strict_resolution_only_exact_or_alias(tmp_path):

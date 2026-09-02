@@ -304,6 +304,7 @@ class StreamingRecorder:
             'schema_version': SCHEMA_VERSION, 'run_id': self.run_id,
             'created_utc': self.started_utc, 'rows': self.rows,
             'csv': str(self.path), 'python': platform.python_version(),
+            'base_timestep_s': float(bs.sim.simdt),
             'dependencies': versions,
             'scenario': stack.get_scenname(),
             'sample_intervals_s': sorted(self.sample_intervals),

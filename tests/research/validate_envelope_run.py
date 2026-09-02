@@ -73,10 +73,18 @@ def validate_normal(csv_path):
                     'event aircraft/order are not MASSR, MASSE, MASSR')
         for index, event in enumerate(events):
             requested, applied = event.get('requested'), event.get('applied')
+            if isinstance(requested, dict):
+                requested = requested.get('mass_kg')
+            if isinstance(applied, dict):
+                applied = applied.get('mass_kg')
             check.check(isinstance(requested, (int, float)) and
                         isinstance(applied, (int, float)),
                         f'event {index + 1} lacks numeric requested/applied mass')
-        check.check(events[1].get('requested', 0) > events[1].get('applied', float('inf')),
+        requested = events[1].get('requested', 0)
+        applied = events[1].get('applied', float('inf'))
+        requested = requested.get('mass_kg', 0) if isinstance(requested, dict) else requested
+        applied = applied.get('mass_kg', float('inf')) if isinstance(applied, dict) else applied
+        check.check(requested > applied,
                     'ENFORCE event did not preserve a lower applied mass')
 
     rows = check.read_rows(csv_path)
@@ -105,8 +113,8 @@ def validate_normal(csv_path):
                     'MASSE event counter is not 1')
 
     metadata = check.read_json(csv_path.with_suffix('.metadata.json'))
-    check.check(metadata.get('schema_version') == 'samples-v9',
-                'metadata schema is not samples-v9')
+    check.check(metadata.get('schema_version') in ('samples-v9', 'samples-v10'),
+                'metadata schema is not compatible samples-v9/v10')
     check.check(metadata.get('event_total') == 3, 'metadata event_total is not 3')
     check.check(metadata.get('reason_totals') == {'MASS_MAX': 3},
                 'metadata reason totals are not three MASS_MAX events')
