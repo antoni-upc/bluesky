@@ -1,4 +1,4 @@
-"""Bounded-memory, versioned research recorder."""
+"""Standalone bounded-memory, versioned research recorder."""
 
 import csv
 import importlib.metadata

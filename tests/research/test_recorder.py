@@ -1,5 +1,8 @@
 import csv
+from dataclasses import asdict, dataclass
 import json
+import subprocess
+import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -7,11 +10,34 @@ import numpy as np
 import pytest
 
 import bluesky as bs
-from bluesky.plugins.meteo.recorder import StreamingRecorder
+from bluesky.plugins.recorder import StreamingRecorder
 from bluesky.plugins.research_recorder import atmosstatus
-from bluesky.plugins.pybada.model import Resolution
-from bluesky.plugins.pybada.envelope import QualityEvent
-from bluesky.plugins.pybada.envelope import LateralBounds
+
+
+@dataclass(frozen=True)
+class FixtureQualityEvent:
+    aircraft: str
+    component: str
+    reason: str
+    policy: str
+    action: str
+    continuation: str
+    requested: object = None
+    applied: object = None
+    sim_time_s: float = None
+
+    def as_dict(self):
+        return asdict(self)
+
+
+def test_recorder_package_imports_without_meteo_or_pybada():
+    script = (
+        "import sys; import bluesky.plugins.recorder as recorder; "
+        "assert recorder.SCHEMA_VERSION == 'samples-v10'; "
+        "assert not [name for name in sys.modules "
+        "if name.startswith(('bluesky.plugins.meteo', 'bluesky.plugins.pybada'))]"
+    )
+    subprocess.run([sys.executable, '-c', script], check=True)
 
 
 @pytest.mark.smoke
@@ -29,16 +55,18 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
             fuelflow=values, mass=np.array([60000.0]), dyn_mode=np.array([1]),
             bada_configuration_mode=np.array(['CRUISE']),
             invalid=np.array([False]), failure_count=np.array([2]),
-            resolutions=[Resolution('A320', 'DUMMY-TWIN', 'dummy', True)],
-            lateral_bounds=lambda idx: LateralBounds(
-                'CR', -1.0, 2.5, 66.4218, high_lift_id=0.0,
-                landing_gear='LGUP', minimum_limit_name='n3',
-                maximum_limit_name='n1')))
+            resolutions=[SimpleNamespace(
+                requested='A320', resolved='DUMMY-TWIN', method='dummy', dummy=True)],
+            lateral_bounds=lambda idx: SimpleNamespace(
+                configuration='CR', minimum_load_factor=-1.0,
+                maximum_load_factor=2.5, maximum_bank_angle_deg=66.4218,
+                high_lift_id=0.0, landing_gear='LGUP',
+                minimum_limit_name='n3', maximum_limit_name='n1')))
     monkeypatch.setattr(bs, 'traf', traffic)
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(
         simt=10.0, simdt=0.05,
         utc=datetime(2026, 1, 1, tzinfo=timezone.utc)))
-    monkeypatch.setattr('bluesky.plugins.meteo.recorder.stack.get_scenname',
+    monkeypatch.setattr('bluesky.plugins.recorder.streaming.stack.get_scenname',
                         lambda: 'recorder-test')
     recorder = StreamingRecorder()
     path = tmp_path / 'samples.csv'
@@ -109,8 +137,8 @@ def test_atmosstatus_exposes_applied_state_and_isa_difference(monkeypatch):
 
 def test_quality_events_are_optional_synchronous_and_summarized(tmp_path, monkeypatch):
     recorder = StreamingRecorder()
-    event = QualityEvent('A1', 'PYBADATEM', 'MASS_MAX', 'REPORT',
-                         'ACCEPTED', 'CONTINUE', 90_000.0, 90_000.0, 3.0)
+    event = FixtureQualityEvent('A1', 'PYBADATEM', 'MASS_MAX', 'REPORT',
+                                'ACCEPTED', 'CONTINUE', 90_000.0, 90_000.0, 3.0)
     recorder.observe_event(event)
     assert not list(tmp_path.iterdir())
     monkeypatch.setattr(bs, 'traf', SimpleNamespace(id=[], atmos_source=[],
@@ -133,7 +161,7 @@ def test_abort_event_auto_finalizes_evidence_before_return(tmp_path, monkeypatch
     recorder = StreamingRecorder()
     csv_path = tmp_path / 'abort.csv'
     recorder.start(csv_path)
-    recorder.observe_event(QualityEvent(
+    recorder.observe_event(FixtureQualityEvent(
         'A1', 'PYBADATEM', 'MASS_MAX', 'ABORT', 'ABORTED', 'STOP',
         100_000.0, 100_000.0, 4.0))
     assert not recorder.active

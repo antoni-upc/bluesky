@@ -11,6 +11,13 @@ from bluesky.plugins.pybada.envelope import (
     parse_checks)
 from bluesky.plugins.pybada.performance import PyBadaTEM
 from bluesky.plugins.pybada.model import EvaluationError
+from bluesky.traffic.quality import quality_events as neutral_quality_events
+
+
+def test_pybada_publishes_to_the_neutral_quality_signal():
+    from bluesky.plugins.pybada.envelope import quality_events
+
+    assert quality_events is neutral_quality_events
 
 
 def make_perf(policies=('OFF', 'OFF')):

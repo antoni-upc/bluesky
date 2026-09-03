@@ -2,7 +2,8 @@
 
 import bluesky as bs
 from bluesky import stack
-from bluesky.plugins.meteo.recorder import StreamingRecorder
+from bluesky.plugins.recorder import StreamingRecorder
+from bluesky.traffic.quality import quality_events
 from bluesky.tools.aero import vatmos
 
 
@@ -23,7 +24,6 @@ def init_plugin():
     finally:
         probe.unlink(missing_ok=True)
     if not _subscribed:
-        from bluesky.plugins.pybada.envelope import quality_events
         quality_events.connect(recorder.observe_event)
         _subscribed = True
     return {'plugin_name': 'RESEARCHRECORDER', 'plugin_type': 'sim',

@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from bluesky.core.signal import Signal
+from bluesky.traffic.quality import quality_events
 
 
 class EnvelopePolicy(str, Enum):
@@ -126,9 +126,6 @@ class QualityEvent:
 
     def as_dict(self):
         return asdict(self)
-
-
-quality_events = Signal('PYBADA_QUALITY_EVENT')
 
 
 def parse_policy(value):
