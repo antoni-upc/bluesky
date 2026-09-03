@@ -1,0 +1,91 @@
+{
+  "schema_version": "research-profiles-v1",
+  "aircraft_roles": {
+    "narrowbody": {
+      "OPENAP": "A320",
+      "PYBADA3": "A320__",
+      "PYBADA4": "A320-232"
+    },
+    "widebody": {
+      "OPENAP": "A359",
+      "PYBADA3": "A359__",
+      "PYBADA4": "A350-941"
+    },
+    "jumbo": {
+      "OPENAP": "B744",
+      "PYBADA3": "B744__",
+      "PYBADA4": "B744GE"
+    }
+  },
+  "profiles": {
+    "baseline-recorder-free": {
+      "performance": {"provider": "OPENAP"},
+      "atmosphere": {"provider": "ISA"},
+      "recorder": {"enabled": false}
+    },
+    "baseline-recorder": {
+      "performance": {"provider": "OPENAP"},
+      "atmosphere": {"provider": "ISA"},
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    },
+    "meteo-recorder": {
+      "performance": {"provider": "OPENAP"},
+      "atmosphere": {
+        "provider": "ERA5",
+        "dataset_id": "era5-20250501-12z-europe",
+        "bounds": [40.0, -5.0, 53.0, 10.0],
+        "strict": true,
+        "time_autoupdate": true,
+        "interpolation": false
+      },
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    },
+    "pybada-recorder": {
+      "performance": {
+        "provider": "PYBADA",
+        "family": "4",
+        "dataset_id": "bada4-4.2",
+        "version": "4.2",
+        "dynamics_mode": "TEM",
+        "strict": true
+      },
+      "atmosphere": {"provider": "ISA"},
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    },
+    "combined-recorder": {
+      "performance": {
+        "provider": "PYBADA",
+        "family": "4",
+        "dataset_id": "bada4-4.2",
+        "version": "4.2",
+        "dynamics_mode": "TEM",
+        "strict": true
+      },
+      "atmosphere": {
+        "provider": "ERA5",
+        "dataset_id": "era5-20250501-12z-europe",
+        "bounds": [40.0, -5.0, 53.0, 10.0],
+        "strict": true,
+        "time_autoupdate": true,
+        "interpolation": false
+      },
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    }
+  }
+}

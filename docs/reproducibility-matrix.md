@@ -74,6 +74,31 @@ between different performance or atmospheric models.
 
 ## Current closing commands
 
+The scenario-driven matrix runner performs a resource preflight before it
+starts any long-running profile. Each profile runs in a fresh process and emits
+its rendered scenario, manifest, external samples, recorder artifacts when
+enabled, termination reason, wall/CPU timings, simulated duration, and
+simulation-speed ratio. Runtime measurements are operational evidence and
+should be repeated before drawing performance conclusions.
+
+```shell
+PYTHONNOUSERSITE=1 PYTHONPATH=. \
+  python tests/research/run_profile_matrix.py \
+  --scenario experiments/example_direct.scn \
+  --config experiments/profiles.json \
+  --output output/matrix/example_direct \
+  --preflight-only
+
+PYTHONNOUSERSITE=1 PYTHONPATH=. \
+  python tests/research/run_profile_matrix.py \
+  --scenario experiments/example_direct.scn \
+  --config experiments/profiles.json \
+  --output output/matrix/example_direct
+```
+
+The operational example uses the same commands with
+`experiments/example_ops.scn` and a separate output directory.
+
 ```shell
 PYTHONNOUSERSITE=1 PYTHONPATH=. python -m pytest -q tests/research
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
