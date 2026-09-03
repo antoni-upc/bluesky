@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.research.run_manifest import validate_manifest
+
 
 def pytest_addoption(parser):
     parser.addoption('--run-manifest', action='store', default='',
@@ -14,4 +16,4 @@ def run_manifest(request):
     value = request.config.getoption('--run-manifest')
     if not value:
         pytest.skip('requires --run-manifest')
-    return json.loads(Path(value).read_text(encoding='utf-8'))
+    return validate_manifest(json.loads(Path(value).read_text(encoding='utf-8')))
