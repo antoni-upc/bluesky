@@ -99,3 +99,27 @@ def test_provider_atmosphere_resynchronizes_wind_without_counting_work(monkeypat
     Traffic.update_atmosphere(state)
     assert calls == [False]
     assert state.atmos_source == ['ERA5']
+
+
+def test_provider_atmosphere_preserves_vectorized_provenance(monkeypatch):
+    sample = AtmosphereSample(
+        np.array([288.15, 275.0]), np.array([101325.0, 75000.0]),
+        np.array([101325.0 / (R * 288.15), 75000.0 / (R * 275.0)]),
+        np.array([True, True]), np.array(['ISA', 'ERA5'], dtype=object),
+        np.array(['', '2025-08-15T12:00:00'], dtype=object),
+        np.array(['CONFIGURED_BELOW_ERA5_DOMAIN', ''], dtype=object))
+    state = SimpleNamespace(
+        ntraf=2, alt=np.array([0.0, 2500.0]), lat=np.array([41.3, 41.4]),
+        lon=np.array([2.1, 2.2]), tas=np.array([100.0, 140.0]), p=np.zeros(2),
+        rho=np.zeros(2), Temp=np.zeros(2), pressure_alt=np.zeros(2),
+        dtemp=np.zeros(2), atmos_valid=np.zeros(2, dtype=bool),
+        atmos_source=['', ''], atmos_dataset_time=['', ''],
+        atmos_fallback_reason=['', ''],
+        wind=SimpleNamespace(get_atmosphere=lambda lat, lon, alt, utc: sample))
+    state._update_airdata = lambda: Traffic._update_airdata(state)
+    state.update_groundspeed = lambda accumulate_work=True: None
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(utc=None))
+    Traffic.update_atmosphere(state)
+    assert state.atmos_source == ['ISA', 'ERA5']
+    assert state.atmos_dataset_time == ['', '2025-08-15T12:00:00']
+    assert state.atmos_fallback_reason == ['CONFIGURED_BELOW_ERA5_DOMAIN', '']

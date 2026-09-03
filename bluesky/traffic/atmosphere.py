@@ -1,6 +1,7 @@
 """Atmosphere-provider data contract used by optional weather plugins."""
 
 from dataclasses import dataclass
+from typing import Union
 
 import numpy as np
 
@@ -15,9 +16,9 @@ class AtmosphereSample:
     pressure: np.ndarray
     density: np.ndarray
     valid: np.ndarray
-    source: str
-    dataset_time: str = ""
-    fallback_reason: str = ""
+    source: Union[str, np.ndarray]
+    dataset_time: Union[str, np.ndarray] = ""
+    fallback_reason: Union[str, np.ndarray] = ""
 
 
 def pressure_altitude(pressure):
@@ -40,4 +41,3 @@ def mach_to_cas(mach, pressure):
     pressure = np.asarray(pressure)
     qc = pressure * ((1.0 + 0.2 * mach * mach) ** gamma2 - 1.0)
     return np.sqrt(5.0 * gamma * R * T0 * ((qc / p0 + 1.0) ** (1.0 / gamma2) - 1.0))
-

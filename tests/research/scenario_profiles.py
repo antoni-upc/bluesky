@@ -82,6 +82,31 @@ def validate_profile_config(config):
             raise ProfileConfigError(
                 f"profiles.{name}.atmosphere.provider must be ISA, ERA5, or GFS"
             )
+        if atmosphere_provider != "ISA":
+            domain_policy = atmosphere.get("domain_policy", {})
+            if not isinstance(domain_policy, dict):
+                raise ProfileConfigError(
+                    f"profiles.{name}.atmosphere.domain_policy must be an object"
+                )
+            expected_policies = {
+                "below": {"REJECT", "ISA", "ISA_ANCHORED"},
+                "above": {"REJECT"},
+                "lateral": {"REJECT"},
+                "time": {"REJECT"},
+            }
+            unknown = set(domain_policy) - set(expected_policies)
+            if unknown:
+                raise ProfileConfigError(
+                    f"profiles.{name}.atmosphere.domain_policy has unknown keys: "
+                    f"{', '.join(sorted(unknown))}"
+                )
+            for boundary, allowed in expected_policies.items():
+                policy = str(domain_policy.get(boundary, "REJECT")).upper()
+                if policy not in allowed:
+                    raise ProfileConfigError(
+                        f"profiles.{name}.atmosphere.domain_policy.{boundary} "
+                        f"must be {', '.join(sorted(allowed))}"
+                    )
         if atmosphere_provider == "ERA5":
             region = atmosphere.get("region")
             levels = atmosphere.get("pressure_levels_hpa")

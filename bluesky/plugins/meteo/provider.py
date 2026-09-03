@@ -7,13 +7,17 @@ from bluesky import stack
 from bluesky.traffic.windsim import WindSim
 from bluesky.traffic.atmosphere import AtmosphereSample
 from bluesky.traffic.windfield import Windfield
-from bluesky.tools.aero import R
+from bluesky.tools.aero import R, vatmos
 
 
 bs.settings.set_variable_defaults(
     meteo_strict=False,
+    meteo_below_domain_policy='REJECT',
     meteo_time_autoupdate=True,
     meteo_time_interpolation=False)
+
+
+BELOW_DOMAIN_POLICIES = {'REJECT', 'ISA', 'ISA_ANCHORED'}
 
 
 def previous_slot(utc, hours=3):
@@ -33,9 +37,30 @@ class MeteorologyProvider(WindSim):
         self.active_slot = None
         self.bounds = None
         self.strict = bool(bs.settings.meteo_strict)
+        self.below_domain_policy = self._validate_below_domain_policy(
+            bs.settings.meteo_below_domain_policy)
         self.failure_counts = {}
         self.unavailable_reason = ''
         self.expired_slot = ''
+
+    @staticmethod
+    def _validate_below_domain_policy(value):
+        policy = str(value).upper().strip()
+        if policy not in BELOW_DOMAIN_POLICIES:
+            allowed = ', '.join(sorted(BELOW_DOMAIN_POLICIES))
+            raise ValueError(f'below-domain policy must be one of: {allowed}')
+        if policy == 'ISA_ANCHORED':
+            raise NotImplementedError(
+                'ISA_ANCHORED is reserved but not implemented; use REJECT or ISA')
+        return policy
+
+    @staticmethod
+    def _metadata(values):
+        """Collapse uniform vector metadata while preserving mixed provenance."""
+        values = np.asarray(values, dtype=object)
+        if values.size and np.all(values == values.flat[0]):
+            return str(values.flat[0])
+        return values
 
     @property
     def winddim(self):
@@ -140,17 +165,49 @@ class MeteorologyProvider(WindSim):
                                         self.unavailable_reason)
             return None
         _, _, sample = result
-        valid = sample.valid & self._inside_bounds(lat, lon)
-        sample = AtmosphereSample(sample.temperature, sample.pressure, sample.density,
-                                  valid, sample.source, sample.dataset_time,
-                                  'OUTSIDE_REQUESTED_DOMAIN')
+        alt = np.broadcast_to(np.asarray(alt, dtype=float), np.asarray(sample.valid).shape)
+        inside = self._inside_bounds(lat, lon)
+        cube_lower = float(self.cube.altitude[0])
+        cube_upper = float(self.cube.altitude[-1])
+        below = inside & (alt < cube_lower)
+        above = inside & (alt > cube_upper)
+
+        temperature = np.asarray(sample.temperature, dtype=float).copy()
+        pressure = np.asarray(sample.pressure, dtype=float).copy()
+        density = np.asarray(sample.density, dtype=float).copy()
+        valid = np.asarray(sample.valid, dtype=bool) & inside
+        source = np.full(valid.shape, sample.source, dtype=object)
+        dataset_time = np.full(valid.shape, sample.dataset_time, dtype=object)
+        reason = np.full(valid.shape, '', dtype=object)
+        reason[~inside] = 'OUTSIDE_REQUESTED_DOMAIN'
+        reason[below] = 'BELOW_SOURCE_DOMAIN'
+        reason[above] = 'ABOVE_SOURCE_DOMAIN'
+        other_invalid = ~valid & inside & ~below & ~above
+        reason[other_invalid] = sample.fallback_reason or 'OUTSIDE_SOURCE_DOMAIN'
+
+        if self.below_domain_policy == 'ISA' and np.any(below):
+            isa_pressure, isa_density, isa_temperature = vatmos(alt[below])
+            temperature[below] = isa_temperature
+            pressure[below] = isa_pressure
+            density[below] = isa_density
+            valid[below] = True
+            source[below] = 'ISA'
+            dataset_time[below] = ''
+            reason[below] = f'CONFIGURED_BELOW_{self.source}_DOMAIN'
+
+        sample = AtmosphereSample(
+            temperature, pressure, density, valid,
+            self._metadata(source), self._metadata(dataset_time), self._metadata(reason))
         invalid_count = int(np.count_nonzero(~valid))
         if invalid_count:
-            reason = sample.fallback_reason
-            previous = self.failure_counts.get(reason, 0)
-            self.failure_counts[reason] = previous + invalid_count
-            if previous == 0:
-                stack.echo(f'{self.source}: {invalid_count} sample(s) using ISA fallback: {reason}')
+            invalid_reasons = np.asarray(reason, dtype=object)[~valid]
+            for failure_reason in np.unique(invalid_reasons):
+                count = int(np.count_nonzero(invalid_reasons == failure_reason))
+                previous = self.failure_counts.get(failure_reason, 0)
+                self.failure_counts[failure_reason] = previous + count
+                if previous == 0:
+                    stack.echo(
+                        f'{self.source}: {count} invalid sample(s): {failure_reason}')
         if self.strict and not np.all(sample.valid):
             raise RuntimeError(f'{self.source} requested outside its validated domain')
         return sample
@@ -184,9 +241,17 @@ class MeteorologyProvider(WindSim):
         if not option:
             return True, (
                 f'Meteorology: strict={self.strict} '
+                f'below={self.below_domain_policy} '
                 f'time_autoupdate={bool(bs.settings.meteo_time_autoupdate)} '
                 f'time_interpolation={bool(bs.settings.meteo_time_interpolation)}')
         option = option.upper()
+        if option == 'BELOW':
+            try:
+                self.below_domain_policy = self._validate_below_domain_policy(value)
+            except (ValueError, NotImplementedError) as exc:
+                return False, str(exc)
+            bs.settings.meteo_below_domain_policy = self.below_domain_policy
+            return self.configure()
         values = {'ON': True, 'TRUE': True, '1': True,
                   'OFF': False, 'FALSE': False, '0': False}
         if value.upper() not in values:
@@ -201,7 +266,7 @@ class MeteorologyProvider(WindSim):
             if not enabled:
                 self.next_cube = None
         else:
-            return False, 'METEOCONFIG option must be STRICT, TIMEUPDATE, or INTERPOLATION'
+            return False, 'METEOCONFIG option must be STRICT, BELOW, TIMEUPDATE, or INTERPOLATION'
         return self.configure()
 
     @stack.command(name='METEOSTATUS')
@@ -210,15 +275,18 @@ class MeteorologyProvider(WindSim):
         result = self._interpolate([lat], [lon], [alt], getattr(bs.sim, 'utc', None))
         if result is None:
             return False, f'{self.source}: no active weather dataset'
-        north, east, sample = result
-        inside = bool(self._inside_bounds([lat], [lon])[0])
-        valid = bool(sample.valid[0] and inside)
-        reason = '-' if valid else ('OUTSIDE_REQUESTED_DOMAIN' if not inside else
-                                    sample.fallback_reason or 'OUTSIDE_SOURCE_DOMAIN')
+        north, east, _ = result
+        sample = self.get_atmosphere([lat], [lon], [alt], getattr(bs.sim, 'utc', None))
+        valid = bool(sample.valid[0])
+        source = str(np.asarray(sample.source, dtype=object).flat[0])
+        reason_value = str(np.asarray(sample.fallback_reason, dtype=object).flat[0])
+        reason = reason_value or '-'
+        if source == 'ISA':
+            north[0] = east[0] = 0.0
         return True, (
             f'{self.source}: lat={lat:.6f} deg lon={lon:.6f} deg '
             f'alt={alt:.1f} m/{alt / 0.3048:.1f} ft '
-            f'valid={valid} dataset={sample.dataset_time} fallback={reason}\n'
+            f'valid={valid} source={source} dataset={sample.dataset_time} fallback={reason}\n'
             f'  wind_north={north[0]:.3f} m/s wind_east={east[0]:.3f} m/s '
             f'T={sample.temperature[0]:.3f} K p={sample.pressure[0]:.3f} Pa '
             f'rho={sample.density[0]:.6f} kg/m3')

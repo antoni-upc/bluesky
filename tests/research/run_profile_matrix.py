@@ -262,6 +262,8 @@ def configure_worker(profile, run_dir, weather_cache):
         bs.settings.meteo_strict = bool(atmosphere["strict"])
         bs.settings.meteo_time_autoupdate = bool(atmosphere["time_autoupdate"])
         bs.settings.meteo_time_interpolation = bool(atmosphere["interpolation"])
+        bs.settings.meteo_below_domain_policy = atmosphere.get(
+            "domain_policy", {}).get("below", "REJECT")
         if provider == "ERA5":
             bs.settings.era5_region = atmosphere["region"]
             bs.settings.era5_pressure_levels = atmosphere["pressure_levels_hpa"]

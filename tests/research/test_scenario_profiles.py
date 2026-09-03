@@ -98,6 +98,38 @@ def test_canonical_profile_name_must_match_declared_plugins():
         validate_profile_config(value)
 
 
+def test_domain_policy_accepts_below_modes_and_rejects_other_fallbacks():
+    value = config()
+    value["profiles"]["weather"] = {
+        "performance": {"provider": "OPENAP"},
+        "atmosphere": {
+            "provider": "GFS",
+            "domain_policy": {
+                "below": "ISA_ANCHORED", "above": "REJECT",
+                "lateral": "REJECT", "time": "REJECT",
+            },
+        },
+        "recorder": {"enabled": True},
+    }
+    assert validate_profile_config(value) is value
+    value["profiles"]["weather"]["atmosphere"]["domain_policy"]["above"] = "ISA"
+    with pytest.raises(ProfileConfigError, match=r"domain_policy\.above must be REJECT"):
+        validate_profile_config(value)
+
+
+def test_domain_policy_rejects_unknown_boundaries():
+    value = config()
+    value["profiles"]["weather"] = {
+        "performance": {"provider": "OPENAP"},
+        "atmosphere": {
+            "provider": "GFS", "domain_policy": {"surface": "ISA"},
+        },
+        "recorder": {"enabled": True},
+    }
+    with pytest.raises(ProfileConfigError, match="unknown keys: surface"):
+        validate_profile_config(value)
+
+
 def test_render_records_original_and_rendered_checksums(tmp_path):
     source = tmp_path / "source.scn"
     output = tmp_path / "run" / "rendered.scn"

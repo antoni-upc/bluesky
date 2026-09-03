@@ -504,12 +504,23 @@ class Traffic(Entity):
             self.p[physical] = np.asarray(sample.pressure)[physical]
             # Enforce one thermodynamically consistent state.
             self.rho[physical] = self.p[physical] / (287.05287 * self.Temp[physical])
+            def metadata(value):
+                array = np.asarray(value, dtype=object)
+                if array.ndim == 0:
+                    return np.full(self.alt.shape, array.item(), dtype=object)
+                return np.broadcast_to(array, self.alt.shape)
+
+            source = metadata(sample.source)
+            dataset_time = metadata(sample.dataset_time)
+            fallback_reason = metadata(sample.fallback_reason)
             for idx in np.flatnonzero(physical):
-                self.atmos_source[idx] = sample.source
-                self.atmos_dataset_time[idx] = sample.dataset_time
+                self.atmos_source[idx] = str(source[idx])
+                self.atmos_dataset_time[idx] = str(dataset_time[idx])
+                self.atmos_fallback_reason[idx] = str(fallback_reason[idx])
             for idx in np.flatnonzero(~physical):
                 self.atmos_source[idx] = 'ISA'
-                self.atmos_fallback_reason[idx] = sample.fallback_reason or 'INVALID_PROVIDER_SAMPLE'
+                self.atmos_fallback_reason[idx] = str(
+                    fallback_reason[idx] or 'INVALID_PROVIDER_SAMPLE')
             self.atmos_valid[:] = physical
         self.pressure_alt[:] = pressure_altitude(self.p)
         self.dtemp[:] = self.Temp - isa_temperature

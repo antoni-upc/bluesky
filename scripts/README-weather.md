@@ -168,6 +168,23 @@ python tests/research/validate_gfs_policies.py
 provider loads the next cached file or downloads it, validates it, and only
 then applies it. ERA5 slots are hourly; GFS slots are six-hourly.
 
+Experiment profiles define meteorological domain behavior explicitly:
+
+```json
+"domain_policy": {
+  "below": "ISA",
+  "above": "REJECT",
+  "lateral": "REJECT",
+  "time": "REJECT"
+}
+```
+
+`below` accepts `REJECT` or plain `ISA`. Plain ISA is evaluated at the actual
+aircraft altitude, uses zero wind, and records the configured source transition;
+it is not an extrapolation of the lowest weather level. `ISA_ANCHORED` is
+reserved and currently fails explicitly as not implemented. The other three
+boundaries accept only `REJECT`.
+
 `meteo_time_interpolation = False` is the default. A file stamped `T` supplies
 the entire interval from `T` up to, but excluding, the next slot. Set it to
 `True` only when linear temporal interpolation is scientifically intended; the

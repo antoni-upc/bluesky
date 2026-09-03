@@ -7,7 +7,7 @@ import bluesky as bs
 from bluesky.plugins.meteo import GridValidationError, MeteorologyProvider, WeatherCube, previous_slot
 from bluesky.plugins.windecmwf import WindECMWF
 from bluesky.plugins.windgfs import WindGFS
-from bluesky.tools.aero import R
+from bluesky.tools.aero import R, vatmos
 
 
 def cube():
@@ -93,6 +93,56 @@ def test_strict_provider_rejects_outside_requested_bounds(monkeypatch):
     monkeypatch.setattr(provider, 'strict', True)
     with pytest.raises(RuntimeError, match='validated domain'):
         provider.get_atmosphere([10.5], [0.0], [500.0], None)
+
+
+def test_strict_provider_rejects_below_source_domain(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.below_domain_policy = 'REJECT'
+    provider.set_cube(cube(), bounds=(10.0, 179.0, 11.0, -179.0))
+    provider.strict = True
+    with pytest.raises(RuntimeError, match='validated domain'):
+        provider.get_atmosphere([10.5], [179.5], [-1.0], None)
+
+
+def test_below_domain_isa_is_valid_native_isa_with_explicit_provenance(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.below_domain_policy = 'ISA'
+    provider.source = 'ERA5'
+    weather = cube()
+    weather.source = 'ERA5'
+    provider.set_cube(weather, bounds=(10.0, 179.0, 11.0, -179.0))
+    provider.strict = True
+    sample = provider.get_atmosphere([10.5], [179.5], [-100.0], None)
+    pressure, density, temperature = vatmos(np.array([-100.0]))
+    assert sample.valid.tolist() == [True]
+    assert sample.source == 'ISA'
+    assert sample.dataset_time == ''
+    assert sample.fallback_reason == 'CONFIGURED_BELOW_ERA5_DOMAIN'
+    np.testing.assert_array_equal(sample.temperature, temperature)
+    np.testing.assert_array_equal(sample.pressure, pressure)
+    np.testing.assert_array_equal(sample.density, density)
+
+
+def test_mixed_era5_and_below_domain_isa_preserve_per_aircraft_metadata(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.below_domain_policy = 'ISA'
+    provider.source = 'ERA5'
+    weather = cube()
+    weather.source = 'ERA5'
+    provider.set_cube(weather, bounds=(10.0, 179.0, 11.0, -179.0))
+    sample = provider.get_atmosphere(
+        [10.5, 10.5], [179.5, 179.5], [-1.0, 500.0], None)
+    assert sample.valid.tolist() == [True, True]
+    assert np.asarray(sample.source).tolist() == ['ISA', 'ERA5']
+    assert np.asarray(sample.dataset_time).tolist() == [
+        '', '2026-01-01T00:00:00+00:00']
+    assert np.asarray(sample.fallback_reason).tolist() == [
+        'CONFIGURED_BELOW_ERA5_DOMAIN', '']
+
+
+def test_isa_anchored_is_reserved_but_not_implemented(monkeypatch):
+    with pytest.raises(NotImplementedError, match='reserved but not implemented'):
+        MeteorologyProvider._validate_below_domain_policy('ISA_ANCHORED')
 
 
 def test_failed_time_update_discards_stale_cube_and_reports_fallback(monkeypatch):
@@ -187,6 +237,10 @@ def test_meteoconfig_controls_runtime_policy(monkeypatch):
     assert success and not bs.settings.meteo_time_autoupdate
     success, message = provider.configure('INTERPOLATION', 'ON')
     assert success and bs.settings.meteo_time_interpolation
+    success, message = provider.configure('BELOW', 'ISA')
+    assert success and provider.below_domain_policy == 'ISA' and 'below=ISA' in message
+    success, message = provider.configure('BELOW', 'ISA_ANCHORED')
+    assert not success and 'not implemented' in message
     success, message = provider.configure('UNKNOWN', 'ON')
     assert not success and 'STRICT' in message
 
