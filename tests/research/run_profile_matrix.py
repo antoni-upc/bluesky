@@ -12,6 +12,7 @@ import platform
 import subprocess
 import sys
 import time
+import traceback
 
 import numpy as np
 
@@ -147,7 +148,67 @@ def validate_recorder_samples(csv_path, samples):
     return len(rows)
 
 
+def _haversine_m(left, right):
+    radius = 6_371_000.0
+    lat1, lat2 = np.radians((left["lat"], right["lat"]))
+    dlat = lat2 - lat1
+    dlon = np.radians(right["lon"] - left["lon"])
+    value = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * \
+        np.sin(dlon / 2.0) ** 2
+    return float(2.0 * radius * np.arcsin(np.sqrt(value)))
+
+
+def trajectory_summary(evidence):
+    samples = evidence["external_samples"]["samples"]
+    by_aircraft = {}
+    for sample in samples:
+        by_aircraft.setdefault(sample["acid"], []).append(sample)
+    aircraft = {}
+    for acid, rows in by_aircraft.items():
+        masses = [row["mass"] for row in rows if row["mass"] is not None and
+                  np.isfinite(row["mass"])]
+        aircraft[acid] = {
+            "aircraft_type": rows[0]["actype"],
+            "maximum_altitude_m": max(row["alt"] for row in rows),
+            "maximum_tas_m_s": max(row["tas"] for row in rows),
+            "fuel_or_mass_change_kg": None if len(masses) < 2 else masses[0] - masses[-1],
+            "invalid_atmosphere_samples": sum(not row["atmos_valid"] for row in rows),
+            "fallback_samples": sum(bool(row["atmos_fallback_reason"]) for row in rows),
+        }
+    return {"termination_reason": evidence["simulation"]["termination_reason"],
+            "simulated_duration_s": evidence["simulation"]["simulated_duration_s"],
+            "aircraft": aircraft}
+
+
+def trajectory_comparison(baseline, candidate):
+    baseline_rows = {(row["sim_time_s"], row["acid"]): row
+                     for row in baseline["external_samples"]["samples"]}
+    candidate_rows = {(row["sim_time_s"], row["acid"]): row
+                      for row in candidate["external_samples"]["samples"]}
+    common = sorted(set(baseline_rows) & set(candidate_rows))
+    if not common:
+        return {"common_samples": 0}
+    horizontal = []
+    altitude = []
+    tas = []
+    for key in common:
+        left, right = baseline_rows[key], candidate_rows[key]
+        horizontal.append(_haversine_m(left, right))
+        altitude.append(abs(float(left["alt"]) - float(right["alt"])))
+        tas.append(abs(float(left["tas"]) - float(right["tas"])))
+    return {
+        "common_samples": len(common),
+        "maximum_horizontal_difference_m": max(horizontal),
+        "maximum_altitude_difference_m": max(altitude),
+        "maximum_tas_difference_m_s": max(tas),
+    }
+
+
 def compare_profiles(evidence_by_profile):
+    evidence_by_profile = {
+        name: evidence for name, evidence in evidence_by_profile.items()
+        if evidence.get("status", "valid") == "valid"
+    }
     comparisons = {}
     off = evidence_by_profile.get("baseline-recorder-free")
     on = evidence_by_profile.get("baseline-recorder")
@@ -170,12 +231,14 @@ def compare_profiles(evidence_by_profile):
             if evidence is baseline:
                 continue
             comparisons[f"{name}_vs_baseline"] = {
+                "kind": "informational",
                 "completion_time_difference_s":
                     evidence["simulation"]["simulated_duration_s"] - baseline_duration,
                 "simulation_wall_time_difference_s":
                     evidence["timing"]["simulation_wall_s"] - baseline_wall,
                 "simulation_runtime_ratio":
                     evidence["timing"]["simulation_wall_s"] / baseline_wall,
+                "trajectory": trajectory_comparison(baseline, evidence),
             }
     return comparisons
 
@@ -199,6 +262,9 @@ def configure_worker(profile, run_dir, weather_cache):
         bs.settings.meteo_strict = bool(atmosphere["strict"])
         bs.settings.meteo_time_autoupdate = bool(atmosphere["time_autoupdate"])
         bs.settings.meteo_time_interpolation = bool(atmosphere["interpolation"])
+        if provider == "ERA5":
+            bs.settings.era5_region = atmosphere["region"]
+            bs.settings.era5_pressure_levels = atmosphere["pressure_levels_hpa"]
         bs.settings.era5_cache_path = str(Path(weather_cache) / "era5")
         bs.settings.gfs_cache_path = str(Path(weather_cache) / "gfs")
         require_plugin({"ERA5": "WINDECMWF", "GFS": "WINDGFS"}[provider])
@@ -221,7 +287,7 @@ def configure_worker(profile, run_dir, weather_cache):
     return weather, recorder_module
 
 
-def run_worker(args):
+def _run_worker(args):
     import bluesky as bs
     from bluesky.core import simtime
 
@@ -309,6 +375,29 @@ def run_worker(args):
     return 0 if evidence["status"] == "valid" else 2
 
 
+def run_worker(args):
+    started_utc = dt.datetime.now(dt.timezone.utc)
+    wall_started = time.perf_counter()
+    try:
+        return _run_worker(args)
+    except Exception as exc:
+        args.output.mkdir(parents=True, exist_ok=True)
+        failure = {
+            "schema_version": "profile-evidence-v1", "status": "invalid",
+            "profile": args.profile,
+            "failure": {"type": type(exc).__name__, "message": str(exc),
+                        "traceback": traceback.format_exc()},
+            "timing": {"started_utc": started_utc.isoformat(),
+                       "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                       "wall_time_s": time.perf_counter() - wall_started},
+        }
+        args.evidence.write_text(json.dumps(failure, indent=2, sort_keys=True) + "\n",
+                                 encoding="utf-8")
+        print(f"PROFILE FAILED: {args.profile}: {type(exc).__name__}: {exc}",
+              file=sys.stderr, flush=True)
+        return 2
+
+
 def orchestrate(args):
     started = time.perf_counter()
     config = load_profile_config(args.config)
@@ -365,6 +454,11 @@ def orchestrate(args):
             break
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         evidence_by_profile[name] = evidence
+        if evidence["status"] != "valid":
+            results[name] = {"returncode": completed.returncode, "status": "invalid",
+                             "timing": evidence.get("timing"),
+                             "failure": evidence.get("failure")}
+            break
         manifest = manifest_for(name, config["profiles"][name], contract,
                                 plan["profiles"][name], evidence, args.config)
         (run_dir / "manifest.json").write_text(
@@ -375,9 +469,24 @@ def orchestrate(args):
         if completed.returncode:
             break
     comparisons = compare_profiles(evidence_by_profile)
+    summaries = {name: trajectory_summary(evidence) for name, evidence in
+                 evidence_by_profile.items() if evidence.get("status") == "valid"}
+    orchestration_wall_s = time.perf_counter() - started
+    worker_wall_sum = sum(
+        result.get("timing", {}).get("wall_time_s", 0.0) for result in results.values()
+    )
+    worker_cpu_sum = sum(
+        result.get("timing", {}).get("cpu_time_s", 0.0) for result in results.values()
+    )
     summary = {"schema_version": "profile-matrix-v1", "results": results,
                "comparisons": comparisons,
-               "orchestration_wall_s": time.perf_counter() - started}
+               "trajectory_summaries": summaries,
+               "timing": {
+                   "orchestration_wall_s": orchestration_wall_s,
+                   "worker_wall_time_sum_s": worker_wall_sum,
+                   "worker_cpu_time_sum_s": worker_cpu_sum,
+                   "orchestration_overhead_s": orchestration_wall_s - worker_wall_sum,
+               }}
     (output / "matrix-summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

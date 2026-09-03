@@ -88,7 +88,10 @@ def test_canonical_profile_name_must_match_declared_plugins():
     value = config()
     value["profiles"]["baseline-recorder-free"] = {
         "performance": {"provider": "OPENAP"},
-        "atmosphere": {"provider": "ERA5"},
+        "atmosphere": {
+            "provider": "ERA5", "region": "western-europe",
+            "pressure_levels_hpa": [100, 1000],
+        },
         "recorder": {"enabled": False},
     }
     with pytest.raises(ProfileConfigError, match="baseline-recorder-free requires"):

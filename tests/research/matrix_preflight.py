@@ -1,7 +1,6 @@
 """Preflight inspection for scenario-driven research profile matrices."""
 
 import datetime as dt
-import hashlib
 import re
 from pathlib import Path
 
@@ -83,13 +82,15 @@ def check_bounds(positions, bounds):
 
 
 def era5_targets(cache, start, duration_s, bounds):
+    from bluesky.plugins.windecmwf import WindECMWF
     slot = start.replace(minute=0, second=0, microsecond=0)
     end = start + dt.timedelta(seconds=duration_s)
-    key = ",".join(f"{float(value):.6f}" for value in bounds)
-    digest = hashlib.sha256(key.encode("ascii")).hexdigest()[:12]
+    provider = object.__new__(WindECMWF)
+    provider.cache = Path(cache)
     targets = []
     while slot <= end:
-        targets.append(Path(cache) / f"p_levels_{slot:%Y%m%d_%H}_{digest}_0.nc")
+        targets.extend(provider._path(slot, bounds, part)
+                       for part, _ in enumerate(provider._areas(bounds)))
         slot += dt.timedelta(hours=1)
     return targets
 
@@ -102,6 +103,9 @@ def validate_resources(contract, config, weather_cache):
             continue
         check_bounds(contract["positions"], atmosphere["bounds"])
         if atmosphere["provider"] == "ERA5":
+            import bluesky as bs
+            bs.settings.era5_region = atmosphere["region"]
+            bs.settings.era5_pressure_levels = atmosphere["pressure_levels_hpa"]
             targets = era5_targets(
                 Path(weather_cache) / "era5", contract["simulation_utc"],
                 contract["safety_duration_s"], atmosphere["bounds"],

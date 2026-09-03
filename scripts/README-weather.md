@@ -36,8 +36,10 @@ add a safety margin. Specify the first analysis hour and the last hour that the
 simulation can reach. For a run from 2025-08-15 12:00 through 18:00 UTC:
 
 ```shell
-python scripts/download_era5.py 20250815 12 40 -5 45 5 --until 20250815T18 --dry-run
-python scripts/download_era5.py 20250815 12 40 -5 45 5 --until 20250815T18
+python scripts/download_era5.py 20250815 12 40 -5 45 5 \
+  --until 20250815T18 --region western-europe --dry-run
+python scripts/download_era5.py 20250815 12 40 -5 45 5 \
+  --until 20250815T18 --region western-europe
 ```
 
 The first command only lists the cache files. The second downloads missing or
@@ -52,8 +54,11 @@ PLUGINS LOAD WINDECMWF
 WINDECMWF 40,-5,45,5
 ```
 
-The bounds must exactly match the preparation command because they are part of
-the deterministic ERA5 cache name and CDS request.
+The region label is for humans. The cache filename also contains the UTC slot,
+readable pressure range, and a digest of the exact CDS request. The request
+digest covers the precise bounds, discrete pressure levels, variables, product
+type, and formats. Cached NetCDF contents are validated against the requested
+slot, levels, coverage, units, variables, and dimensions before reuse.
 
 Prefer one bounding box covering the complete route. Independently downloaded
 adjacent boxes are not automatically joined: their native horizontal values
@@ -64,7 +69,8 @@ validated overlap rather than assuming edge continuity.
 After the downloads finish, validate every hourly file without network access:
 
 ```shell
-python tests/research/validate_era5_cache.py 20250815T12 20250815T18 40 -5 45 5
+python tests/research/validate_era5_cache.py \
+  20250815T12 20250815T18 40 -5 45 5 --region western-europe
 ```
 
 Then run the matched BADA 4 TEM integration gate and validate its recording:

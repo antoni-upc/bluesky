@@ -78,7 +78,8 @@ The scenario-driven matrix runner performs a resource preflight before it
 starts any long-running profile. Each profile runs in a fresh process and emits
 its rendered scenario, manifest, external samples, recorder artifacts when
 enabled, termination reason, wall/CPU timings, simulated duration, and
-simulation-speed ratio. Runtime measurements are operational evidence and
+simulation-speed ratio. The matrix summary also records summed worker wall/CPU
+time and orchestration overhead. Runtime measurements are operational evidence and
 should be repeated before drawing performance conclusions.
 
 ```shell

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
+import bluesky as bs
 
 from bluesky.plugins.windecmwf import WindECMWF
 from bluesky.tools.aero import R
@@ -38,7 +39,8 @@ def validate(cache, start, end, bounds):
             current += timedelta(hours=1)
             continue
         try:
-            cubes = [provider._read(path, current) for path in paths]
+            cubes = [provider._read_validated(path, current, area)
+                     for path, area in zip(paths, provider._areas(bounds))]
             cube = cubes[0] if len(cubes) == 1 else provider._merge(cubes, current)
             center_lat = sum(bounds[::2]) / 2.0
             center_lon = sum(bounds[1::2]) / 2.0
@@ -94,7 +96,12 @@ def main(argv=None):
     parser.add_argument('lat1', type=float)
     parser.add_argument('lon1', type=float)
     parser.add_argument('--cache', default='cache/weather/era5')
+    parser.add_argument('--region', default='region')
+    parser.add_argument('--pressure-levels', type=int, nargs='+')
     args = parser.parse_args(argv)
+    bs.settings.era5_region = args.region
+    if args.pressure_levels:
+        bs.settings.era5_pressure_levels = args.pressure_levels
     bounds = (args.lat0, args.lon0, args.lat1, args.lon1)
     errors, summaries = validate(args.cache, args.start, args.end, bounds)
     print('\n'.join(summaries))

@@ -2,7 +2,9 @@
 
 from pathlib import Path
 import hashlib
+import json
 import os
+import re
 from datetime import timedelta
 
 import numpy as np
@@ -12,9 +14,9 @@ from bluesky import stack
 from bluesky.plugins.meteo import MeteorologyProvider, WeatherCube
 
 
-bs.settings.set_variable_defaults(era5_cache_path='', era5_pressure_levels=[
+bs.settings.set_variable_defaults(era5_cache_path='', era5_region='region', era5_pressure_levels=[
     100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 550, 600,
-    650, 700, 750, 775, 800])
+    650, 700, 750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1000])
 
 
 def init_plugin():
@@ -56,10 +58,30 @@ class WindECMWF(MeteorologyProvider):
             return [(north, west, south, east)]
         return [(north, west, south, 180.0), (north, -180.0, south, east)]
 
+    @staticmethod
+    def _region_label():
+        label = str(bs.settings.era5_region).lower().strip()
+        if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', label):
+            raise ValueError('era5_region must contain lowercase letters, numbers, and hyphens')
+        return label
+
+    @classmethod
+    def _request_identity(cls, slot, area):
+        request = cls._request(slot, area)
+        return json.dumps(request, sort_keys=True, separators=(',', ':')).encode('utf-8')
+
     def _path(self, slot, bounds, part):
-        key = ','.join(f'{float(value):.6f}' for value in bounds)
-        digest = hashlib.sha256(key.encode('ascii')).hexdigest()[:12]
-        return self.cache / f'p_levels_{slot:%Y%m%d_%H}_{digest}_{part}.nc'
+        areas = self._areas(bounds)
+        try:
+            area = areas[part]
+        except IndexError as exc:
+            raise ValueError(f'ERA5 request part {part} does not exist') from exc
+        digest = hashlib.sha256(self._request_identity(slot, area)).hexdigest()[:12]
+        levels = [int(value) for value in bs.settings.era5_pressure_levels]
+        pressure_range = f'p{min(levels)}-{max(levels)}'
+        return self.cache / (
+            f'era5-pressure-levels_{self._region_label()}_{slot:%Y%m%dT%H%MZ}_'
+            f'{pressure_range}_{digest}_part{part}.nc')
 
     @staticmethod
     def _request(slot, area):
@@ -69,7 +91,7 @@ class WindECMWF(MeteorologyProvider):
             'pressure_level': [str(x) for x in bs.settings.era5_pressure_levels],
             'year': [f'{slot.year:04d}'], 'month': [f'{slot.month:02d}'],
             'day': [f'{slot.day:02d}'], 'time': [f'{slot.hour:02d}:00'],
-            'area': list(area),
+            'area': [float(value) for value in area],
             'variable': ['u_component_of_wind', 'v_component_of_wind',
                          'temperature', 'geopotential']}
 
@@ -80,7 +102,7 @@ class WindECMWF(MeteorologyProvider):
             target = self._path(slot, bounds, index)
             if target.exists():
                 try:
-                    cubes.append(self._read(target, slot))
+                    cubes.append(self._read_validated(target, slot, area))
                     continue
                 except (OSError, ValueError, KeyError, IndexError):
                     stack.echo(f'ERA5: cached file is invalid; removing {target}')
@@ -94,7 +116,7 @@ class WindECMWF(MeteorologyProvider):
                     f'area={list(area)} pressure_levels_hPa=[{levels}] to {target}')
                 cdsapi.Client().retrieve('reanalysis-era5-pressure-levels',
                                          self._request(slot, area), str(part))
-                cube = self._read(part, slot)  # validate before accepting cache
+                cube = self._read_validated(part, slot, area)
                 part.replace(target)
                 stack.echo(f'ERA5: download validated and cached at {target}')
                 cubes.append(cube)
@@ -102,6 +124,34 @@ class WindECMWF(MeteorologyProvider):
                 part.unlink(missing_ok=True)
                 raise
         return cubes[0] if len(cubes) == 1 else self._merge(cubes, slot)
+
+    def _read_validated(self, path, slot, area):
+        """Validate request identity stored in a cache file before accepting it."""
+        import netCDF4 as nc
+        with nc.Dataset(path, mode='r') as ds:
+            level_var = self._variable(ds, 'pressure_level', 'level')
+            self._units(level_var, {'hpa', 'millibars', 'mbar'}, 'pressure level')
+            stored_levels = sorted(float(value) for value in np.asarray(level_var[:]).ravel())
+            expected_levels = sorted(float(value) for value in bs.settings.era5_pressure_levels)
+            if stored_levels != expected_levels:
+                raise ValueError(
+                    f'ERA5 pressure levels differ: stored={stored_levels}, '
+                    f'expected={expected_levels}')
+            latitude = np.asarray(self._variable(ds, 'latitude')[:], dtype=float)
+            longitude = np.asarray(self._variable(ds, 'longitude')[:], dtype=float)
+            north, west, south, east = area
+            relative_longitude = (longitude - west) % 360.0
+            requested_span = (east - west) % 360.0
+            if (latitude.min() > south or latitude.max() < north or
+                    relative_longitude.min() > 1e-9 or
+                    relative_longitude.max() + 1e-9 < requested_span):
+                raise ValueError(f'ERA5 grid does not cover requested area {list(area)}')
+            times = self._variable(ds, 'valid_time', 'time')
+            calendar = getattr(times, 'calendar', 'standard')
+            target_time = nc.date2num(slot.replace(tzinfo=None), times.units, calendar)
+            if not np.any(np.isclose(np.asarray(times[:], dtype=float), target_time)):
+                raise ValueError(f'ERA5 file does not contain exact slot {slot.isoformat()}')
+        return self._read(path, slot)
 
     @staticmethod
     def _variable(dataset, *names):

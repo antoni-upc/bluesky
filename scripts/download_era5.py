@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from bluesky.plugins.windecmwf import WindECMWF
+import bluesky as bs
 
 
 def parser():
@@ -19,6 +20,10 @@ def parser():
     command.add_argument('--cache', type=Path,
                          default=Path('cache/weather/era5'),
                          help='cache directory (default: cache/weather/era5)')
+    command.add_argument('--region', default='region',
+                         help='safe human-readable cache label (for example ecac-core)')
+    command.add_argument('--pressure-levels', type=int, nargs='+',
+                         help='exact pressure levels in hPa (default: configured ERA5 levels)')
     command.add_argument('--dry-run', action='store_true',
                          help='show deterministic targets without downloading')
     command.add_argument('--until', metavar='YYYYMMDDTHH',
@@ -44,6 +49,9 @@ def main(argv=None):
         raise SystemExit('--until cannot be earlier than the first slot')
     provider = object.__new__(WindECMWF)
     provider.cache = args.cache.expanduser().resolve()
+    bs.settings.era5_region = args.region
+    if args.pressure_levels:
+        bs.settings.era5_pressure_levels = args.pressure_levels
     if not args.dry_run:
         credential_file = Path(__import__('os').environ.get(
             'CDSAPI_RC', '~/.cdsapirc')).expanduser()

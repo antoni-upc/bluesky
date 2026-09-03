@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 import pytest
+import bluesky as bs
 
 netcdf = pytest.importorskip('netCDF4')
 
@@ -53,6 +54,49 @@ def test_era5_request_is_one_bounded_slot():
     assert request['area'] == [45.0, -5.0, 40.0, 5.0]
     assert request['data_format'] == 'netcdf'
     assert request['download_format'] == 'unarchived'
+
+
+def test_era5_cache_identity_covers_slot_bounds_and_exact_levels(monkeypatch, tmp_path):
+    provider = object.__new__(WindECMWF)
+    provider.cache = tmp_path
+    slot = datetime(2025, 5, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(bs.settings, 'era5_region', 'western-europe')
+    monkeypatch.setattr(bs.settings, 'era5_pressure_levels', [100, 200, 1000])
+    original = provider._path(slot, (40, -5, 53, 10), 0)
+
+    monkeypatch.setattr(bs.settings, 'era5_pressure_levels', [100, 250, 1000])
+    changed_levels = provider._path(slot, (40, -5, 53, 10), 0)
+    changed_bounds = provider._path(slot, (40, -5, 54, 10), 0)
+    changed_slot = provider._path(
+        datetime(2025, 5, 1, 13, tzinfo=timezone.utc), (40, -5, 53, 10), 0)
+
+    assert original.name.startswith(
+        'era5-pressure-levels_western-europe_20250501T1200Z_p100-1000_')
+    assert len({original, changed_levels, changed_bounds, changed_slot}) == 4
+
+
+def test_era5_validated_reader_rejects_different_pressure_levels(
+        monkeypatch, tmp_path):
+    path = tmp_path / 'synthetic-era5.nc'
+    with netcdf.Dataset(path, 'w') as ds:
+        ds.createDimension('time', 1)
+        ds.createDimension('pressure_level', 2)
+        ds.createDimension('latitude', 2)
+        ds.createDimension('longitude', 2)
+        time = ds.createVariable('time', 'f8', ('time',))
+        time.units = 'hours since 2025-05-01 12:00:00'
+        time[:] = [0]
+        level = ds.createVariable('pressure_level', 'f8', ('pressure_level',))
+        level.units = 'hPa'
+        level[:] = [1000, 900]
+        ds.createVariable('latitude', 'f8', ('latitude',))[:] = [53, 40]
+        ds.createVariable('longitude', 'f8', ('longitude',))[:] = [-5, 10]
+    provider = object.__new__(WindECMWF)
+    monkeypatch.setattr(bs.settings, 'era5_pressure_levels', [1000, 925])
+    with pytest.raises(ValueError, match='pressure levels differ'):
+        provider._read_validated(
+            path, datetime(2025, 5, 1, 12, tzinfo=timezone.utc),
+            (53, -5, 40, 10))
 
 
 def test_era5_uses_hourly_validity_slots():

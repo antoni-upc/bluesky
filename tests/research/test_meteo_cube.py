@@ -301,5 +301,6 @@ def test_era5_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
     target = provider._path(slot, bounds, 0)
     target.write_bytes(b'cached')
     sentinel = object()
-    monkeypatch.setattr(provider, '_read', lambda path, ignored: sentinel)
+    monkeypatch.setattr(provider, '_read_validated',
+                        lambda path, ignored, area: sentinel)
     assert provider._fetch(slot, bounds) is sentinel

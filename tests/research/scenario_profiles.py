@@ -82,6 +82,20 @@ def validate_profile_config(config):
             raise ProfileConfigError(
                 f"profiles.{name}.atmosphere.provider must be ISA, ERA5, or GFS"
             )
+        if atmosphere_provider == "ERA5":
+            region = atmosphere.get("region")
+            levels = atmosphere.get("pressure_levels_hpa")
+            if (not isinstance(region, str) or
+                    not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", region)):
+                raise ProfileConfigError(
+                    f"profiles.{name}.atmosphere.region must be a safe lowercase label"
+                )
+            if (not isinstance(levels, list) or not levels or
+                    any(isinstance(level, bool) or not isinstance(level, (int, float))
+                        for level in levels) or len(set(levels)) != len(levels)):
+                raise ProfileConfigError(
+                    f"profiles.{name}.atmosphere.pressure_levels_hpa must be unique numbers"
+                )
         if not isinstance(recorder, dict) or not isinstance(recorder.get("enabled"), bool):
             raise ProfileConfigError(
                 f"profiles.{name}.recorder.enabled must be boolean"

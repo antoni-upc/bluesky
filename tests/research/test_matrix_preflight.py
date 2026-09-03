@@ -1,6 +1,7 @@
 import datetime as dt
 
 import pytest
+import bluesky as bs
 
 from tests.research.matrix_preflight import (
     check_bounds, era5_targets, scenario_contract,
@@ -24,10 +25,11 @@ def test_bounds_reject_an_excluded_route_position():
 
 
 def test_era5_targets_cover_every_possible_hour(tmp_path):
+    bs.settings.era5_region = "western-europe"
     targets = era5_targets(
         tmp_path, dt.datetime(2025, 5, 1, 12, tzinfo=dt.timezone.utc),
         8100, [40, -5, 53, 10],
     )
-    assert [path.name[9:20] for path in targets] == [
-        "20250501_12", "20250501_13", "20250501_14",
+    assert [path.name.split("_")[2] for path in targets] == [
+        "20250501T1200Z", "20250501T1300Z", "20250501T1400Z",
     ]
