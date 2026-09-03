@@ -45,6 +45,22 @@ def test_base_performance_dynamics_hook_handles_no_aircraft():
     assert handled.shape == (0,)
 
 
+def test_base_performance_dynamics_hook_leaves_native_traffic_untouched():
+    traffic = SimpleNamespace(
+        ntraf=2,
+        tas=np.array([120.0, 180.0]),
+        alt=np.array([1000.0, 3000.0]),
+        vs=np.array([0.0, 2.0]),
+        ax=np.array([0.0, 0.5]),
+    )
+    before = {name: value.copy() for name, value in vars(traffic).items()
+              if isinstance(value, np.ndarray)}
+    handled = PerfBase.update_dynamics(object.__new__(PerfBase), traffic, 0.5)
+    np.testing.assert_array_equal(handled, np.zeros(2, dtype=bool))
+    for name, expected in before.items():
+        np.testing.assert_array_equal(getattr(traffic, name), expected)
+
+
 def test_atmosphere_synchronizes_exactly_to_current_isa_position(monkeypatch):
     state = SimpleNamespace(
         ntraf=1, alt=np.array([4373.6]), lat=np.array([41.3]), lon=np.array([2.1]),

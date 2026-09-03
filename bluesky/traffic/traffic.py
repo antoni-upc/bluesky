@@ -429,8 +429,9 @@ class Traffic(Entity):
         if self.ntraf == 0:
             return
 
-        # Atmosphere is synchronized to the current position on creation,
-        # provider load, and at the end of every traffic update.
+        # Preserve the native per-tick atmosphere update when no optional
+        # provider or performance-dynamics implementation is active.
+        self.update_atmosphere()
 
         #---------- ADSB Update -------------------------------
         self.adsb.update()
