@@ -41,8 +41,8 @@ def validate(path, abort=False, direct=False):
         errors.append(f'metadata unavailable: {exc}')
         metadata = {}
 
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('schema is not compatible samples-v7/v8/v9/v10')
     if abort:
         if len(events) != 1:
             errors.append(f'expected 1 ABORT event, got {len(events)}')

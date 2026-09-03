@@ -39,8 +39,8 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
                 'requested_vertical_rate_m_s', 'applied_vertical_rate_m_s',
                 'requested_acceleration_m_s2', 'applied_acceleration_m_s2',
                 'idle_thrust_n', 'maximum_thrust_n'}
-    if metadata.get('schema_version') != 'samples-v10':
-        errors.append('metadata schema is not samples-v10')
+    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v9/v10')
     if metadata.get('scenario') != f'pybada-conflict-energy-bada{family}':
         errors.append('metadata scenario is incorrect')
     if metadata.get('sample_intervals_s') != [0.05]:

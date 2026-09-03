@@ -61,8 +61,8 @@ def validate(path):
     check_finite_json(metadata, errors, 'metadata')
     if not raw_events.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     if metadata.get('scenario') != 'pybada3-envelope-flight':
         errors.append('metadata scenario is not pybada3-envelope-flight')
     if metadata.get('quality_status') != 'DEGRADED':
@@ -141,8 +141,8 @@ def validate_direct(path):
     check_finite_json(metadata, errors, 'metadata')
     if not raw_events.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     if metadata.get('scenario') != 'pybada3-envelope-direct':
         errors.append('metadata scenario is not pybada3-envelope-direct')
     actions = [(event.get('aircraft'), event.get('action')) for event in events]
@@ -249,8 +249,8 @@ def validate_abort(path):
             errors.append('ABORT request is not above a runtime speed or Mach maximum')
     except (KeyError, TypeError, ValueError):
         errors.append('final sample lacks numeric runtime speed-bound evidence')
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     if metadata.get('scenario') != 'pybada3-envelope-flight-abort':
         errors.append('metadata scenario is not pybada3-envelope-flight-abort')
     if metadata.get('event_total') != 1 or metadata.get('quality_status') != 'ABORTED':

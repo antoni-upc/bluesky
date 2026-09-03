@@ -1,6 +1,8 @@
 import csv
 import json
 
+import pytest
+
 from tests.research.validate_horizontal_acceleration_run import validate
 
 
@@ -50,13 +52,27 @@ def test_horizontal_acceleration_validator_accepts_balanced_evidence(tmp_path):
     assert result.startswith('VALID:')
 
 
-def test_horizontal_acceleration_validator_accepts_samples_v10(tmp_path):
+@pytest.mark.parametrize('schema', [
+    'samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'])
+def test_horizontal_acceleration_validator_accepts_compatible_schema(tmp_path, schema):
     path = _evidence(tmp_path)
     metadata_path = path.with_suffix('.metadata.json')
     metadata = json.loads(metadata_path.read_text())
-    metadata['schema_version'] = 'samples-v10'
+    metadata['schema_version'] = schema
     metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
     assert validate(path, '4').startswith('VALID:')
+
+
+@pytest.mark.parametrize('schema', ['samples-v6', 'samples-v11'])
+def test_horizontal_acceleration_validator_rejects_incompatible_schema(tmp_path, schema):
+    path = _evidence(tmp_path)
+    metadata_path = path.with_suffix('.metadata.json')
+    metadata = json.loads(metadata_path.read_text())
+    metadata['schema_version'] = schema
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+    result = validate(path, '4')
+    assert result.startswith('INVALID evidence:')
+    assert 'not compatible samples-v7/v8/v9/v10' in result
 
 
 def test_horizontal_acceleration_validator_rejects_force_mismatch(tmp_path):

@@ -125,8 +125,8 @@ def validate(path, terminal=False, abort=False, terminal_abort=False):
     check_finite(rows, events, metadata, errors)
     if not raw.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     suffix = ('-terminal-abort' if terminal_abort else '-terminal' if terminal else
               '-lateral-abort' if abort else '-lateral')
     scenario = f'pybada3-envelope{suffix}'

@@ -1,6 +1,8 @@
 import csv
 import json
 
+import pytest
+
 from tests.research.validate_horizontal_saturation_run import validate
 
 
@@ -71,6 +73,27 @@ def _evidence(tmp_path, force_error=0.0):
 
 def test_saturation_validator_accepts_applied_motion_and_capture(tmp_path):
     assert validate(_evidence(tmp_path), '4').startswith('VALID:')
+
+
+@pytest.mark.parametrize('schema', ['samples-v8', 'samples-v9', 'samples-v10'])
+def test_saturation_validator_accepts_compatible_schema(tmp_path, schema):
+    path = _evidence(tmp_path)
+    metadata_path = path.with_suffix('.metadata.json')
+    metadata = json.loads(metadata_path.read_text())
+    metadata['schema_version'] = schema
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+    assert validate(path, '4').startswith('VALID:')
+
+
+def test_saturation_validator_rejects_samples_v7(tmp_path):
+    path = _evidence(tmp_path)
+    metadata_path = path.with_suffix('.metadata.json')
+    metadata = json.loads(metadata_path.read_text())
+    metadata['schema_version'] = 'samples-v7'
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+    result = validate(path, '4')
+    assert result.startswith('INVALID evidence:')
+    assert 'not compatible samples-v8/v9/v10' in result
 
 
 def test_saturation_validator_rejects_applied_force_mismatch(tmp_path):

@@ -24,8 +24,8 @@ def validate(path):
     events = [line for line in events_path.read_text(encoding='utf-8').splitlines()
               if line.strip()]
     errors = []
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     if metadata.get('scenario') != 'pybada-envelope-terminal-observe':
         errors.append('metadata scenario is not pybada-envelope-terminal-observe')
     if events or metadata.get('event_total') != 0:

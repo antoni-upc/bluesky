@@ -64,8 +64,8 @@ def _check_effective_metadata(metadata, acids, errors):
 def validate(path, abort=False):
     rows, events, metadata = _load(path)
     errors = []
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     expected_scenario = ('pybada-envelope-approach-abort' if abort
                          else 'pybada-envelope-approach')
     if metadata.get('scenario') != expected_scenario:

@@ -21,8 +21,8 @@ def load(path):
 def validate(path, abort=False):
     rows, events, metadata = load(path)
     errors = []
-    if metadata.get('schema_version') not in ('samples-v9', 'samples-v10'):
-        errors.append('metadata schema is not compatible samples-v9/v10')
+    if metadata.get('schema_version') not in ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'):
+        errors.append('metadata schema is not compatible samples-v7/v8/v9/v10')
     required = ('bank_angle_deg', 'load_factor', 'minimum_load_factor',
                 'maximum_load_factor', 'maximum_bank_angle_deg',
                 'envelope_lateral_configuration')
