@@ -1,0 +1,17 @@
+# Direct dependency versions validated together on Python 3.12.13.
+# Install with: pip install -c constraints/research-py312.txt -e '.[research,test]'
+numpy==2.5.1
+scipy==1.18.0
+matplotlib==3.10.0
+pandas==3.0.5
+msgpack==1.2.1
+pyzmq==27.1.0
+bluesky-navdata==1.0.0
+openap==2.6.0
+pyBADA==0.1.14
+cdsapi==0.7.7
+netCDF4==1.7.4
+requests==2.34.2
+pygrib==2.1.8
+openpyxl==3.1.5
+pytest==9.1.1

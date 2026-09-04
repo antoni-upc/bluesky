@@ -1,0 +1,60 @@
+{
+  "schema_version": "research-run-v2",
+  "revision": {
+    "commit": "0000000000000000000000000000000000000000",
+    "upstream_base": "22fdf9e3e77c077e0ddb5d7b14c70d67f9a5c855",
+    "working_tree_dirty": false
+  },
+  "experiment": {
+    "scenario": "scenario/research/era5-tem-envelope.scn",
+    "simulation_utc": "2025-08-15T12:00:00+00:00",
+    "timestep_s": 0.05,
+    "duration_s": 4.0,
+    "random_seed": 0
+  },
+  "configuration": {
+    "profile": "combined-recorder",
+    "performance": {
+      "provider": "PYBADA",
+      "family": "4",
+      "version": "4.2",
+      "dataset_id": "BADA-4.2-local",
+      "aircraft": ["A320-232"],
+      "dynamics_mode": "TEM",
+      "envelope_policy": "REPORT",
+      "envelope_checks": "LONGITUDINAL",
+      "strict": true
+    },
+    "atmosphere": {
+      "provider": "ERA5",
+      "dataset_id": "ERA5-20250815T12-bounds-41.2-2.0-41.4-2.2",
+      "bounds": [41.2, 2.0, 41.4, 2.2],
+      "strict": true,
+      "time_autoupdate": true,
+      "interpolation": false
+    },
+    "recorder": {
+      "enabled": true,
+      "schema_version": "samples-v10",
+      "interval_s": 0.1,
+      "output": "output/era5-tem-envelope.csv"
+    }
+  },
+  "external_resources": {
+    "BADA-4.2-local": {
+      "kind": "licensed-bada",
+      "path": "replace-with-local-BADA-4.2-parent"
+    },
+    "ERA5-20250815T12-bounds-41.2-2.0-41.4-2.2": {
+      "kind": "weather-cache",
+      "path": "replace-with-local-ERA5-cache-file"
+    }
+  },
+  "evidence": {
+    "status": "planned",
+    "validators": [
+      "tests/research/validate_era5_tem_run.py"
+    ],
+    "sha256": {}
+  }
+}
