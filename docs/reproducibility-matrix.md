@@ -39,7 +39,7 @@ their manifests and metadata.
 
 ## Five-profile comparison gate
 
-One plugin-neutral experiment will be executed through these profiles:
+The plugin-neutral experiment is executed through these profiles:
 
 1. OpenAP + ISA without recorder;
 2. OpenAP + ISA with recorder;
@@ -47,13 +47,35 @@ One plugin-neutral experiment will be executed through these profiles:
 4. PyBADA + ISA with recorder;
 5. PyBADA + ERA5 or GFS with recorder.
 
-The integration runner must collect a small external sample stream in all five
-cases. Where the recorder is enabled, recorder CSV state must agree with the
-external sampler at common timestamps. Profiles 1 and 2 must be state-identical
-to establish recorder non-interference; this first paired gate now passes for
-the fixed 240-step OpenAP/ISA trajectory. The comparison must define fields and
-tolerances before viewing differences; exact equality remains required where
-the implementation and atmosphere are otherwise identical.
+The direct matrix completed on 2026-09-03: all five profiles reached
+`destination_reached`, recorder non-interference was exact, invalid atmosphere
+samples were zero, and configured below-domain ISA was exercised by both ERA5
+profiles. The offline suite at that checkpoint reported 230 passed and 5
+deselected.
+
+The final clean operational matrix completed on 2026-09-04 against
+`experiments/example_ops_full_clean.scn`, source SHA-256
+`621ef82cf2efbec39457d873aa41fb458d54456ab1a3d9798d611082370a214f`.
+All five profiles were valid and reached `destination_reached`:
+
+| Profile | Simulated duration | Atmosphere samples | Fuel/mass change | Simulation wall time |
+| --- | ---: | --- | ---: | ---: |
+| `baseline-recorder-free` | 8,037.0 s | ISA 16,075 | 0 kg | 8.615 s |
+| `baseline-recorder` | 8,037.0 s | ISA 16,075 | 0 kg | 11.815 s |
+| `meteo-recorder` | 7,570.0 s | ERA5 15,141 | 0 kg | 36.955 s |
+| `pybada-recorder` | 8,095.5 s | ISA 16,192 | 4,412.152 kg | 158.514 s |
+| `combined-recorder` | 7,594.5 s | ERA5 15,190 | 4,200.160 kg | 187.281 s |
+
+Recorder-free and recorded baseline external samples were exactly identical.
+All profiles had zero invalid atmosphere samples and zero unexpected fallback
+samples. The operational `ATDIST` condition stops before the ERA5 lower
+vertical boundary, so this run contains no ERA5-to-ISA transition; it does not
+supersede the direct-matrix transition evidence.
+
+The stable comparison contract is documented in
+`docs/reproducibility-comparison-contract.md`. Recorder non-interference has
+zero tolerance and is a gate. Meteorology, performance, combined, interaction,
+and runtime differences remain informational.
 
 ## Validated scientific scope
 
@@ -97,11 +119,14 @@ PYTHONNOUSERSITE=1 PYTHONPATH=. \
   --output output/matrix/example_direct
 ```
 
-The operational example uses the same commands with
-`experiments/example_ops.scn` and a separate output directory.
+The validated clean operational example uses the same commands with
+`experiments/example_ops_full_clean.scn` and a separate output directory.
+`experiments/example_ops.scn` preserves the original operational trajectory for
+future non-clean configuration work.
 
 ```shell
-PYTHONNOUSERSITE=1 PYTHONPATH=. python -m pytest -q tests/research
+PYTHONNOUSERSITE=1 PYTHONPATH=. \
+  python -m pytest tests/research -m "not licensed_bada and not external_weather"
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
   python tests/research/run_pybada_revalidation.py --validate-only --skip-unit
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
@@ -117,8 +142,26 @@ PYTHONNOUSERSITE=1 PYTHONPATH=. \
   python tests/research/run_integration_profile.py --atmosphere GFS \
   --workdir /tmp/bluesky-openap-gfs --output /tmp/bluesky-openap-gfs.json
 python tests/research/validate_run_manifest.py research-run.example.json
-git diff --check
 ```
+
+The 2026-09-04 offline gate reported 240 passed, 5 deselected, and four known
+NumPy 2.5 fixture deprecation warnings.
+
+### ERA5 identity for the clean operational matrix
+
+- simulation date and start: 2025-05-01 12:00 UTC;
+- region label: `western-europe`;
+- bounds: 40°N, 5°W to 53°N, 10°E;
+- pressure levels: 100, 125, 150, 175, 200, 225, 250, 300, 350,
+  400, 450, 500, 550, 600, 650, 700, 750, 775, 800, 825, 850,
+  875, 900, 925, 950, 975, and 1000 hPa;
+- sampled slots: 12:00, 13:00, and 14:00 UTC;
+- time interpolation: disabled;
+- below-domain policy: configured ISA;
+- above, lateral, and time-domain policies: reject;
+- sampled cache SHA-256 values: `c6defbe2c37473d0c6bf295c6fb6bae10cbe8c2cf8cdcc034ee379c30e7f3e77`,
+  `0a4c27a1f4bbf75659d5c8ecc60b447627866a2e760df426e8be6da231dced47`,
+  and `9f434b134785e7ef98c7251f66cef2e653196d5e6c00559e1bcaccb95c030b13`.
 
 Licensed datasets, weather caches, credentials, generated CSV/JSONL/metadata,
 and local run manifests remain outside version control.
