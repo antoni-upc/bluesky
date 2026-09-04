@@ -5,6 +5,11 @@
 /scenario/ic.scn
 /bluesky/resources/grib
 /bluesky/resources/netcdf
+/bluesky/resources/NetCDF
+/bluesky/resources/grib/*.part
+/bluesky/resources/NetCDF/*.part
+/research-run.local.json
+*.metadata.json
 
 # Potentially locally-copied BADA installation
 /bluesky/resources/performance/BADA/*
