@@ -300,18 +300,57 @@ def trajectory_comparison(baseline, candidate):
     if not common:
         return {"common_samples": 0}
     horizontal = []
-    altitude = []
-    tas = []
+    differences = {name: [] for name in (
+        "alt", "tas", "cas", "M", "mass", "Temp", "p", "rho",
+        "windnorth", "windeast",
+    )}
     for key in common:
         left, right = baseline_rows[key], candidate_rows[key]
         horizontal.append(_haversine_m(left, right))
-        altitude.append(abs(float(left["alt"]) - float(right["alt"])))
-        tas.append(abs(float(left["tas"]) - float(right["tas"])))
+        for name in differences:
+            if left.get(name) is None or right.get(name) is None:
+                continue
+            delta = float(right[name]) - float(left[name])
+            if np.isfinite(delta):
+                differences[name].append(delta)
+
+    def statistics(values):
+        array = np.asarray(values, dtype=float)
+        return {
+            "samples": len(values),
+            "mean_signed": float(np.mean(array)),
+            "rms": float(np.sqrt(np.mean(array ** 2))),
+            "maximum_absolute": float(np.max(np.abs(array))),
+            "final_signed": float(array[-1]),
+        }
+
+    field_names = {
+        "alt": "geometric_altitude_m", "tas": "tas_m_s", "cas": "cas_m_s",
+        "M": "mach", "mass": "mass_kg", "Temp": "temperature_k",
+        "p": "pressure_pa", "rho": "density_kg_m3",
+        "windnorth": "wind_north_m_s", "windeast": "wind_east_m_s",
+    }
+    metrics = {field_names[name]: statistics(values)
+               for name, values in differences.items() if values}
+    horizontal_stats = statistics(horizontal)
     return {
         "common_samples": len(common),
-        "maximum_horizontal_difference_m": max(horizontal),
-        "maximum_altitude_difference_m": max(altitude),
-        "maximum_tas_difference_m_s": max(tas),
+        "alignment": {
+            "method": "exact_simulation_time_and_aircraft_id",
+            "baseline_samples": len(baseline_rows),
+            "candidate_samples": len(candidate_rows),
+            "common_samples": len(common),
+            "common_fraction_of_shorter": len(common) / min(
+                len(baseline_rows), len(candidate_rows)
+            ),
+        },
+        "metrics": {"horizontal_position_m": horizontal_stats, **metrics},
+        # Compatibility fields retained for existing consumers.
+        "maximum_horizontal_difference_m": horizontal_stats["maximum_absolute"],
+        "maximum_altitude_difference_m": metrics["geometric_altitude_m"][
+            "maximum_absolute"
+        ],
+        "maximum_tas_difference_m_s": metrics["tas_m_s"]["maximum_absolute"],
     }
 
 
@@ -320,7 +359,12 @@ def compare_profiles(evidence_by_profile):
         name: evidence for name, evidence in evidence_by_profile.items()
         if evidence.get("status", "valid") == "valid"
     }
-    comparisons = {}
+    comparisons = {"contract": {
+        "schema_version": "profile-comparisons-v1",
+        "scientific_effects": "informational",
+        "recorder_non_interference": "exact",
+        "alignment": "exact simulation time and aircraft id",
+    }}
     off = evidence_by_profile.get("baseline-recorder-free")
     on = evidence_by_profile.get("baseline-recorder")
     if off and on:
@@ -329,29 +373,72 @@ def compare_profiles(evidence_by_profile):
         exact = left == right
         off_sim = off["timing"]["simulation_wall_s"]
         on_sim = on["timing"]["simulation_wall_s"]
-        comparisons["recorder_non_interference"] = {
+        comparisons["recorder_effect"] = {
+            "kind": "exact_gate",
             "status": "pass" if exact else "fail", "exact": exact,
             "recorder_simulation_overhead_s": on_sim - off_sim,
             "recorder_simulation_overhead_percent": (on_sim / off_sim - 1.0) * 100.0,
         }
-    baseline = off or on
+        comparisons["recorder_non_interference"] = comparisons["recorder_effect"]
+    baseline = on or off
+    effects = {
+        "meteorology_effect": "meteo-recorder",
+        "performance_effect": "pybada-recorder",
+        "combined_effect": "combined-recorder",
+    }
     if baseline:
-        baseline_duration = baseline["simulation"]["simulated_duration_s"]
-        baseline_wall = baseline["timing"]["simulation_wall_s"]
-        for name, evidence in evidence_by_profile.items():
-            if evidence is baseline:
-                continue
-            comparisons[f"{name}_vs_baseline"] = {
+        for effect, profile_name in effects.items():
+            evidence = evidence_by_profile.get(profile_name)
+            if evidence:
+                comparisons[effect] = {
                 "kind": "informational",
+                "baseline_profile": "baseline-recorder" if on else
+                                    "baseline-recorder-free",
+                "candidate_profile": profile_name,
                 "completion_time_difference_s":
-                    evidence["simulation"]["simulated_duration_s"] - baseline_duration,
+                    evidence["simulation"]["simulated_duration_s"] -
+                    baseline["simulation"]["simulated_duration_s"],
                 "simulation_wall_time_difference_s":
-                    evidence["timing"]["simulation_wall_s"] - baseline_wall,
+                    evidence["timing"]["simulation_wall_s"] -
+                    baseline["timing"]["simulation_wall_s"],
                 "simulation_runtime_ratio":
-                    evidence["timing"]["simulation_wall_s"] / baseline_wall,
+                    evidence["timing"]["simulation_wall_s"] /
+                    baseline["timing"]["simulation_wall_s"],
                 "trajectory": trajectory_comparison(baseline, evidence),
             }
+    meteo = evidence_by_profile.get("meteo-recorder")
+    pybada = evidence_by_profile.get("pybada-recorder")
+    combined = evidence_by_profile.get("combined-recorder")
+    if baseline and meteo and pybada and combined:
+        def interaction(field, section):
+            value = lambda item: float(item[section][field])
+            return ((value(combined) - value(pybada)) -
+                    (value(meteo) - value(baseline)))
+        comparisons["interaction_effect"] = {
+            "kind": "informational",
+            "definition": "(combined - performance) - (meteorology - baseline)",
+            "completion_time_interaction_s": interaction(
+                "simulated_duration_s", "simulation"
+            ),
+            "simulation_wall_time_interaction_s": interaction(
+                "simulation_wall_s", "timing"
+            ),
+        }
     return comparisons
+
+
+def comparison_csv_rows(comparisons):
+    """Flatten numeric and scalar comparison leaves for stable CSV analysis."""
+    rows = []
+    def visit(effect, path, value):
+        if isinstance(value, dict):
+            for key in sorted(value):
+                visit(effect, path + [key], value[key])
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            rows.append({"effect": effect, "metric": ".".join(path), "value": value})
+    for effect in sorted(comparisons):
+        visit(effect, [], comparisons[effect])
+    return rows
 
 
 def configure_worker(profile, run_dir, weather_cache):
@@ -625,6 +712,10 @@ def orchestrate(args):
     (output / "matrix-summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    with (output / "comparisons.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("effect", "metric", "value"))
+        writer.writeheader()
+        writer.writerows(comparison_csv_rows(comparisons))
     comparisons_pass = all(value.get("status", "pass") == "pass"
                            for value in comparisons.values())
     return 0 if len(results) == len(selected) and comparisons_pass and all(

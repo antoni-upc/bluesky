@@ -1,8 +1,8 @@
 import pytest
 
 from tests.research.run_profile_matrix import (
-    atmosphere_evidence, compare_profiles, git_revision, trajectory_comparison,
-    trajectory_summary, weather_cache_identity,
+    atmosphere_evidence, compare_profiles, comparison_csv_rows, git_revision,
+    trajectory_comparison, trajectory_summary, weather_cache_identity,
 )
 
 
@@ -59,6 +59,36 @@ def test_trajectory_comparison_uses_only_common_timestamps():
     assert result["maximum_horizontal_difference_m"] > 100
     assert result["maximum_altitude_difference_m"] == 10
     assert result["maximum_tas_difference_m_s"] == 2
+    assert result["alignment"]["common_fraction_of_shorter"] == 0.5
+    assert result["metrics"]["geometric_altitude_m"]["rms"] == 10
+    assert result["metrics"]["tas_m_s"]["mean_signed"] == 2
+
+
+def test_named_effects_and_factorial_interaction_are_informational():
+    rows = [sample(0.5)]
+    result = compare_profiles({
+        "baseline-recorder": evidence(rows, 100.0, 10.0),
+        "meteo-recorder": evidence(rows, 103.0, 12.0),
+        "pybada-recorder": evidence(rows, 110.0, 20.0),
+        "combined-recorder": evidence(rows, 115.0, 25.0),
+    })
+
+    assert result["meteorology_effect"]["kind"] == "informational"
+    assert result["performance_effect"]["completion_time_difference_s"] == 10
+    assert result["combined_effect"]["completion_time_difference_s"] == 15
+    assert result["interaction_effect"]["completion_time_interaction_s"] == 2
+    assert result["interaction_effect"]["simulation_wall_time_interaction_s"] == 3
+
+
+def test_comparison_csv_rows_flatten_stable_metric_paths():
+    rows = comparison_csv_rows({
+        "effect": {"kind": "informational", "metric": {"rms": 2.5}}
+    })
+
+    assert {tuple(row.values()) for row in rows} == {
+        ("effect", "kind", "informational"),
+        ("effect", "metric.rms", 2.5),
+    }
 
 
 def test_trajectory_summary_reports_fuel_and_quality_counts():
