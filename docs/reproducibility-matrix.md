@@ -72,10 +72,12 @@ samples. The operational `ATDIST` condition stops before the ERA5 lower
 vertical boundary, so this run contains no ERA5-to-ISA transition; it does not
 supersede the direct-matrix transition evidence.
 
-The stable comparison contract is documented in
-`docs/reproducibility-comparison-contract.md`. Recorder non-interference has
-zero tolerance and is a gate. Meteorology, performance, combined, interaction,
-and runtime differences remain informational.
+Recorder non-interference uses exact time-and-aircraft alignment and has zero
+tolerance. Meteorology, performance, combined, interaction, and runtime
+differences remain informational: they receive no pass/fail threshold without
+an independently justified physical reference. `matrix-summary.json` is the
+authoritative structured comparison; `comparisons.csv` is its deterministic
+scalar flattening.
 
 ## Validated scientific scope
 
