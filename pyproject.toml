@@ -43,6 +43,7 @@ keywords = ['ATM', 'transport', 'simulation', 'aviation', 'aircraft']
 pygame = ["pygame"]
 era5 = ["cdsapi>=0.7,<0.8", "netCDF4>=1.7,<2"]
 gfs = ["requests>=2.32,<3", "pygrib>=2.1.6,<3"]
+pybada = ["pyBADA>=0.1.12,<0.2"]
 qt6 = [
     "pyopengl",
     "PyQt6",
@@ -102,8 +103,3 @@ exclude = [
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 dependencies = ["setuptools>=69.1.1", "numpy"]
-
-[tool.pytest.ini_options]
-markers = [
-  "smoke: dependency-free research feature smoke tests",
-]

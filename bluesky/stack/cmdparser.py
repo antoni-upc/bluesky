@@ -6,6 +6,10 @@ from bluesky.network.publisher import state_publisher
 from bluesky.stack.argparser import Parameter, getnextarg, ArgumentError
 
 
+class CommandRejected(str):
+    """Marker for a valid command whose requested state transition was rejected."""
+
+
 class Command:
     ''' Stack command object. '''
     # Dictionary with all command objects
