@@ -1,7 +1,8 @@
 import pytest
 
 from tests.research.run_profile_matrix import (
-    atmosphere_evidence, compare_profiles, trajectory_comparison, trajectory_summary,
+    atmosphere_evidence, compare_profiles, git_revision, trajectory_comparison,
+    trajectory_summary, weather_cache_identity,
 )
 
 
@@ -117,3 +118,39 @@ def test_invalid_and_unexpected_fallback_counts_are_independent():
     assert result["configured_domain_samples"] == 0
     assert result["invalid_atmosphere_samples"] == 2
     assert result["unexpected_fallback_samples"] == 1
+
+
+def test_supplied_revision_provenance_avoids_git(monkeypatch):
+    commit = "a" * 40
+    upstream = "b" * 40
+    monkeypatch.setenv("RESEARCH_GIT_COMMIT", commit)
+    monkeypatch.setenv("RESEARCH_GIT_UPSTREAM_BASE", upstream)
+    monkeypatch.setenv("RESEARCH_GIT_WORKING_TREE_DIRTY", "true")
+
+    assert git_revision() == {
+        "commit": commit, "upstream_base": upstream, "working_tree_dirty": True,
+    }
+
+
+def test_supplied_revision_provenance_is_complete_and_validated(monkeypatch):
+    monkeypatch.setenv("RESEARCH_GIT_COMMIT", "not-a-hash")
+
+    with pytest.raises(RuntimeError, match="All RESEARCH_GIT"):
+        git_revision()
+
+
+def test_weather_cache_identity_selects_only_sampled_slots(tmp_path):
+    cache = tmp_path / "era5"
+    cache.mkdir()
+    used = cache / "era5-pressure-levels_region_20250501T1200Z_one.nc"
+    unused = cache / "era5-pressure-levels_region_20250501T1300Z_two.nc"
+    used.write_bytes(b"used weather")
+    unused.write_bytes(b"unused weather")
+    rows = [sample(0.5, source="ERA5")]
+    rows[0]["atmos_dataset_time"] = "2025-05-01T12:00:00"
+
+    result = weather_cache_identity(tmp_path, "ERA5", rows)
+
+    assert [item["path"] for item in result] == [f"era5/{used.name}"]
+    assert result[0]["bytes"] == len(b"used weather")
+    assert len(result[0]["sha256"]) == 64

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -44,7 +45,62 @@ def json_checksum(value):
     return hashlib.sha256(content).hexdigest()
 
 
+def file_checksum(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def weather_cache_identity(weather_cache, provider, samples):
+    if provider == "ISA":
+        return []
+    dataset_times = {
+        str(row["atmos_dataset_time"])[:13].replace("-", "").replace("T", "T")
+        for row in samples if row["atmos_source"] == provider and row["atmos_dataset_time"]
+    }
+    cache_root = Path(weather_cache).resolve()
+    provider_root = cache_root / provider.lower()
+    identities = []
+    for path in sorted(item for item in provider_root.iterdir() if item.is_file()):
+        if provider == "ERA5":
+            used = any(f"{slot}00Z" in path.name for slot in dataset_times)
+        else:
+            used = any(
+                f"gfs.{slot[:8]}.t{slot[-2:]}z" in path.name for slot in dataset_times
+            )
+        if used:
+            identities.append({
+                "path": str(path.relative_to(cache_root)), "bytes": path.stat().st_size,
+                "sha256": file_checksum(path),
+            })
+    if not identities:
+        raise RuntimeError(f"No cache files identified for sampled {provider} dataset times")
+    return identities
+
+
 def git_revision():
+    supplied = {
+        "commit": os.environ.get("RESEARCH_GIT_COMMIT"),
+        "upstream_base": os.environ.get("RESEARCH_GIT_UPSTREAM_BASE"),
+        "working_tree_dirty": os.environ.get("RESEARCH_GIT_WORKING_TREE_DIRTY"),
+    }
+    if any(value is not None for value in supplied.values()):
+        if any(value is None for value in supplied.values()):
+            raise RuntimeError("All RESEARCH_GIT_* provenance variables must be supplied")
+        if not re.fullmatch(r"[0-9a-f]{40}", supplied["commit"] or ""):
+            raise RuntimeError("RESEARCH_GIT_COMMIT must be a full lowercase commit hash")
+        if not re.fullmatch(r"[0-9a-f]{40}", supplied["upstream_base"] or ""):
+            raise RuntimeError(
+                "RESEARCH_GIT_UPSTREAM_BASE must be a full lowercase commit hash"
+            )
+        dirty = str(supplied["working_tree_dirty"]).lower()
+        if dirty not in {"true", "false"}:
+            raise RuntimeError("RESEARCH_GIT_WORKING_TREE_DIRTY must be true or false")
+        supplied["working_tree_dirty"] = dirty == "true"
+        return supplied
+
     def git(*args):
         return subprocess.run(
             ["git", *args], cwd=ROOT, check=True, text=True,
@@ -72,7 +128,8 @@ def manifest_for(profile_name, profile, contract, rendering, evidence, config_pa
         }
     if atmosphere["provider"] != "ISA":
         resources[atmosphere["dataset_id"]] = {
-            "kind": "weather-cache", "path": evidence["resources"]["weather_cache"]
+            "kind": "weather-cache", "path": evidence["resources"]["weather_cache"],
+            "files": evidence["weather"]["cache_files"],
         }
     manifest = {
         "schema_version": MANIFEST_SCHEMA,
@@ -299,6 +356,7 @@ def compare_profiles(evidence_by_profile):
 
 def configure_worker(profile, run_dir, weather_cache):
     import bluesky as bs
+    from bluesky.traffic.performance.perfbase import PerfBase
     performance = profile["performance"]
     atmosphere = profile["atmosphere"]
     recorder = profile["recorder"]
@@ -309,6 +367,17 @@ def configure_worker(profile, run_dir, weather_cache):
         success, message = pybada_tem.perfmodel(f"BADA{performance['family']}")
         if not success:
             raise RuntimeError(message)
+        bs.settings.pybada_envelope_policy = performance.get("envelope_policy", "OFF")
+        bs.settings.pybada_envelope_profile = performance.get(
+            "envelope_profile", "LONGITUDINAL"
+        )
+        bs.settings.pybada_envelope_checks = performance.get("envelope_checks", [])
+    expected_model = "OpenAP" if performance["provider"] == "OPENAP" else "PyBadaTEM"
+    selected_model = PerfBase.selected().__name__
+    if selected_model != expected_model:
+        raise RuntimeError(
+            f"Configured {performance['provider']} performance but {selected_model} is active"
+        )
     if atmosphere["provider"] != "ISA":
         from bluesky.core.entity import getproxied
         from bluesky.traffic.windsim import WindSim
@@ -408,9 +477,11 @@ def _run_worker(args):
     wall_time_s = time.perf_counter() - wall_started
     evidence = {
         "schema_version": "profile-evidence-v1",
-        "status": "valid" if termination == "destination_reached" and quality == "VALID"
+        "status": "valid" if termination == "destination_reached" and
+                  quality in {"VALID", "DEGRADED"}
                   else "invalid",
         "profile": args.profile,
+        "quality_status": quality,
         "simulation": {"timestep_s": timestep, "steps": step,
                        "simulated_duration_s": bs.sim.simt,
                        "termination_reason": termination},
@@ -427,6 +498,9 @@ def _run_worker(args):
         "recorder": recorder_evidence,
         "weather": None if weather is None else {
             "active_slot": weather.active_slot, "failure_counts": weather.failure_counts,
+            "cache_files": weather_cache_identity(
+                args.weather_cache, profile["atmosphere"]["provider"], samples
+            ),
         },
         "resources": {"weather_cache": str(Path(args.weather_cache).resolve())},
         "platform": {"python": platform.python_version(), "platform": platform.platform()},

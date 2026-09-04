@@ -67,6 +67,12 @@
         "dataset_id": "bada4-4.2",
         "version": "4.2",
         "dynamics_mode": "TEM",
+        "envelope_policy": "ENFORCE",
+        "envelope_profile": "CUSTOM",
+        "envelope_checks": [
+          "MASS_MIN", "MASS_MAX", "LOW_SPEED", "HIGH_SPEED",
+          "ALTITUDE_MAX", "ROC_MAX", "ROD_MAX"
+        ],
         "strict": true
       },
       "atmosphere": {"provider": "ISA"},
@@ -83,6 +89,12 @@
         "dataset_id": "bada4-4.2",
         "version": "4.2",
         "dynamics_mode": "TEM",
+        "envelope_policy": "ENFORCE",
+        "envelope_profile": "CUSTOM",
+        "envelope_checks": [
+          "MASS_MIN", "MASS_MAX", "LOW_SPEED", "HIGH_SPEED",
+          "ALTITUDE_MAX", "ROC_MAX", "ROD_MAX"
+        ],
         "strict": true
       },
       "atmosphere": {

@@ -24,6 +24,20 @@ def _axis(name, values):
     return sorted_values, order
 
 
+def _longitude_axis(values):
+    """Order a circular longitude axis across its largest unrepresented gap."""
+    wrapped = (np.asarray(values, dtype=float) + 360.0) % 360.0
+    sorted_values, order = _axis('longitude', wrapped)
+    gaps = np.concatenate((np.diff(sorted_values),
+                           [sorted_values[0] + 360.0 - sorted_values[-1]]))
+    start = (int(np.argmax(gaps)) + 1) % len(sorted_values)
+    if start == 0:
+        return sorted_values, order
+    axis = np.concatenate((sorted_values[start:], sorted_values[:start] + 360.0))
+    permutation = np.concatenate((order[start:], order[:start]))
+    return axis, permutation
+
+
 @dataclass
 class WeatherCube:
     altitude: np.ndarray
@@ -70,8 +84,7 @@ class WeatherCube:
     def __post_init__(self):
         self.altitude, iz = _axis('altitude', self.altitude)
         self.latitude, iy = _axis('latitude', self.latitude)
-        lon = (np.asarray(self.longitude, dtype=float) + 360.0) % 360.0
-        self.longitude, ix = _axis('longitude', lon)
+        self.longitude, ix = _longitude_axis(self.longitude)
         shape = (len(iz), len(iy), len(ix))
         fields = []
         for name in ('east_wind', 'north_wind', 'temperature', 'pressure'):
@@ -92,6 +105,7 @@ class WeatherCube:
     def _points(self, lat, lon, alt):
         lat, lon, alt = np.broadcast_arrays(lat, lon, alt)
         wrapped = (np.asarray(lon, dtype=float) + 360.0) % 360.0
+        wrapped = np.where(wrapped < self.longitude[0], wrapped + 360.0, wrapped)
         return np.column_stack((np.ravel(alt), np.ravel(lat), np.ravel(wrapped))), lat.shape
 
     def interpolate(self, lat, lon, alt):

@@ -48,6 +48,23 @@ def test_antimeridian_requested_domain():
     assert sample.valid.tolist() == [True, False]
 
 
+def test_greenwich_crossing_grid_is_continuous():
+    alt = np.array([0.0, 1000.0])
+    lat = np.array([40.0, 41.0])
+    lon = np.array([-5.0, 0.0, 5.0, 10.0])
+    shape = (len(alt), len(lat), len(lon))
+    fields = [np.full(shape, value) for value in (1.0, 2.0, 280.0, 90_000.0)]
+    weather = WeatherCube(alt, lat, lon, *fields, 'SYNTHETIC', 'T')
+
+    _, _, sample = weather.interpolate(
+        [40.5, 40.5, 40.5], [-0.25, 0.25, 180.0], [500.0, 500.0, 500.0]
+    )
+
+    assert sample.valid.tolist() == [True, True, False]
+    assert np.all(np.diff(weather.longitude) > 0.0)
+    assert weather.longitude[-1] - weather.longitude[0] == 15.0
+
+
 def test_grid_rejects_missing_cells_and_duplicate_axis():
     weather = cube()
     bad = weather.temperature.copy()

@@ -73,6 +73,27 @@ def validate_profile_config(config):
         if not isinstance(performance, dict):
             raise ProfileConfigError(f"profiles.{name}.performance must be an object")
         implementation_key(profile)
+        if str(performance.get("provider", "")).upper() == "PYBADA":
+            policy = str(performance.get("envelope_policy", "OFF")).upper()
+            if policy not in {"OFF", "REPORT", "ENFORCE", "ABORT"}:
+                raise ProfileConfigError(
+                    f"profiles.{name}.performance.envelope_policy must be "
+                    "OFF, REPORT, ENFORCE, or ABORT"
+                )
+            envelope_profile = str(
+                performance.get("envelope_profile", "LONGITUDINAL")
+            ).upper()
+            if envelope_profile not in {"CORE_ONLY", "LONGITUDINAL", "FULL", "CUSTOM"}:
+                raise ProfileConfigError(
+                    f"profiles.{name}.performance.envelope_profile must be "
+                    "CORE_ONLY, LONGITUDINAL, FULL, or CUSTOM"
+                )
+            checks = performance.get("envelope_checks", [])
+            if not isinstance(checks, list) or any(
+                    not isinstance(check, str) or not check for check in checks):
+                raise ProfileConfigError(
+                    f"profiles.{name}.performance.envelope_checks must be a list of names"
+                )
         atmosphere = profile.get("atmosphere")
         recorder = profile.get("recorder")
         if not isinstance(atmosphere, dict):

@@ -46,10 +46,12 @@ def scenario_contract(path):
     if not safety_holds:
         raise ProfileConfigError(f"{path}: scenario requires a safety HOLD")
     arrival_holds = [command for _, command, _ in commands
-                     if command.upper().startswith("ATDIST ") and
+                     if command.upper().startswith(("ATDIST ", "ATALT ")) and
                      command.upper().endswith(", HOLD")]
     if not arrival_holds:
-        raise ProfileConfigError(f"{path}: scenario requires an ATDIST arrival HOLD")
+        raise ProfileConfigError(
+            f"{path}: scenario requires an ATDIST or ATALT arrival HOLD"
+        )
     positions = []
     for _, command, line in commands:
         upper = command.upper()
@@ -67,6 +69,7 @@ def scenario_contract(path):
         "safety_duration_s": max(safety_holds),
         "positions": positions,
         "command_count": len(commands),
+        "arrival_condition": arrival_holds[-1],
     }
 
 

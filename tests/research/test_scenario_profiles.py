@@ -170,3 +170,11 @@ def test_repository_configuration_has_canonical_profiles_and_roles():
         "pybada-recorder", "combined-recorder",
     }
     assert set(value["aircraft_roles"]) == {"narrowbody", "widebody", "jumbo"}
+
+
+def test_config_rejects_unknown_pybada_envelope_policy():
+    value = config()
+    value["profiles"]["bada3"]["performance"]["envelope_policy"] = "MAYBE"
+
+    with pytest.raises(ProfileConfigError, match="envelope_policy"):
+        validate_profile_config(value)

@@ -10,13 +10,18 @@ from tests.research.scenario_profiles import ProfileConfigError
 
 
 def test_repository_scenarios_have_execution_contract():
-    for name, duration in (("example_direct.scn", 8100), ("example_ops.scn", 10800)):
+    for name, duration in (
+        ("example_direct.scn", 8100),
+        ("example_ops.scn", 12600),
+        ("example_ops_full_clean.scn", 12600),
+    ):
         contract = scenario_contract(f"experiments/{name}")
         assert contract["simulation_utc"] == dt.datetime(
             2025, 5, 1, 12, tzinfo=dt.timezone.utc
         )
         assert contract["safety_duration_s"] == duration
         assert contract["positions"]
+        assert contract["arrival_condition"].endswith(", HOLD")
 
 
 def test_bounds_reject_an_excluded_route_position():
