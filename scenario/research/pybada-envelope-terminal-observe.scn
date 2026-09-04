@@ -1,0 +1,48 @@
+# Licensed BADA 4 takeoff/landing configuration observation gate.
+# Run with: IC research/pybada-envelope-terminal-observe
+00:00:00.00>ECHO TEST INFO === PYBADATEM TERMINAL CONFIGURATION OBSERVATION GATE ===
+00:00:00.05>ECHO TEST INFO This gate observes duplicated low-altitude climb and descent operating points only.
+00:00:00.10>ECHO TEST INFO Every aircraft remains envelope OFF and receives no bank or heading-change command.
+00:00:00.15>ECHO TEST ERROR Do not infer TO or LD from altitude, speed, phase, or HLid if pyBADA exposes another configuration.
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.25>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.30>PERFMODEL BADA4
+
+# Duplicate takeoff candidates: 200 ft, 140 kt, climbing toward 5,000 ft.
+# Native BlueSky and pyBADA BADA 4 both delimit TO below 400 ft.
+00:00:01.00>CRE TOB1,A320-232,41.300,2.100,90,200,140
+00:00:01.05>CRE TOB2,A320-232,41.310,2.100,90,200,140
+# Duplicate landing candidates: 1,000 ft, 140 kt, descending toward ground.
+00:00:01.10>CRE LDB1,A320-232,41.330,2.100,90,1000,140
+00:00:01.15>CRE LDB2,A320-232,41.340,2.100,90,1000,140
+00:00:01.20>DYNAMICS TOB1 KINEMATIC
+00:00:01.25>DYNAMICS TOB2 KINEMATIC
+00:00:01.30>DYNAMICS LDB1 KINEMATIC
+00:00:01.35>DYNAMICS LDB2 KINEMATIC
+00:00:01.40>BADACONFIG TOB1 PYBADA
+00:00:01.45>BADACONFIG TOB2 PYBADA
+00:00:01.50>BADACONFIG LDB1 PYBADA
+00:00:01.55>BADACONFIG LDB2 PYBADA
+00:00:01.60>ALT TOB1 5000 1500
+00:00:01.65>ALT TOB2 5000 1500
+00:00:01.70>ALT LDB1 0 -500
+00:00:01.75>ALT LDB2 0 -500
+00:00:01.80>ENVELOPE TOB1 OFF
+00:00:01.85>ENVELOPE TOB2 OFF
+00:00:01.90>ENVELOPE LDB1 OFF
+00:00:01.95>ENVELOPE LDB2 OFF
+00:00:02.00>RECORDRESEARCH START pybada-envelope-terminal-observe.csv
+00:00:02.10>ECHO TEST ACTION Inspecting the initial duplicated terminal operating points.
+00:00:02.20>PERFSTATUS TOB1 ALL
+00:00:02.30>PERFSTATUS TOB2 ALL
+00:00:02.40>PERFSTATUS LDB1 ALL
+00:00:02.50>PERFSTATUS LDB2 ALL
+00:00:07.00>ECHO TEST ACTION Inspecting the same points after five seconds of resolved climb or descent guidance.
+00:00:07.10>PERFSTATUS TOB1 ALL
+00:00:07.20>PERFSTATUS TOB2 ALL
+00:00:07.30>PERFSTATUS LDB1 ALL
+00:00:07.40>PERFSTATUS LDB2 ALL
+00:00:08.00>RECORDRESEARCH STOP
+00:00:08.10>ECHO TEST INFO Run validate_terminal_observation.py on output/pybada-envelope-terminal-observe.csv.
+00:00:08.20>ECHO TEST EXPECT No QUALITY events, no lateral motion, and identical evidence within each duplicated pair.
+00:00:09.00>HOLD

@@ -1,0 +1,753 @@
+#!/usr/bin/env python3
+"""Render and execute a BlueSky scenario through research plugin profiles."""
+
+import argparse
+import csv
+import datetime as dt
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import subprocess
+import sys
+import time
+import traceback
+
+import numpy as np
+
+from tests.research.matrix_preflight import parse_scenario, scenario_contract, validate_resources
+from tests.research.run_manifest import SCHEMA_VERSION as MANIFEST_SCHEMA, validate_manifest
+from tests.research.scenario_profiles import load_profile_config, render_scenario
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SAMPLE_FIELDS = (
+    "lat", "lon", "alt", "pressure_alt", "tas", "cas", "M", "vs", "hdg", "trk",
+    "p", "rho", "Temp", "windnorth", "windeast", "atmos_source", "atmos_valid",
+    "atmos_dataset_time", "atmos_fallback_reason",
+)
+PERFORMANCE_FIELDS = ("mass", "thrust", "drag", "fuelflow", "phase")
+RECORDER_FIELDS = {
+    "lat_deg": "lat", "lon_deg": "lon", "geometric_alt_m": "alt",
+    "pressure_alt_m": "pressure_alt", "tas_m_s": "tas", "cas_m_s": "cas",
+    "mach": "M", "vertical_speed_m_s": "vs", "heading_deg": "hdg",
+    "track_deg": "trk", "temperature_k": "Temp", "pressure_pa": "p",
+    "density_kg_m3": "rho", "wind_north_m_s": "windnorth",
+    "wind_east_m_s": "windeast", "mass_kg": "mass", "thrust_n": "thrust",
+    "drag_n": "drag", "fuel_flow_kg_s": "fuelflow",
+}
+
+
+def json_checksum(value):
+    content = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(content).hexdigest()
+
+
+def file_checksum(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def weather_cache_identity(weather_cache, provider, samples):
+    if provider == "ISA":
+        return []
+    dataset_times = {
+        str(row["atmos_dataset_time"])[:13].replace("-", "").replace("T", "T")
+        for row in samples if row["atmos_source"] == provider and row["atmos_dataset_time"]
+    }
+    cache_root = Path(weather_cache).resolve()
+    provider_root = cache_root / provider.lower()
+    identities = []
+    for path in sorted(item for item in provider_root.iterdir() if item.is_file()):
+        if provider == "ERA5":
+            used = any(f"{slot}00Z" in path.name for slot in dataset_times)
+        else:
+            used = any(
+                f"gfs.{slot[:8]}.t{slot[-2:]}z" in path.name for slot in dataset_times
+            )
+        if used:
+            identities.append({
+                "path": str(path.relative_to(cache_root)), "bytes": path.stat().st_size,
+                "sha256": file_checksum(path),
+            })
+    if not identities:
+        raise RuntimeError(f"No cache files identified for sampled {provider} dataset times")
+    return identities
+
+
+def git_revision():
+    supplied = {
+        "commit": os.environ.get("RESEARCH_GIT_COMMIT"),
+        "upstream_base": os.environ.get("RESEARCH_GIT_UPSTREAM_BASE"),
+        "working_tree_dirty": os.environ.get("RESEARCH_GIT_WORKING_TREE_DIRTY"),
+    }
+    if any(value is not None for value in supplied.values()):
+        if any(value is None for value in supplied.values()):
+            raise RuntimeError("All RESEARCH_GIT_* provenance variables must be supplied")
+        if not re.fullmatch(r"[0-9a-f]{40}", supplied["commit"] or ""):
+            raise RuntimeError("RESEARCH_GIT_COMMIT must be a full lowercase commit hash")
+        if not re.fullmatch(r"[0-9a-f]{40}", supplied["upstream_base"] or ""):
+            raise RuntimeError(
+                "RESEARCH_GIT_UPSTREAM_BASE must be a full lowercase commit hash"
+            )
+        dirty = str(supplied["working_tree_dirty"]).lower()
+        if dirty not in {"true", "false"}:
+            raise RuntimeError("RESEARCH_GIT_WORKING_TREE_DIRTY must be true or false")
+        supplied["working_tree_dirty"] = dirty == "true"
+        return supplied
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, check=True, text=True,
+            stdout=subprocess.PIPE,
+        ).stdout.strip()
+    return {
+        "commit": git("rev-parse", "HEAD"),
+        "upstream_base": git("rev-parse", "upstream/master"),
+        "working_tree_dirty": bool(git("status", "--porcelain")),
+    }
+
+
+def manifest_for(profile_name, profile, contract, rendering, evidence, config_path):
+    performance = dict(profile["performance"])
+    if performance["provider"] == "PYBADA":
+        performance["aircraft"] = sorted(
+            {item["aircraft_type"] for item in rendering["replacements"]}
+        )
+    atmosphere = dict(profile["atmosphere"])
+    recorder = dict(profile["recorder"])
+    resources = {}
+    if performance["provider"] == "PYBADA":
+        resources[performance["dataset_id"]] = {
+            "kind": "licensed-bada", "path": "configured by BlueSky settings"
+        }
+    if atmosphere["provider"] != "ISA":
+        resources[atmosphere["dataset_id"]] = {
+            "kind": "weather-cache", "path": evidence["resources"]["weather_cache"],
+            "files": evidence["weather"]["cache_files"],
+        }
+    manifest = {
+        "schema_version": MANIFEST_SCHEMA,
+        "revision": git_revision(),
+        "experiment": {
+            "scenario": rendering["source"],
+            "rendered_scenario": rendering["rendered"],
+            "source_sha256": rendering["source_sha256"],
+            "rendered_sha256": rendering["rendered_sha256"],
+            "profile_config": str(Path(config_path).resolve()),
+            "simulation_utc": contract["simulation_utc"].isoformat(),
+            "timestep_s": evidence["simulation"]["timestep_s"],
+            "duration_s": evidence["simulation"]["simulated_duration_s"],
+            "random_seed": 0,
+        },
+        "configuration": {
+            "profile": profile_name, "performance": performance,
+            "atmosphere": atmosphere, "recorder": recorder,
+        },
+        "external_resources": resources,
+        "evidence": {
+            "status": "valid" if evidence["status"] == "valid" else "invalid",
+            "validators": ["tests/research/run_profile_matrix.py"],
+        },
+        "timing": evidence["timing"],
+    }
+    validate_manifest(manifest)
+    return manifest
+
+
+def scalar(values, index):
+    value = np.asarray(values)[index]
+    return value.item() if hasattr(value, "item") else value
+
+
+def external_sample(step):
+    import bluesky as bs
+    rows = []
+    for index, acid in enumerate(bs.traf.id):
+        row = {"step": step, "sim_time_s": bs.sim.simt, "acid": acid,
+               "actype": bs.traf.type[index]}
+        row.update({name: scalar(getattr(bs.traf, name), index) for name in SAMPLE_FIELDS})
+        for name in PERFORMANCE_FIELDS:
+            values = getattr(bs.traf.perf, name, ())
+            row[name] = None if index >= len(values) else scalar(values, index)
+        rows.append(row)
+    return rows
+
+
+def require_plugin(name):
+    from bluesky.core.plugin import Plugin
+    success, message = Plugin.load(name)
+    if not success:
+        raise RuntimeError(message)
+
+
+def validate_recorder_samples(csv_path, samples):
+    external = {(float(row["sim_time_s"]), row["acid"]): row for row in samples}
+    with Path(csv_path).open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    for index, row in enumerate(rows):
+        key = (float(row["sim_time_s"]), row["acid"])
+        sample = external.get(key)
+        if sample is None:
+            raise RuntimeError(f"Recorder row {index} has no matching external sample")
+        for recorder_field, external_field in RECORDER_FIELDS.items():
+            if row[recorder_field] == "" and sample[external_field] is None:
+                continue
+            if float(row[recorder_field]) != float(sample[external_field]):
+                raise RuntimeError(
+                    f"Recorder row {index} field {recorder_field} differs from external state"
+                )
+    return len(rows)
+
+
+def _haversine_m(left, right):
+    radius = 6_371_000.0
+    lat1, lat2 = np.radians((left["lat"], right["lat"]))
+    dlat = lat2 - lat1
+    dlon = np.radians(right["lon"] - left["lon"])
+    value = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * \
+        np.sin(dlon / 2.0) ** 2
+    return float(2.0 * radius * np.arcsin(np.sqrt(value)))
+
+
+def atmosphere_evidence(samples):
+    """Summarize atmosphere provenance without treating configured ISA as failure."""
+    configured_prefix = "CONFIGURED_"
+    source_counts = {}
+    configured_domain_samples = 0
+    invalid_atmosphere_samples = 0
+    unexpected_fallback_samples = 0
+    transitions = []
+    previous_by_aircraft = {}
+
+    for row in samples:
+        source = str(row["atmos_source"])
+        reason = str(row.get("atmos_fallback_reason", "") or "")
+        valid = bool(row["atmos_valid"])
+        source_counts[source] = source_counts.get(source, 0) + 1
+        configured = reason.startswith(configured_prefix)
+        configured_domain_samples += int(configured)
+        invalid_atmosphere_samples += int(not valid)
+        unexpected_fallback_samples += int(bool(reason) and not configured)
+
+        previous = previous_by_aircraft.get(row["acid"])
+        if previous is not None and str(previous["atmos_source"]) != source:
+            fields = {
+                "temperature_k": "Temp", "pressure_pa": "p",
+                "density_kg_m3": "rho", "wind_north_m_s": "windnorth",
+                "wind_east_m_s": "windeast",
+            }
+            before = {name: float(previous[field]) for name, field in fields.items()}
+            after = {name: float(row[field]) for name, field in fields.items()}
+            transitions.append({
+                "acid": row["acid"], "sim_time_s": float(row["sim_time_s"]),
+                "geometric_altitude_m": float(row["alt"]),
+                "source_before": str(previous["atmos_source"]),
+                "source_after": source,
+                "fallback_reason_before": str(
+                    previous.get("atmos_fallback_reason", "") or ""
+                ),
+                "fallback_reason_after": reason,
+                "before": before, "after": after,
+                "discontinuity": {
+                    name: after[name] - before[name] for name in fields
+                },
+            })
+        previous_by_aircraft[row["acid"]] = row
+
+    return {
+        "configured_domain_samples": configured_domain_samples,
+        "invalid_atmosphere_samples": invalid_atmosphere_samples,
+        "unexpected_fallback_samples": unexpected_fallback_samples,
+        "source_sample_counts": dict(sorted(source_counts.items())),
+        "source_transitions": transitions,
+    }
+
+
+def trajectory_summary(evidence):
+    samples = evidence["external_samples"]["samples"]
+    by_aircraft = {}
+    for sample in samples:
+        by_aircraft.setdefault(sample["acid"], []).append(sample)
+    aircraft = {}
+    for acid, rows in by_aircraft.items():
+        masses = [row["mass"] for row in rows if row["mass"] is not None and
+                  np.isfinite(row["mass"])]
+        atmosphere = atmosphere_evidence(rows)
+        aircraft[acid] = {
+            "aircraft_type": rows[0]["actype"],
+            "maximum_altitude_m": max(row["alt"] for row in rows),
+            "maximum_tas_m_s": max(row["tas"] for row in rows),
+            "fuel_or_mass_change_kg": None if len(masses) < 2 else masses[0] - masses[-1],
+            **atmosphere,
+        }
+    return {"termination_reason": evidence["simulation"]["termination_reason"],
+            "simulated_duration_s": evidence["simulation"]["simulated_duration_s"],
+            "aircraft": aircraft}
+
+
+def trajectory_comparison(baseline, candidate):
+    baseline_rows = {(row["sim_time_s"], row["acid"]): row
+                     for row in baseline["external_samples"]["samples"]}
+    candidate_rows = {(row["sim_time_s"], row["acid"]): row
+                      for row in candidate["external_samples"]["samples"]}
+    common = sorted(set(baseline_rows) & set(candidate_rows))
+    if not common:
+        return {"common_samples": 0}
+    horizontal = []
+    differences = {name: [] for name in (
+        "alt", "tas", "cas", "M", "mass", "Temp", "p", "rho",
+        "windnorth", "windeast",
+    )}
+    for key in common:
+        left, right = baseline_rows[key], candidate_rows[key]
+        horizontal.append(_haversine_m(left, right))
+        for name in differences:
+            if left.get(name) is None or right.get(name) is None:
+                continue
+            delta = float(right[name]) - float(left[name])
+            if np.isfinite(delta):
+                differences[name].append(delta)
+
+    def statistics(values):
+        array = np.asarray(values, dtype=float)
+        return {
+            "samples": len(values),
+            "mean_signed": float(np.mean(array)),
+            "rms": float(np.sqrt(np.mean(array ** 2))),
+            "maximum_absolute": float(np.max(np.abs(array))),
+            "final_signed": float(array[-1]),
+        }
+
+    field_names = {
+        "alt": "geometric_altitude_m", "tas": "tas_m_s", "cas": "cas_m_s",
+        "M": "mach", "mass": "mass_kg", "Temp": "temperature_k",
+        "p": "pressure_pa", "rho": "density_kg_m3",
+        "windnorth": "wind_north_m_s", "windeast": "wind_east_m_s",
+    }
+    metrics = {field_names[name]: statistics(values)
+               for name, values in differences.items() if values}
+    horizontal_stats = statistics(horizontal)
+    return {
+        "common_samples": len(common),
+        "alignment": {
+            "method": "exact_simulation_time_and_aircraft_id",
+            "baseline_samples": len(baseline_rows),
+            "candidate_samples": len(candidate_rows),
+            "common_samples": len(common),
+            "common_fraction_of_shorter": len(common) / min(
+                len(baseline_rows), len(candidate_rows)
+            ),
+        },
+        "metrics": {"horizontal_position_m": horizontal_stats, **metrics},
+        # Compatibility fields retained for existing consumers.
+        "maximum_horizontal_difference_m": horizontal_stats["maximum_absolute"],
+        "maximum_altitude_difference_m": metrics["geometric_altitude_m"][
+            "maximum_absolute"
+        ],
+        "maximum_tas_difference_m_s": metrics["tas_m_s"]["maximum_absolute"],
+    }
+
+
+def compare_profiles(evidence_by_profile):
+    evidence_by_profile = {
+        name: evidence for name, evidence in evidence_by_profile.items()
+        if evidence.get("status", "valid") == "valid"
+    }
+    comparisons = {"contract": {
+        "schema_version": "profile-comparisons-v1",
+        "scientific_effects": "informational",
+        "recorder_non_interference": "exact",
+        "alignment": "exact simulation time and aircraft id",
+    }}
+    off = evidence_by_profile.get("baseline-recorder-free")
+    on = evidence_by_profile.get("baseline-recorder")
+    if off and on:
+        left = off["external_samples"]["samples"]
+        right = on["external_samples"]["samples"]
+        exact = left == right
+        off_sim = off["timing"]["simulation_wall_s"]
+        on_sim = on["timing"]["simulation_wall_s"]
+        comparisons["recorder_effect"] = {
+            "kind": "exact_gate",
+            "status": "pass" if exact else "fail", "exact": exact,
+            "recorder_simulation_overhead_s": on_sim - off_sim,
+            "recorder_simulation_overhead_percent": (on_sim / off_sim - 1.0) * 100.0,
+        }
+        comparisons["recorder_non_interference"] = comparisons["recorder_effect"]
+    baseline = on or off
+    effects = {
+        "meteorology_effect": "meteo-recorder",
+        "performance_effect": "pybada-recorder",
+        "combined_effect": "combined-recorder",
+    }
+    if baseline:
+        for effect, profile_name in effects.items():
+            evidence = evidence_by_profile.get(profile_name)
+            if evidence:
+                comparisons[effect] = {
+                "kind": "informational",
+                "baseline_profile": "baseline-recorder" if on else
+                                    "baseline-recorder-free",
+                "candidate_profile": profile_name,
+                "completion_time_difference_s":
+                    evidence["simulation"]["simulated_duration_s"] -
+                    baseline["simulation"]["simulated_duration_s"],
+                "simulation_wall_time_difference_s":
+                    evidence["timing"]["simulation_wall_s"] -
+                    baseline["timing"]["simulation_wall_s"],
+                "simulation_runtime_ratio":
+                    evidence["timing"]["simulation_wall_s"] /
+                    baseline["timing"]["simulation_wall_s"],
+                "trajectory": trajectory_comparison(baseline, evidence),
+            }
+    meteo = evidence_by_profile.get("meteo-recorder")
+    pybada = evidence_by_profile.get("pybada-recorder")
+    combined = evidence_by_profile.get("combined-recorder")
+    if baseline and meteo and pybada and combined:
+        def interaction(field, section):
+            value = lambda item: float(item[section][field])
+            return ((value(combined) - value(pybada)) -
+                    (value(meteo) - value(baseline)))
+        comparisons["interaction_effect"] = {
+            "kind": "informational",
+            "definition": "(combined - performance) - (meteorology - baseline)",
+            "completion_time_interaction_s": interaction(
+                "simulated_duration_s", "simulation"
+            ),
+            "simulation_wall_time_interaction_s": interaction(
+                "simulation_wall_s", "timing"
+            ),
+        }
+    return comparisons
+
+
+def comparison_csv_rows(comparisons):
+    """Flatten numeric and scalar comparison leaves for stable CSV analysis."""
+    rows = []
+    def visit(effect, path, value):
+        if isinstance(value, dict):
+            for key in sorted(value):
+                visit(effect, path + [key], value[key])
+        elif isinstance(value, (str, int, float, bool)) or value is None:
+            rows.append({"effect": effect, "metric": ".".join(path), "value": value})
+    for effect in sorted(comparisons):
+        visit(effect, [], comparisons[effect])
+    return rows
+
+
+def configure_worker(profile, run_dir, weather_cache):
+    import bluesky as bs
+    from bluesky.traffic.performance.perfbase import PerfBase
+    performance = profile["performance"]
+    atmosphere = profile["atmosphere"]
+    recorder = profile["recorder"]
+    weather = None
+    if performance["provider"] == "PYBADA":
+        require_plugin("PYBADATEM")
+        from bluesky.plugins import pybada_tem
+        success, message = pybada_tem.perfmodel(f"BADA{performance['family']}")
+        if not success:
+            raise RuntimeError(message)
+        bs.settings.pybada_envelope_policy = performance.get("envelope_policy", "OFF")
+        bs.settings.pybada_envelope_profile = performance.get(
+            "envelope_profile", "LONGITUDINAL"
+        )
+        bs.settings.pybada_envelope_checks = performance.get("envelope_checks", [])
+    expected_model = "OpenAP" if performance["provider"] == "OPENAP" else "PyBadaTEM"
+    selected_model = PerfBase.selected().__name__
+    if selected_model != expected_model:
+        raise RuntimeError(
+            f"Configured {performance['provider']} performance but {selected_model} is active"
+        )
+    if atmosphere["provider"] != "ISA":
+        from bluesky.core.entity import getproxied
+        from bluesky.traffic.windsim import WindSim
+        provider = atmosphere["provider"]
+        bs.settings.meteo_strict = bool(atmosphere["strict"])
+        bs.settings.meteo_time_autoupdate = bool(atmosphere["time_autoupdate"])
+        bs.settings.meteo_time_interpolation = bool(atmosphere["interpolation"])
+        bs.settings.meteo_below_domain_policy = atmosphere.get(
+            "domain_policy", {}).get("below", "REJECT")
+        if provider == "ERA5":
+            bs.settings.era5_region = atmosphere["region"]
+            bs.settings.era5_pressure_levels = atmosphere["pressure_levels_hpa"]
+        bs.settings.era5_cache_path = str(Path(weather_cache) / "era5")
+        bs.settings.gfs_cache_path = str(Path(weather_cache) / "gfs")
+        require_plugin({"ERA5": "WINDECMWF", "GFS": "WINDGFS"}[provider])
+        weather = getproxied(WindSim.instance())
+        weather.strict = bool(atmosphere["strict"])
+        success, message = weather.load(*atmosphere["bounds"])
+        if not success:
+            raise RuntimeError(message)
+    recorder_module = None
+    if recorder["enabled"]:
+        bs.settings.research_output_path = str(run_dir)
+        require_plugin("RESEARCHRECORDER")
+        from bluesky.plugins import research_recorder as recorder_module
+        success, message = recorder_module.record("INTERVAL", str(recorder["interval_s"]))
+        if not success:
+            raise RuntimeError(message)
+        success, message = recorder_module.record("START", "samples.csv")
+        if not success:
+            raise RuntimeError(message)
+    return weather, recorder_module
+
+
+def _run_worker(args):
+    import bluesky as bs
+    from bluesky.core import simtime
+
+    process_started = time.process_time()
+    wall_started = time.perf_counter()
+    started_utc = dt.datetime.now(dt.timezone.utc)
+    config = load_profile_config(args.config)
+    profile = config["profiles"][args.profile]
+    contract = scenario_contract(args.scenario)
+    run_dir = args.output.resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    initialization_started = time.perf_counter()
+    args.workdir.mkdir(parents=True, exist_ok=True)
+    bs.init(mode="sim", detached=True, workdir=args.workdir,
+            configfile=args.bluesky_config)
+    timestep = float(args.timestep)
+    simtime.setdt(timestep)
+    bs.sim.simdt = timestep
+    bs.sim.utc = contract["simulation_utc"].replace(tzinfo=None)
+    initialization_s = time.perf_counter() - initialization_started
+
+    setup_started = time.perf_counter()
+    weather, recorder_module = configure_worker(profile, run_dir, args.weather_cache)
+    commands = [(when, command) for when, command, _ in parse_scenario(args.scenario)
+                if not command.upper().startswith("DATE ")]
+    bs.stack.set_scendata(*map(list, zip(*commands)))
+    setup_s = time.perf_counter() - setup_started
+
+    samples = []
+    simulation_started = time.perf_counter()
+    step = 0
+    while bs.sim.state != bs.HOLD:
+        bs.sim.step()
+        samples.extend(external_sample(step))
+        step += 1
+        if step > int(contract["safety_duration_s"] / timestep) + 2:
+            raise RuntimeError("Scenario exceeded its safety HOLD")
+    simulation_wall_s = time.perf_counter() - simulation_started
+    termination = "safety_hold" if bs.sim.simt >= contract["safety_duration_s"] - timestep \
+        else "destination_reached"
+    quality = "VALID"
+    recorder_evidence = None
+    if recorder_module is not None:
+        quality = recorder_module.recorder.quality_status
+        paths = recorder_module.recorder.stop()
+        if paths:
+            matched_rows = validate_recorder_samples(paths[0], samples)
+            recorder_evidence = {
+                "csv": str(paths[0]), "metadata": str(paths[1]),
+                "events": str(recorder_module.recorder.event_path),
+                "rows": recorder_module.recorder.rows,
+                "common_samples_exact": matched_rows == recorder_module.recorder.rows,
+            }
+    if quality == "ABORTED":
+        termination = "quality_abort"
+    atmosphere = atmosphere_evidence(samples)
+    if (atmosphere["invalid_atmosphere_samples"] or
+            atmosphere["unexpected_fallback_samples"]):
+        quality = "INVALID_ATMOSPHERE"
+    finished_utc = dt.datetime.now(dt.timezone.utc)
+    wall_time_s = time.perf_counter() - wall_started
+    evidence = {
+        "schema_version": "profile-evidence-v1",
+        "status": "valid" if termination == "destination_reached" and
+                  quality in {"VALID", "DEGRADED"}
+                  else "invalid",
+        "profile": args.profile,
+        "quality_status": quality,
+        "simulation": {"timestep_s": timestep, "steps": step,
+                       "simulated_duration_s": bs.sim.simt,
+                       "termination_reason": termination},
+        "timing": {
+            "started_utc": started_utc.isoformat(), "finished_utc": finished_utc.isoformat(),
+            "wall_time_s": wall_time_s, "cpu_time_s": time.process_time() - process_started,
+            "initialization_wall_s": initialization_s, "plugin_setup_wall_s": setup_s,
+            "simulation_wall_s": simulation_wall_s,
+            "simulation_speed_ratio": bs.sim.simt / simulation_wall_s,
+        },
+        "external_samples": {"count": len(samples), "sha256": json_checksum(samples),
+                             "samples": samples},
+        "atmosphere": atmosphere,
+        "recorder": recorder_evidence,
+        "weather": None if weather is None else {
+            "active_slot": weather.active_slot, "failure_counts": weather.failure_counts,
+            "cache_files": weather_cache_identity(
+                args.weather_cache, profile["atmosphere"]["provider"], samples
+            ),
+        },
+        "resources": {"weather_cache": str(Path(args.weather_cache).resolve())},
+        "platform": {"python": platform.python_version(), "platform": platform.platform()},
+    }
+    args.evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+    return 0 if evidence["status"] == "valid" else 2
+
+
+def run_worker(args):
+    started_utc = dt.datetime.now(dt.timezone.utc)
+    wall_started = time.perf_counter()
+    try:
+        return _run_worker(args)
+    except Exception as exc:
+        args.output.mkdir(parents=True, exist_ok=True)
+        failure = {
+            "schema_version": "profile-evidence-v1", "status": "invalid",
+            "profile": args.profile,
+            "failure": {"type": type(exc).__name__, "message": str(exc),
+                        "traceback": traceback.format_exc()},
+            "timing": {"started_utc": started_utc.isoformat(),
+                       "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                       "wall_time_s": time.perf_counter() - wall_started},
+        }
+        args.evidence.write_text(json.dumps(failure, indent=2, sort_keys=True) + "\n",
+                                 encoding="utf-8")
+        print(f"PROFILE FAILED: {args.profile}: {type(exc).__name__}: {exc}",
+              file=sys.stderr, flush=True)
+        return 2
+
+
+def orchestrate(args):
+    started = time.perf_counter()
+    config = load_profile_config(args.config)
+    contract = scenario_contract(args.scenario)
+    selected = args.profiles or list(config["profiles"])
+    unknown = sorted(set(selected) - set(config["profiles"]))
+    if unknown:
+        raise SystemExit(f"Unknown profiles: {', '.join(unknown)}")
+    missing = validate_resources(contract, {"profiles": {
+        name: config["profiles"][name] for name in selected
+    }}, args.weather_cache)
+    if missing and not args.allow_missing_weather:
+        details = "\n".join(f"  {profile}: {path}" for profile, path in missing)
+        raise SystemExit(f"Missing required weather cache files:\n{details}")
+
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    plan = {"scenario": str(args.scenario.resolve()), "profiles": {},
+            "missing_weather": missing}
+    for name in selected:
+        run_dir = output / name
+        rendered = run_dir / "scenario.scn"
+        rendering = render_scenario(args.scenario, rendered, config, name)
+        plan["profiles"][name] = rendering
+    (output / "plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n",
+                                      encoding="utf-8")
+    if args.preflight_only:
+        print(f"PREFLIGHT PASSED: {len(selected)} profiles rendered in {output}")
+        return 0
+
+    results = {}
+    evidence_by_profile = {}
+    for name in selected:
+        run_dir = output / name
+        evidence_path = run_dir / "evidence.json"
+        workdir = run_dir / "work"
+        env = os.environ.copy()
+        env.update({"PYTHONNOUSERSITE": "1", "PYTHONPATH": str(ROOT),
+                    "MPLCONFIGDIR": str(run_dir / "mpl")})
+        command = [sys.executable, str(Path(__file__).resolve()), "--worker",
+                   "--scenario", str(run_dir / "scenario.scn"), "--config", str(args.config),
+                   "--profile", name, "--output", str(run_dir), "--workdir", str(workdir),
+                   "--evidence", str(evidence_path), "--weather-cache", str(args.weather_cache),
+                   "--timestep", str(args.timestep)]
+        if args.bluesky_config:
+            command.extend(("--bluesky-config", str(args.bluesky_config)))
+        completed = subprocess.run(command, cwd=ROOT, env=env)
+        if not evidence_path.is_file():
+            results[name] = {
+                "returncode": completed.returncode,
+                "status": "invalid",
+                "error": "worker exited without producing evidence",
+            }
+            break
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        evidence_by_profile[name] = evidence
+        if evidence["status"] != "valid":
+            results[name] = {"returncode": completed.returncode, "status": "invalid",
+                             "timing": evidence.get("timing"),
+                             "failure": evidence.get("failure")}
+            break
+        manifest = manifest_for(name, config["profiles"][name], contract,
+                                plan["profiles"][name], evidence, args.config)
+        (run_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        results[name] = {"returncode": completed.returncode,
+                         "status": evidence["status"], "timing": evidence["timing"]}
+        if completed.returncode:
+            break
+    comparisons = compare_profiles(evidence_by_profile)
+    summaries = {name: trajectory_summary(evidence) for name, evidence in
+                 evidence_by_profile.items() if evidence.get("status") == "valid"}
+    orchestration_wall_s = time.perf_counter() - started
+    worker_wall_sum = sum(
+        result.get("timing", {}).get("wall_time_s", 0.0) for result in results.values()
+    )
+    worker_cpu_sum = sum(
+        result.get("timing", {}).get("cpu_time_s", 0.0) for result in results.values()
+    )
+    summary = {"schema_version": "profile-matrix-v1", "results": results,
+               "comparisons": comparisons,
+               "trajectory_summaries": summaries,
+               "timing": {
+                   "orchestration_wall_s": orchestration_wall_s,
+                   "worker_wall_time_sum_s": worker_wall_sum,
+                   "worker_cpu_time_sum_s": worker_cpu_sum,
+                   "orchestration_overhead_s": orchestration_wall_s - worker_wall_sum,
+               }}
+    (output / "matrix-summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    with (output / "comparisons.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("effect", "metric", "value"))
+        writer.writeheader()
+        writer.writerows(comparison_csv_rows(comparisons))
+    comparisons_pass = all(value.get("status", "pass") == "pass"
+                           for value in comparisons.values())
+    return 0 if len(results) == len(selected) and comparisons_pass and all(
+        result["status"] == "valid" for result in results.values()) else 2
+
+
+def parser():
+    command = argparse.ArgumentParser(description=__doc__)
+    command.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    command.add_argument("--scenario", type=Path, required=True)
+    command.add_argument("--config", type=Path, default=ROOT / "experiments/profiles.json")
+    command.add_argument("--profile", help=argparse.SUPPRESS)
+    command.add_argument("--profiles", nargs="+")
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--workdir", type=Path, help=argparse.SUPPRESS)
+    command.add_argument("--evidence", type=Path, help=argparse.SUPPRESS)
+    command.add_argument("--weather-cache", type=Path, default=ROOT / "cache/weather")
+    command.add_argument("--bluesky-config", type=Path, default=ROOT / "settings.cfg")
+    command.add_argument("--timestep", type=float, default=0.5)
+    command.add_argument("--preflight-only", action="store_true")
+    command.add_argument("--allow-missing-weather", action="store_true")
+    return command
+
+
+def main():
+    args = parser().parse_args()
+    if args.worker:
+        if not args.profile or not args.workdir or not args.evidence:
+            raise SystemExit("Worker mode requires profile, workdir, and evidence")
+        return run_worker(args)
+    return orchestrate(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

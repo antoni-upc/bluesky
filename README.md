@@ -32,6 +32,12 @@ Using ZSH? Add quotes around the package name: `"bluesky-simulator[full]"`. For 
 Installation and user guides are accessible at:
 https://github.com/TUDelft-CNS-ATM/bluesky/wiki
 
+## Research weather workflow
+
+For reproducible ERA5 or GFS cache preparation, strictness and time-policy
+configuration, point inspection, TEM integration scenarios, and evidence
+validation, follow [scripts/README-weather.md](scripts/README-weather.md).
+
 ## Some features of BlueSky:
 - Written in the freely available, ultra-simple-hence-easy-to-learn, multi-platform language
 Python 3 (using numpy and either pygame or Qt+OpenGL for visualisation) with source

@@ -1,0 +1,14 @@
+# ABORT/evidence-flush gate. Run after the non-abort scenario and inspect the
+# JSONL, CSV, and metadata while BlueSky is held. The recorder auto-finalizes.
+00:00:00.00>ECHO === PYBADATEM ABORT AND FLUSH GATE ===
+00:00:00.10>PLUGIN LOAD PYBADATEM
+00:00:00.20>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.30>PERFMODEL BADA4
+00:00:01.00>CRE MASSA,A320-232,41.30,2.10,90,FL100,250
+00:00:02.00>ENVELOPECHECKS MASSA CUSTOM MASS_MIN MASS_MAX
+00:00:02.10>ENVELOPE MASSA ABORT
+00:00:03.00>RECORDRESEARCH START pybada-envelope-abort.csv
+00:00:04.00>MASS MASSA 100000
+# The preceding command must emit and synchronously flush an ABORTED event,
+# finalize recorder evidence, then place the simulation in HOLD. Commands after
+# it intentionally do not attempt to hide that stop.

@@ -1,0 +1,127 @@
+{
+  "schema_version": "research-profiles-v1",
+  "aircraft_roles": {
+    "narrowbody": {
+      "OPENAP": "A320",
+      "PYBADA3": "A320__",
+      "PYBADA4": "A320-232"
+    },
+    "widebody": {
+      "OPENAP": "A359",
+      "PYBADA3": "A359__",
+      "PYBADA4": "A350-941"
+    },
+    "jumbo": {
+      "OPENAP": "B744",
+      "PYBADA3": "B744__",
+      "PYBADA4": "B744GE"
+    }
+  },
+  "profiles": {
+    "baseline-recorder-free": {
+      "performance": {"provider": "OPENAP"},
+      "atmosphere": {"provider": "ISA"},
+      "recorder": {"enabled": false}
+    },
+    "baseline-recorder": {
+      "performance": {"provider": "OPENAP"},
+      "atmosphere": {"provider": "ISA"},
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    },
+    "meteo-recorder": {
+      "performance": {"provider": "OPENAP"},
+      "atmosphere": {
+        "provider": "ERA5",
+        "dataset_id": "era5-western-europe-20250501",
+        "region": "western-europe",
+        "bounds": [40.0, -5.0, 53.0, 10.0],
+        "pressure_levels_hpa": [
+          100, 125, 150, 175, 200, 225, 250, 300, 350, 400,
+          450, 500, 550, 600, 650, 700, 750, 775, 800, 825,
+          850, 875, 900, 925, 950, 975, 1000
+        ],
+        "domain_policy": {
+          "below": "ISA",
+          "above": "REJECT",
+          "lateral": "REJECT",
+          "time": "REJECT"
+        },
+        "strict": true,
+        "time_autoupdate": true,
+        "interpolation": false
+      },
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    },
+    "pybada-recorder": {
+      "performance": {
+        "provider": "PYBADA",
+        "family": "4",
+        "dataset_id": "bada4-4.2",
+        "version": "4.2",
+        "dynamics_mode": "TEM",
+        "envelope_policy": "ENFORCE",
+        "envelope_profile": "CUSTOM",
+        "envelope_checks": [
+          "MASS_MIN", "MASS_MAX", "LOW_SPEED", "HIGH_SPEED",
+          "ALTITUDE_MAX", "ROC_MAX", "ROD_MAX"
+        ],
+        "strict": true
+      },
+      "atmosphere": {"provider": "ISA"},
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    },
+    "combined-recorder": {
+      "performance": {
+        "provider": "PYBADA",
+        "family": "4",
+        "dataset_id": "bada4-4.2",
+        "version": "4.2",
+        "dynamics_mode": "TEM",
+        "envelope_policy": "ENFORCE",
+        "envelope_profile": "CUSTOM",
+        "envelope_checks": [
+          "MASS_MIN", "MASS_MAX", "LOW_SPEED", "HIGH_SPEED",
+          "ALTITUDE_MAX", "ROC_MAX", "ROD_MAX"
+        ],
+        "strict": true
+      },
+      "atmosphere": {
+        "provider": "ERA5",
+        "dataset_id": "era5-western-europe-20250501",
+        "region": "western-europe",
+        "bounds": [40.0, -5.0, 53.0, 10.0],
+        "pressure_levels_hpa": [
+          100, 125, 150, 175, 200, 225, 250, 300, 350, 400,
+          450, 500, 550, 600, 650, 700, 750, 775, 800, 825,
+          850, 875, 900, 925, 950, 975, 1000
+        ],
+        "domain_policy": {
+          "below": "ISA",
+          "above": "REJECT",
+          "lateral": "REJECT",
+          "time": "REJECT"
+        },
+        "strict": true,
+        "time_autoupdate": true,
+        "interpolation": false
+      },
+      "recorder": {
+        "enabled": true,
+        "schema_version": "samples-v10",
+        "interval_s": 0.5
+      }
+    }
+  }
+}
