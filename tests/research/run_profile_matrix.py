@@ -158,6 +158,60 @@ def _haversine_m(left, right):
     return float(2.0 * radius * np.arcsin(np.sqrt(value)))
 
 
+def atmosphere_evidence(samples):
+    """Summarize atmosphere provenance without treating configured ISA as failure."""
+    configured_prefix = "CONFIGURED_"
+    source_counts = {}
+    configured_domain_samples = 0
+    invalid_atmosphere_samples = 0
+    unexpected_fallback_samples = 0
+    transitions = []
+    previous_by_aircraft = {}
+
+    for row in samples:
+        source = str(row["atmos_source"])
+        reason = str(row.get("atmos_fallback_reason", "") or "")
+        valid = bool(row["atmos_valid"])
+        source_counts[source] = source_counts.get(source, 0) + 1
+        configured = reason.startswith(configured_prefix)
+        configured_domain_samples += int(configured)
+        invalid_atmosphere_samples += int(not valid)
+        unexpected_fallback_samples += int(bool(reason) and not configured)
+
+        previous = previous_by_aircraft.get(row["acid"])
+        if previous is not None and str(previous["atmos_source"]) != source:
+            fields = {
+                "temperature_k": "Temp", "pressure_pa": "p",
+                "density_kg_m3": "rho", "wind_north_m_s": "windnorth",
+                "wind_east_m_s": "windeast",
+            }
+            before = {name: float(previous[field]) for name, field in fields.items()}
+            after = {name: float(row[field]) for name, field in fields.items()}
+            transitions.append({
+                "acid": row["acid"], "sim_time_s": float(row["sim_time_s"]),
+                "geometric_altitude_m": float(row["alt"]),
+                "source_before": str(previous["atmos_source"]),
+                "source_after": source,
+                "fallback_reason_before": str(
+                    previous.get("atmos_fallback_reason", "") or ""
+                ),
+                "fallback_reason_after": reason,
+                "before": before, "after": after,
+                "discontinuity": {
+                    name: after[name] - before[name] for name in fields
+                },
+            })
+        previous_by_aircraft[row["acid"]] = row
+
+    return {
+        "configured_domain_samples": configured_domain_samples,
+        "invalid_atmosphere_samples": invalid_atmosphere_samples,
+        "unexpected_fallback_samples": unexpected_fallback_samples,
+        "source_sample_counts": dict(sorted(source_counts.items())),
+        "source_transitions": transitions,
+    }
+
+
 def trajectory_summary(evidence):
     samples = evidence["external_samples"]["samples"]
     by_aircraft = {}
@@ -167,13 +221,13 @@ def trajectory_summary(evidence):
     for acid, rows in by_aircraft.items():
         masses = [row["mass"] for row in rows if row["mass"] is not None and
                   np.isfinite(row["mass"])]
+        atmosphere = atmosphere_evidence(rows)
         aircraft[acid] = {
             "aircraft_type": rows[0]["actype"],
             "maximum_altitude_m": max(row["alt"] for row in rows),
             "maximum_tas_m_s": max(row["tas"] for row in rows),
             "fuel_or_mass_change_kg": None if len(masses) < 2 else masses[0] - masses[-1],
-            "invalid_atmosphere_samples": sum(not row["atmos_valid"] for row in rows),
-            "fallback_samples": sum(bool(row["atmos_fallback_reason"]) for row in rows),
+            **atmosphere,
         }
     return {"termination_reason": evidence["simulation"]["termination_reason"],
             "simulated_duration_s": evidence["simulation"]["simulated_duration_s"],
@@ -346,11 +400,15 @@ def _run_worker(args):
             }
     if quality == "ABORTED":
         termination = "quality_abort"
+    atmosphere = atmosphere_evidence(samples)
+    if (atmosphere["invalid_atmosphere_samples"] or
+            atmosphere["unexpected_fallback_samples"]):
+        quality = "INVALID_ATMOSPHERE"
     finished_utc = dt.datetime.now(dt.timezone.utc)
     wall_time_s = time.perf_counter() - wall_started
     evidence = {
         "schema_version": "profile-evidence-v1",
-        "status": "valid" if termination == "destination_reached" and quality != "ABORTED"
+        "status": "valid" if termination == "destination_reached" and quality == "VALID"
                   else "invalid",
         "profile": args.profile,
         "simulation": {"timestep_s": timestep, "steps": step,
@@ -365,6 +423,7 @@ def _run_worker(args):
         },
         "external_samples": {"count": len(samples), "sha256": json_checksum(samples),
                              "samples": samples},
+        "atmosphere": atmosphere,
         "recorder": recorder_evidence,
         "weather": None if weather is None else {
             "active_slot": weather.active_slot, "failure_counts": weather.failure_counts,
