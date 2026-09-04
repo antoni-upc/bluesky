@@ -1,205 +1,237 @@
+"""ERA5 atmosphere/wind provider backed by shared validated interpolation."""
+
 from pathlib import Path
-import cdsapi
-import datetime
+import hashlib
+import json
+import os
+import re
+from datetime import timedelta
+
 import numpy as np
+
 import bluesky as bs
-import netCDF4 as nc
 from bluesky import stack
-from bluesky.core import timed_function
-from bluesky.traffic.windsim import WindSim
+from bluesky.plugins.meteo import MeteorologyProvider, WeatherCube
 
 
-datadir = Path('')
+bs.settings.set_variable_defaults(era5_cache_path='', era5_region='region', era5_pressure_levels=[
+    100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 550, 600,
+    650, 700, 750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1000])
 
 
 def init_plugin():
-    global datadir
-    datadir = bs.resource(bs.settings.data_path) / 'NetCDF'
+    try:
+        import cdsapi
+        import netCDF4  # noqa: F401
+        credential_file = Path(os.environ.get('CDSAPI_RC', '~/.cdsapirc')).expanduser()
+        if not credential_file.is_file() and not os.environ.get('CDSAPI_KEY'):
+            raise RuntimeError(f'CDS credentials not found at {credential_file}')
+        provider = WindECMWF()
+    except Exception as exc:
+        raise ImportError(f'WINDECMWF unavailable; check ERA5 dependencies, credentials, and cache: {exc}') from exc
+    WindECMWF.select(provider)
+    return {'plugin_name': 'WINDECMWF', 'plugin_type': 'sim'}
 
-    if not datadir.is_dir():
-        datadir.mkdir()
 
-    global windecmwf
-    windecmwf = WindECMWF()
+class WindECMWF(MeteorologyProvider):
+    source = 'ERA5'
+    slot_hours = 1
 
-    config = {
-        'plugin_name': 'WINDECMWF',
-        'plugin_type': 'sim'
-    }
-
-    return config
-
-class WindECMWF(WindSim):
     def __init__(self):
         super().__init__()
-        self.year  = 0
-        self.month = 0
-        self.day   = 0
-        self.hour  = 0
-        self.lat0  = -90
-        self.lon0  = -180
-        self.lat1  = 90
-        self.lon1  = 180
+        configured = bs.settings.era5_cache_path
+        cache_root = Path(bs.resource('cache').as_posix())
+        self.cache = (Path(configured).expanduser() if configured else
+                      cache_root / 'weather' / 'era5')
+        self.cache.mkdir(parents=True, exist_ok=True)
+        probe = self.cache / '.write-capability'
+        probe.write_text('ok', encoding='ascii')
+        probe.unlink()
+        self.request_bounds = None
 
-        # Switch for periodic loading of new GFS data
-        self.autoload = True
-        
-    def fetch_nc(self, year, month, day):
-        """
-        Retrieve weather data via the CDS API for multiple pressure levels
-        """
-        
-        ymd = "%04d%02d%02d" % (year, month, day)
-        
-        fname = f'p_levels_{ymd}.nc'
-        fpath = datadir / fname
-        
-        if not fpath.is_file():
-            stack.echo("Downloading file, please wait...")
-    
-            # Set client
-            c = cdsapi.Client()
-            
-            # Retrieve data 
-            c.retrieve(
-                'reanalysis-era5-pressure-levels',
-                {
-                    'product_type': 'reanalysis',
-                    'format': 'netcdf',
-                    'pressure_level': [
-                        '100', '125', '150', 
-                        '175', '200', '225',
-                        '250', '300', '350',
-                        '400', '450', '500',
-                        '550', '600', '650', 
-                        '700', '750', '775',
-                        '800'
-                    ],
-                    'year': year,
-                    'month': month,
-                    'day': day,
-                    'time': [
-                        '00:00', '03:00', '06:00',
-                        '09:00', '12:00', '15:00',
-                        '18:00', '21:00',
-                    ],
-                    'variable': [
-                        'u_component_of_wind', 'v_component_of_wind'
-                    ],
-                },
-                fpath)
-    
-        stack.echo("Download completed.")
-        netcdf = nc.Dataset(fpath, mode='r')
-    
-        return netcdf
+    @staticmethod
+    def _areas(bounds):
+        lat0, lon0, lat1, lon1 = bounds
+        north, south = max(lat0, lat1), min(lat0, lat1)
+        west, east = (lon0 + 180.0) % 360.0 - 180.0, (lon1 + 180.0) % 360.0 - 180.0
+        if west <= east:
+            return [(north, west, south, east)]
+        return [(north, west, south, 180.0), (north, -180.0, south, east)]
 
+    @staticmethod
+    def _region_label():
+        label = str(bs.settings.era5_region).lower().strip()
+        if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', label):
+            raise ValueError('era5_region must contain lowercase letters, numbers, and hyphens')
+        return label
 
-    def extract_wind(self, netcdf, lat0, lon0, lat1, lon1, hour):
+    @classmethod
+    def _request_identity(cls, slot, area):
+        request = cls._request(slot, area)
+        return json.dumps(request, sort_keys=True, separators=(',', ':')).encode('utf-8')
 
-        # Load reanalysis data 
-        level = netcdf['level'][:].data
-        lats  = netcdf['latitude'][:].data
-        lons  = netcdf['longitude'][:].data
-        vxs_  = netcdf['u'][:].squeeze().data
-        vys_  = netcdf['v'][:].squeeze().data
-        
-        # Close data for performance
-        netcdf.close()   
-        
-        # Transform pressure levels to altitude
-        p = level * 100
-        h = (1 - (p / 101325.0)**0.190264) * 44330.76923    # in meters
-        
-        # Set hour to rounded hour
-        hour = round(hour/3)
-        
-        # Construct 2D array of all data points
-        lats_ = np.tile(np.repeat(lats, len(lons)), len(level))
-        lons_ = np.tile(lons, len(lats)*len(level))
-        alts_ = np.repeat(h, len(lats)*len(lons))       
-        vxs_  = vxs_[hour,:,:,:].flatten()
-        vys_  = vys_[hour,:,:,:].flatten()
-            
-        # Convert longitudes
-        lons_ = (lons_ + 180) % 360.0 - 180.0     # convert range from 0~360 to -180~180
-        
-        # Reduce area based on lat lon limits
-        lat0_ = min(lat0, lat1)
-        lat1_ = max(lat0, lat1)
-        lon0_ = min(lon0, lon1)
-        lon1_ = max(lon0, lon1)
+    def _path(self, slot, bounds, part):
+        areas = self._areas(bounds)
+        try:
+            area = areas[part]
+        except IndexError as exc:
+            raise ValueError(f'ERA5 request part {part} does not exist') from exc
+        digest = hashlib.sha256(self._request_identity(slot, area)).hexdigest()[:12]
+        levels = [int(value) for value in bs.settings.era5_pressure_levels]
+        pressure_range = f'p{min(levels)}-{max(levels)}'
+        return self.cache / (
+            f'era5-pressure-levels_{self._region_label()}_{slot:%Y%m%dT%H%MZ}_'
+            f'{pressure_range}_{digest}_part{part}.nc')
 
-        mask = (lats_ >= lat0_) & (lats_ <= lat1_) & (lons_ >= lon0_) & (lons_ <= lon1_)
+    @staticmethod
+    def _request(slot, area):
+        return {
+            'product_type': ['reanalysis'], 'data_format': 'netcdf',
+            'download_format': 'unarchived',
+            'pressure_level': [str(x) for x in bs.settings.era5_pressure_levels],
+            'year': [f'{slot.year:04d}'], 'month': [f'{slot.month:02d}'],
+            'day': [f'{slot.day:02d}'], 'time': [f'{slot.hour:02d}:00'],
+            'area': [float(value) for value in area],
+            'variable': ['u_component_of_wind', 'v_component_of_wind',
+                         'temperature', 'geopotential']}
 
-        data = np.array([lats_[mask], lons_[mask], alts_[mask], vxs_[mask], vys_[mask]])
+    def _fetch(self, slot, bounds):
+        import cdsapi
+        cubes = []
+        for index, area in enumerate(self._areas(bounds)):
+            target = self._path(slot, bounds, index)
+            if target.exists():
+                try:
+                    cubes.append(self._read_validated(target, slot, area))
+                    continue
+                except (OSError, ValueError, KeyError, IndexError):
+                    stack.echo(f'ERA5: cached file is invalid; removing {target}')
+                    target.unlink()
+            part = target.with_suffix('.nc.part')
+            part.unlink(missing_ok=True)
+            try:
+                levels = ','.join(str(level) for level in bs.settings.era5_pressure_levels)
+                stack.echo(
+                    f'ERA5: not in cache; downloading slot={slot.isoformat()} '
+                    f'area={list(area)} pressure_levels_hPa=[{levels}] to {target}')
+                cdsapi.Client().retrieve('reanalysis-era5-pressure-levels',
+                                         self._request(slot, area), str(part))
+                cube = self._read_validated(part, slot, area)
+                part.replace(target)
+                stack.echo(f'ERA5: download validated and cached at {target}')
+                cubes.append(cube)
+            except Exception:
+                part.unlink(missing_ok=True)
+                raise
+        return cubes[0] if len(cubes) == 1 else self._merge(cubes, slot)
 
-        return data
+    def _read_validated(self, path, slot, area):
+        """Validate request identity stored in a cache file before accepting it."""
+        import netCDF4 as nc
+        with nc.Dataset(path, mode='r') as ds:
+            level_var = self._variable(ds, 'pressure_level', 'level')
+            self._units(level_var, {'hpa', 'millibars', 'mbar'}, 'pressure level')
+            stored_levels = sorted(float(value) for value in np.asarray(level_var[:]).ravel())
+            expected_levels = sorted(float(value) for value in bs.settings.era5_pressure_levels)
+            if stored_levels != expected_levels:
+                raise ValueError(
+                    f'ERA5 pressure levels differ: stored={stored_levels}, '
+                    f'expected={expected_levels}')
+            latitude = np.asarray(self._variable(ds, 'latitude')[:], dtype=float)
+            longitude = np.asarray(self._variable(ds, 'longitude')[:], dtype=float)
+            north, west, south, east = area
+            relative_longitude = (longitude - west) % 360.0
+            requested_span = (east - west) % 360.0
+            if (latitude.min() > south or latitude.max() < north or
+                    relative_longitude.min() > 1e-9 or
+                    relative_longitude.max() + 1e-9 < requested_span):
+                raise ValueError(f'ERA5 grid does not cover requested area {list(area)}')
+            times = self._variable(ds, 'valid_time', 'time')
+            calendar = getattr(times, 'calendar', 'standard')
+            target_time = nc.date2num(slot.replace(tzinfo=None), times.units, calendar)
+            if not np.any(np.isclose(np.asarray(times[:], dtype=float), target_time)):
+                raise ValueError(f'ERA5 file does not contain exact slot {slot.isoformat()}')
+        return self._read(path, slot)
+
+    @staticmethod
+    def _variable(dataset, *names):
+        for name in names:
+            if name in dataset.variables:
+                return dataset.variables[name]
+        raise ValueError(f'Missing required ERA5 variable: {names}')
+
+    @staticmethod
+    def _units(variable, allowed, name):
+        units = str(getattr(variable, 'units', '')).lower().replace(' ', '')
+        if units not in allowed:
+            raise ValueError(f'ERA5 {name} has unsupported units {units!r}')
+
+    def _read(self, path, slot):
+        import netCDF4 as nc
+        with nc.Dataset(path, mode='r') as ds:
+            level_var = self._variable(ds, 'pressure_level', 'level')
+            self._units(level_var, {'hpa', 'millibars', 'mbar'}, 'pressure level')
+            levels = np.asarray(level_var[:], dtype=float) * 100.0
+            lat = np.asarray(self._variable(ds, 'latitude')[:], dtype=float)
+            lon = np.asarray(self._variable(ds, 'longitude')[:], dtype=float)
+            times = self._variable(ds, 'valid_time', 'time')
+            calendar = getattr(times, 'calendar', 'standard')
+            target_time = nc.date2num(slot.replace(tzinfo=None), times.units, calendar)
+            tidx = int(np.argmin(np.abs(np.asarray(times[:], dtype=float) - target_time)))
+            variables = [self._variable(ds, name) for name in ('u', 'v', 't', 'z')]
+            self._units(variables[0], {'m/s', 'ms**-1', 'ms-1'}, 'east wind')
+            self._units(variables[1], {'m/s', 'ms**-1', 'ms-1'}, 'north wind')
+            self._units(variables[2], {'k', 'kelvin'}, 'temperature')
+            self._units(variables[3], {'m**2s**-2', 'm2s-2', 'm^2s^-2'}, 'geopotential')
+            fields = [np.ma.asarray(variable[tidx]) for variable in variables]
+            if any(field.ndim != 3 for field in fields):
+                raise ValueError('ERA5 fields must have (level, latitude, longitude) dimensions')
+            east, north, temp, geopotential = fields
+            return WeatherCube.from_pressure_levels(levels, lat, lon, geopotential / 9.80665,
+                east, north, temp, self.source, slot.isoformat())
+
+    @staticmethod
+    def _merge(cubes, slot):
+        """Merge antimeridian request parts already resampled to common heights."""
+        first = cubes[0]
+        if any(not np.array_equal(cube.latitude, first.latitude) for cube in cubes[1:]):
+            raise ValueError('ERA5 antimeridian parts do not share a latitude axis')
+        lower = max(float(cube.altitude[0]) for cube in cubes)
+        upper = min(float(cube.altitude[-1]) for cube in cubes)
+        if not lower < upper:
+            raise ValueError('ERA5 antimeridian parts have no common vertical domain')
+        altitude = np.linspace(lower, upper, min(len(cube.altitude) for cube in cubes))
+        longitude = np.concatenate([cube.longitude for cube in cubes])
+        wrapped = (longitude + 360.0) % 360.0
+        _, keep = np.unique(wrapped, return_index=True)
+        keep.sort()
+        fields = []
+        for name in ('east_wind', 'north_wind', 'temperature', 'pressure'):
+            parts = []
+            for cube in cubes:
+                source = getattr(cube, name)
+                output = np.empty((len(altitude), len(cube.latitude), len(cube.longitude)))
+                for iy in range(len(cube.latitude)):
+                    for ix in range(len(cube.longitude)):
+                        output[:, iy, ix] = np.interp(
+                            altitude, cube.altitude, source[:, iy, ix])
+                parts.append(output)
+            fields.append(np.concatenate(parts, axis=2)[:, :, keep])
+        return WeatherCube(altitude, first.latitude, longitude[keep], *fields,
+                           first.source, slot.isoformat())
+
+    def load(self, lat0, lon0, lat1, lon1, slot=None):
+        slot = self.desired_slot(slot or bs.sim.utc)
+        self.request_bounds = (lat0, lon0, lat1, lon1)
+        cube = self._fetch(slot, self.request_bounds)
+        next_cube = None
+        if bs.settings.meteo_time_interpolation:
+            next_slot = slot + timedelta(hours=self.slot_hours)
+            next_cube = self._fetch(next_slot, self.request_bounds)
+        self.set_cube(cube, self.request_bounds, slot, next_cube)
+        mode = ' with temporal interpolation' if next_cube is not None else ''
+        return True, f'ERA5 {slot.isoformat()} loaded and validated{mode}'
 
     @stack.command(name='WINDECMWF')
-    def loadwind(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon',
-               year: int=None, month: int=None, day: int=None, hour: int=None):
-        ''' WINDECMWF: Load a windfield directly from NOAA database.
-
-            Arguments:
-            - lat0, lon0, lat1, lon1 [deg]: Bounding box in which to generate wind field
-            - year, month, day, hour: Date and time of wind data (optional, will use
-              current simulation UTC if not specified).
-        '''
-        self.lat0, self.lon0, self.lat1, self.lon1 =  min(lat0, lat1), \
-                              min(lon0, lon1), max(lat0, lat1), max(lon0, lon1)
-        self.year = year or bs.sim.utc.year
-        self.month = month or bs.sim.utc.month
-        self.day = day or bs.sim.utc.day
-        self.hour = hour or bs.sim.utc.hour
-
-        # round hour to 3 hours
-        self.hour  = round(self.hour/3) * 3
-        if self.hour == 24:
-            ymd0 = "%04d%02d%02d" % (self.year, self.month, self.day)
-            ymd1 = (datetime.datetime.strptime(ymd0, '%Y%m%d') + 
-                    datetime.timedelta(days=1))
-            self.year  = ymd1.year
-            self.month = ymd1.month
-            self.day   = ymd1.day
-            self.hour  = 0
-
-        txt = "Loading wind field for %s-%s-%s..." % (self.year, self.month, self.day)
-        stack.echo("%s" % txt)
-
-        netcdf = self.fetch_nc(self.year, self.month, self.day)
-
-        if netcdf is None or self.lat0 == self.lat1 or self.lon0 == self.lon1:
-            return False, "Wind data non-existend in area [%d, %d], [%d, %d]. " \
-                % (self.lat0, self.lat1, self.lon0, self.lon1) \
-                + "time: %04d-%02d-%02d" \
-                % (self.year, self.month, self.day)
-
-        # first clear exisiting wind field
-        self.clear()
-
-        # add new wind field
-        data = self.extract_wind(netcdf, self.lat0, self.lon0, self.lat1, self.lon1, self.hour).T
-
-        data = data[np.lexsort((data[:, 2], data[:, 1], data[:, 0]))] # Sort by lat, lon, alt
-        reshapefactor = int((1 + (max(self.lat0, self.lat1) - min(self.lat0, self.lat1))*4) * \
-                            (1 + (max(self.lon0, self.lon1) - min(self.lon0, self.lon1))*4))
-
-        lat     = np.reshape(data[:,0], (reshapefactor, -1)).T[0,:]
-        lon     = np.reshape(data[:,1], (reshapefactor, -1)).T[0,:]
-        veast   = np.reshape(data[:,3], (reshapefactor, -1)).T
-        vnorth  = np.reshape(data[:,4], (reshapefactor, -1)).T
-        windalt = np.reshape(data[:,2], (reshapefactor, -1)).T[:,0]
-
-        self.addpointvne(lat, lon, vnorth, veast, windalt)        
-
-        return True, "Wind field updated in area [%d, %d], [%d, %d]. " \
-            % (self.lat0, self.lat1, self.lon0, self.lon1) \
-            + "time: %04d-%02d-%02d" \
-            % (self.year, self.month, self.day)
-
-    @timed_function(name='WINDECMWF', dt=3600)
-    def update(self):
-        if self.autoload:
-            _, txt = self.loadwind(self.lat0, self.lon0, self.lat1, self.lon1)
-            stack.echo("%s" % txt)
+    def load_command(self, lat0: 'lat', lon0: 'lon', lat1: 'lat', lon1: 'lon'):
+        return self.load(lat0, lon0, lat1, lon1)

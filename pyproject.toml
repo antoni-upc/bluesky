@@ -41,6 +41,8 @@ keywords = ['ATM', 'transport', 'simulation', 'aviation', 'aircraft']
 
 [project.optional-dependencies]
 pygame = ["pygame"]
+era5 = ["cdsapi>=0.7,<0.8", "netCDF4>=1.7,<2"]
+gfs = ["requests>=2.32,<3", "pygrib>=2.1.6,<3"]
 qt6 = [
     "pyopengl",
     "PyQt6",
@@ -76,6 +78,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: fast standalone smoke tests",
+    "external_weather: tests requiring external weather datasets",
+]
 
 
 [tool.hatch.build]

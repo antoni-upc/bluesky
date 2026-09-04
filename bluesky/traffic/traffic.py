@@ -24,6 +24,7 @@ from .activewpdata import ActiveWaypoint
 from .turbulence import Turbulence
 from .trafficgroups import TrafficGroups
 from .performance.perfbase import PerfBase
+from .atmosphere import mach_to_cas, pressure_altitude, tas_to_mach
 
 # Register settings defaults
 bs.settings.set_variable_defaults(performance_model='openap', asas_dt=1.0)
@@ -111,6 +112,11 @@ class Traffic(Entity):
             self.rho     = np.array([])  # air density [kg/m3]
             self.Temp    = np.array([])  # air temperature [K]
             self.dtemp   = np.array([])  # delta t for non-ISA conditions
+            self.pressure_alt = np.array([])  # ISA pressure altitude [m]
+            self.atmos_valid = np.array([], dtype=bool)
+            self.atmos_source = []
+            self.atmos_dataset_time = []
+            self.atmos_fallback_reason = []
 
             # Wind speeds
             self.windnorth = np.array([])  # wind speed north component a/c pos [m/s]
@@ -251,6 +257,11 @@ class Traffic(Entity):
 
         # Atmosphere
         self.p[-n:], self.rho[-n:], self.Temp[-n:] = vatmos(acalt)
+        self.pressure_alt[-n:] = acalt
+        self.atmos_valid[-n:] = True
+        self.atmos_source[-n:] = n * ['ISA']
+        self.atmos_dataset_time[-n:] = n * ['']
+        self.atmos_fallback_reason[-n:] = n * ['']
 
         # Wind
         if self.wind.winddim > 0:
@@ -280,6 +291,9 @@ class Traffic(Entity):
         # Finally call create for child TrafficArrays. This only needs to be done
         # manually in Traffic.
         self.create_children(n)
+
+        # Synchronize an already-active atmosphere provider with new traffic.
+        self.update_atmosphere()
 
         # Record as individual CRE commands for repeatability
         #print(self.ntraf-n,self.ntraf)
@@ -395,7 +409,7 @@ class Traffic(Entity):
             return
 
         #---------- Atmosphere --------------------------------
-        self.p, self.rho, self.Temp = vatmos(self.alt)
+        self.update_atmosphere()
 
         #---------- ADSB Update -------------------------------
         self.adsb.update()
@@ -430,6 +444,52 @@ class Traffic(Entity):
         #---------- Aftermath ---------------------------------
         self.trails.update()
 
+    def update_atmosphere(self):
+        """Synchronize atmosphere, provenance, wind, and airdata."""
+        if self.ntraf == 0:
+            return
+        self.p, self.rho, self.Temp = vatmos(self.alt)
+        isa_temperature = self.Temp.copy()
+        self.atmos_valid[:] = True
+        self.atmos_source[:] = self.ntraf * ['ISA']
+        self.atmos_dataset_time[:] = self.ntraf * ['']
+        self.atmos_fallback_reason[:] = self.ntraf * ['']
+        sample = self.wind.get_atmosphere(self.lat, self.lon, self.alt, bs.sim.utc)
+        if sample is not None:
+            valid = np.asarray(sample.valid, dtype=bool)
+            if valid.shape != self.alt.shape:
+                raise ValueError('Atmosphere provider returned an invalid validity-mask shape')
+            physical = valid & np.isfinite(sample.temperature) & np.isfinite(sample.pressure) \
+                & np.isfinite(sample.density) & (sample.temperature > 0.0) \
+                & (sample.pressure > 0.0) & (sample.density > 0.0)
+            self.Temp[physical] = np.asarray(sample.temperature)[physical]
+            self.p[physical] = np.asarray(sample.pressure)[physical]
+            self.rho[physical] = self.p[physical] / (287.05287 * self.Temp[physical])
+
+            def metadata(value):
+                array = np.asarray(value, dtype=object)
+                if array.ndim == 0:
+                    return np.full(self.alt.shape, array.item(), dtype=object)
+                return np.broadcast_to(array, self.alt.shape)
+
+            source = metadata(sample.source)
+            dataset_time = metadata(sample.dataset_time)
+            fallback_reason = metadata(sample.fallback_reason)
+            for idx in np.flatnonzero(physical):
+                self.atmos_source[idx] = str(source[idx])
+                self.atmos_dataset_time[idx] = str(dataset_time[idx])
+                self.atmos_fallback_reason[idx] = str(fallback_reason[idx])
+            for idx in np.flatnonzero(~physical):
+                self.atmos_source[idx] = 'ISA'
+                self.atmos_fallback_reason[idx] = str(
+                    fallback_reason[idx] or 'INVALID_PROVIDER_SAMPLE')
+            self.atmos_valid[:] = physical
+        self.pressure_alt[:] = pressure_altitude(self.p)
+        self.dtemp[:] = self.Temp - isa_temperature
+        self._update_airdata()
+        if sample is not None:
+            self.update_groundspeed(accumulate_work=False)
+
     def update_airspeed(self):
         # Compute horizontal acceleration
         delta_spd = self.aporasas.tas - self.tas
@@ -437,8 +497,7 @@ class Traffic(Entity):
         self.ax = need_ax * np.sign(delta_spd) * self.perf.axmax
         # Update velocities
         self.tas = np.where(need_ax, self.tas + self.ax * bs.sim.simdt, self.aporasas.tas)
-        self.cas = vtas2cas(self.tas, self.alt)
-        self.M = vtas2mach(self.tas, self.alt)
+        self._update_airdata()
 
         # Turning bank triangle
         # tan phi = a centrigugal/a grav = omega^2 * R / g = omega * V /g
@@ -470,7 +529,20 @@ class Traffic(Entity):
         self.vs = np.where(need_az, self.vs+self.az*bs.sim.simdt, target_vs)
         self.vs = np.where(np.isfinite(self.vs), self.vs, 0)    # fix vs nan issue
 
-    def update_groundspeed(self):
+    def _update_airdata(self):
+        """Update CAS/Mach, preserving the exact native ISA code path."""
+        actual = np.asarray([source != 'ISA' for source in self.atmos_source], dtype=bool)
+        isa_mach = vtas2mach(self.tas, self.alt)
+        isa_cas = vtas2cas(self.tas, self.alt)
+        if np.any(actual):
+            real_mach = tas_to_mach(self.tas, self.Temp)
+            real_cas = mach_to_cas(real_mach, self.p)
+            self.M = np.where(actual, real_mach, isa_mach)
+            self.cas = np.where(actual, real_cas, isa_cas)
+        else:
+            self.M, self.cas = isa_mach, isa_cas
+
+    def update_groundspeed(self, accumulate_work=True):
         # Compute ground speed and track from heading, airspeed and wind
         if self.wind.winddim == 0:  # no wind
             self.gsnorth  = self.tas * np.cos(np.radians(self.hdg))
@@ -494,7 +566,9 @@ class Traffic(Entity):
             self.trk = np.logical_not(applywind)*self.hdg + \
                        applywind*np.degrees(np.arctan2(self.gseast, self.gsnorth)) % 360.
 
-        self.work += (self.perf.thrust * bs.sim.simdt * np.sqrt(self.gs * self.gs + self.vs * self.vs))
+        if accumulate_work:
+            self.work += (self.perf.thrust * bs.sim.simdt *
+                          np.sqrt(self.gs * self.gs + self.vs * self.vs))
 
 
     def update_pos(self):
