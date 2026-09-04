@@ -7,6 +7,7 @@ import numpy as np
 import bluesky as bs
 from bluesky.core import Entity, Timer
 from bluesky.stack.recorder import savecmd
+from bluesky.stack.cmdparser import CommandRejected
 from bluesky.tools import geo
 from bluesky.tools.misc import latlon2txt
 from bluesky.tools.aero import casormach2tas, fpm, kts, ft, g0, Rearth, nm, tas2cas,\
@@ -24,6 +25,7 @@ from .activewpdata import ActiveWaypoint
 from .turbulence import Turbulence
 from .trafficgroups import TrafficGroups
 from .performance.perfbase import PerfBase
+from .dynamics import SpeedStepRequest
 
 # Register settings defaults
 bs.settings.set_variable_defaults(performance_model='openap', asas_dt=1.0)
@@ -111,6 +113,7 @@ class Traffic(Entity):
             self.rho     = np.array([])  # air density [kg/m3]
             self.Temp    = np.array([])  # air temperature [K]
             self.dtemp   = np.array([])  # delta t for non-ISA conditions
+            self.pressure_alt = np.array([])  # ISA pressure altitude [m]
 
             # Wind speeds
             self.windnorth = np.array([])  # wind speed north component a/c pos [m/s]
@@ -211,12 +214,16 @@ class Traffic(Entity):
                 return False, acid + " already exists."  # already exists do nothing
             acid = n * [acid]
 
+        if isinstance(actype, str):
+            actype = n * [actype]
+
+        valid, message = self.perf.validate_create(actype)
+        if not valid:
+            return False, message
+
         # Adjust the size of all traffic arrays
         super().create(n)
         self.ntraf += n
-
-        if isinstance(actype, str):
-            actype = n * [actype]
 
         if isinstance(aclat, (float, int)):
             aclat = np.array(n * [aclat])
@@ -251,6 +258,7 @@ class Traffic(Entity):
 
         # Atmosphere
         self.p[-n:], self.rho[-n:], self.Temp[-n:] = vatmos(acalt)
+        self.pressure_alt[-n:] = acalt
 
         # Wind
         if self.wind.winddim > 0:
@@ -280,6 +288,15 @@ class Traffic(Entity):
         # Finally call create for child TrafficArrays. This only needs to be done
         # manually in Traffic.
         self.create_children(n)
+
+        new_indices = list(range(self.ntraf - n, self.ntraf))
+        for idx in new_indices:
+            accepted, reason = self.perf.assess_direct_state(idx, None)
+            if not accepted:
+                acid_rejected = self.id[idx]
+                self.delete(new_indices)
+                return False, CommandRejected(
+                    f'{acid_rejected}: CRE rejected; {reason}')
 
         # Record as individual CRE commands for repeatability
         #print(self.ntraf-n,self.ntraf)
@@ -417,9 +434,21 @@ class Traffic(Entity):
                              self.aporasas.alt, self.ax)
 
         #---------- Kinematics --------------------------------
-        self.update_airspeed()
+        self.speed_request = self.native_speed_request()
+        handled = self.perf.update_dynamics(self, bs.sim.simdt)
+        if isinstance(handled, tuple) and len(handled) == 2:
+            speed_handled = np.asarray(handled[0], dtype=bool)
+            vertical_handled = np.asarray(handled[1], dtype=bool)
+        else:
+            speed_handled = vertical_handled = np.asarray(handled, dtype=bool)
+        if (speed_handled.shape != (self.ntraf,) or
+                vertical_handled.shape != (self.ntraf,)):
+            raise ValueError('Performance dynamics hook returned an invalid mask shape')
+        self.update_airspeed(speed_handled, vertical_handled, self.speed_request)
         self.update_groundspeed()
         self.update_pos()
+        if self.perf.requires_synced_direct_state:
+            Traffic._sync_native_atmosphere(self)
 
         #---------- Simulate Turbulence -----------------------
         self.turbulence.update()
@@ -430,13 +459,44 @@ class Traffic(Entity):
         #---------- Aftermath ---------------------------------
         self.trails.update()
 
-    def update_airspeed(self):
-        # Compute horizontal acceleration
+    def native_speed_request(self, dt=None):
+        """Return the side-effect-free native selected-speed step for this tick."""
+        dt = bs.sim.simdt if dt is None else float(dt)
         delta_spd = self.aporasas.tas - self.tas
-        need_ax = np.abs(delta_spd) > np.abs(bs.sim.simdt * self.perf.axmax)
-        self.ax = need_ax * np.sign(delta_spd) * self.perf.axmax
+        maximum_step = np.abs(dt * self.perf.axmax)
+        capture = np.abs(delta_spd) <= maximum_step
+        acceleration = np.where(
+            capture, np.divide(delta_spd, dt, out=np.zeros_like(delta_spd), where=dt != 0.0),
+            np.sign(delta_spd) * self.perf.axmax)
+        next_tas = np.where(capture, self.aporasas.tas,
+                            self.tas + acceleration * dt)
+        return SpeedStepRequest(
+            target_tas=np.asarray(self.aporasas.tas, dtype=float).copy(),
+            requested_acceleration=np.asarray(acceleration, dtype=float),
+            capture=np.asarray(capture, dtype=bool),
+            next_tas=np.asarray(next_tas, dtype=float)).validate(self.ntraf)
+
+    def update_airspeed(self, speed_handled=None, vertical_handled=None,
+                        speed_request=None):
+        speed_handled = (np.zeros(self.ntraf, dtype=bool)
+                         if speed_handled is None else speed_handled)
+        vertical_handled = (speed_handled if vertical_handled is None
+                            else vertical_handled)
+        native_speed = ~speed_handled
+        native_vertical = ~vertical_handled
+        request = (Traffic.native_speed_request(self)
+                   if speed_request is None else speed_request)
+        request.validate(self.ntraf)
+        result = getattr(self, 'speed_result', None)
+        if result is not None:
+            result.validate(self.ntraf)
+        native_ax = request.requested_acceleration
+        handled_ax = self.ax if result is None else result.applied_acceleration
+        self.ax = np.where(native_speed, native_ax, handled_ax)
         # Update velocities
-        self.tas = np.where(need_ax, self.tas + self.ax * bs.sim.simdt, self.aporasas.tas)
+        native_tas = request.next_tas
+        handled_tas = self.tas if result is None else result.next_tas
+        self.tas = np.where(native_speed, native_tas, handled_tas)
         self.cas = vtas2cas(self.tas, self.alt)
         self.M = vtas2mach(self.tas, self.alt)
 
@@ -467,8 +527,17 @@ class Traffic(Entity):
         # print(delta_vs / fpm)
         need_az = np.abs(delta_vs) > 300 * fpm   # small threshold
         self.az = need_az * np.sign(delta_vs) * (300 * fpm)   # fixed vertical acc approx 1.6 m/s^2
-        self.vs = np.where(need_az, self.vs+self.az*bs.sim.simdt, target_vs)
+        native_vs = np.where(need_az, self.vs+self.az*bs.sim.simdt, target_vs)
+        self.vs = np.where(native_vertical, native_vs, self.vs)
         self.vs = np.where(np.isfinite(self.vs), self.vs, 0)    # fix vs nan issue
+
+    def _sync_native_atmosphere(self):
+        """Synchronize native ISA state after plugin-owned propagation."""
+        self.p, self.rho, self.Temp = vatmos(self.alt)
+        self.dtemp[:] = 0.0
+        self.pressure_alt[:] = self.alt
+        self.cas = vtas2cas(self.tas, self.alt)
+        self.M = vtas2mach(self.tas, self.alt)
 
     def update_groundspeed(self):
         # Compute ground speed and track from heading, airspeed and wind
@@ -537,6 +606,26 @@ class Traffic(Entity):
         return
 
     def move(self, idx, lat, lon, alt=None, hdg=None, casmach=None, vspd=None):
+        if not np.isscalar(idx):
+            self.lat[idx] = lat
+            self.lon[idx] = lon
+            if alt is not None:
+                self.alt[idx], self.selalt[idx] = alt, alt
+            if hdg is not None:
+                self.hdg[idx], self.ap.trk[idx] = hdg, hdg
+            if casmach is not None:
+                self.tas[idx], self.selspd[idx], _ = vcasormach(casmach, alt)
+            if vspd is not None:
+                self.vs[idx], self.swvnav[idx] = vspd, False
+            return True
+        idx = int(idx)
+        fields = ('lat', 'lon', 'alt', 'selalt', 'hdg', 'tas', 'selspd', 'vs',
+                  'p', 'rho', 'Temp', 'pressure_alt', 'cas', 'M', 'dtemp')
+        previous = {name: self.__dict__[name][idx].copy()
+                    if hasattr(self.__dict__[name][idx], 'copy')
+                    else self.__dict__[name][idx] for name in fields}
+        previous['ap_trk'] = self.ap.trk[idx]
+        previous['swvnav'] = self.swvnav[idx]
         self.lat[idx]      = lat
         self.lon[idx]      = lon
 
@@ -549,11 +638,21 @@ class Traffic(Entity):
             self.ap.trk[idx] = hdg
 
         if casmach is not None:
-            self.tas[idx], self.selspd[idx], _ = vcasormach(casmach, alt)
+            self.tas[idx], self.selspd[idx], _ = vcasormach(
+                casmach, self.alt[idx] if alt is None else alt)
 
         if vspd is not None:
             self.vs[idx]     = vspd
             self.swvnav[idx] = False
+        Traffic._sync_native_atmosphere(self)
+        accepted, reason = self.perf.assess_direct_state(idx, previous)
+        if accepted:
+            return True
+        for name in fields:
+            self.__dict__[name][idx] = previous[name]
+        self.ap.trk[idx] = previous['ap_trk']
+        self.swvnav[idx] = previous['swvnav']
+        return False, CommandRejected(f'{self.id[idx]}: MOVE rejected; {reason}')
 
     def poscommand(self, idxorwp: int|str):
         """POS command: Show info or an aircraft, airport, waypoint or navaid"""

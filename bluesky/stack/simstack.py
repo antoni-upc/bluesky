@@ -4,7 +4,7 @@ import traceback
 
 import bluesky as bs
 from bluesky.stack.stackbase import Stack, stack, checkscen, forward
-from bluesky.stack.cmdparser import Command, command
+from bluesky.stack.cmdparser import Command, CommandRejected, command
 from bluesky.stack.basecmds import initbasecmds
 from bluesky.stack import recorder
 from bluesky.stack import argparser, ArgumentError
@@ -76,7 +76,8 @@ def process(ext_cmds=None):
                         echotext = echotext or cmdobj.brieftext()
                     else:
                         echoflags = bs.BS_FUNERR
-                        echotext = f'Syntax error: {echotext or cmdobj.brieftext()}'
+                        if not isinstance(echotext, CommandRejected):
+                            echotext = f'Syntax error: {echotext or cmdobj.brieftext()}'
 
             except ArgumentError as e:
                 success = False

@@ -41,6 +41,7 @@ keywords = ['ATM', 'transport', 'simulation', 'aviation', 'aircraft']
 
 [project.optional-dependencies]
 pygame = ["pygame"]
+pybada = ["pyBADA>=0.1.12,<0.2"]
 qt6 = [
     "pyopengl",
     "PyQt6",
@@ -76,6 +77,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: fast standalone smoke tests",
+]
 
 
 [tool.hatch.build]

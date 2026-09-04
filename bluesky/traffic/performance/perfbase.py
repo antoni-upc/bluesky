@@ -13,6 +13,8 @@ settings.set_variable_defaults(performance_dt=1.0)
 class PerfBase(Entity, replaceable=True):
     """Base class for BlueSky aircraft performance implementations."""
 
+    requires_synced_direct_state = False
+
     def __init__(self):
         super().__init__()
         with self.settrafarrays():
@@ -59,6 +61,23 @@ class PerfBase(Entity, replaceable=True):
     def limits(self, intent_v, intent_vs, intent_h, ax):
         """implement this method"""
         return intent_v, intent_vs, intent_h
+
+    def update_dynamics(self, traffic, dt):
+        """Update optional non-native longitudinal/vertical dynamics.
+
+        Return one boolean mask when TAS and vertical speed share ownership,
+        or ``(speed_mask, vertical_mask)`` when they differ. The base
+        implementation handles neither dimension.
+        """
+        return np.zeros(traffic.ntraf, dtype=bool)
+
+    def validate_create(self, actypes):
+        """Validate aircraft types before Traffic mutates its arrays."""
+        return True, ''
+
+    def assess_direct_state(self, idx, previous):
+        """Accept a provisionally applied direct state assignment by default."""
+        return True, ''
 
     def currentlimits(self):
         """implement this method"""
