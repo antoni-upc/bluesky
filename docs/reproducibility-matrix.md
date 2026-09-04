@@ -12,10 +12,10 @@ orchestration, external state sampling, cross-configuration comparison, and
 analysis. Production implementation remains on the corresponding plugin
 branch:
 
-- `plugin/pyBADA`;
+- `plugin/pybada-tem`;
 - `plugin/NWP-meteo`;
 - `plugin/recorder`;
-- combined validation on the future `integration/research-plugins` branch.
+- combined validation on `integration/plugin-stack`.
 
 ## Configuration matrix
 
