@@ -8,6 +8,7 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from bluesky.tools.aero import g0
 
 
 class ModelUnavailable(RuntimeError):
@@ -24,6 +25,10 @@ def _clamp_thrust(required_thrust, idle_thrust, maximum_thrust):
     maximum_thrust = float(maximum_thrust)
     if not np.isfinite(maximum_thrust):
         raise EvaluationError('maximum thrust is unavailable')
+    if not np.isfinite(required_thrust):
+        raise EvaluationError('required thrust is non-finite')
+    if np.isfinite(idle_thrust) and idle_thrust > maximum_thrust:
+        raise EvaluationError('idle thrust exceeds maximum thrust')
     below_idle = np.isfinite(idle_thrust) and required_thrust < idle_thrust
     above_maximum = required_thrust > maximum_thrust
     reason = ('BELOW_IDLE_THRUST' if below_idle else
@@ -32,6 +37,42 @@ def _clamp_thrust(required_thrust, idle_thrust, maximum_thrust):
     if np.isfinite(idle_thrust):
         thrust = float(max(thrust, idle_thrust))
     return thrust, bool(below_idle or above_maximum), reason, idle_thrust, maximum_thrust
+
+
+def allocate_speed_priority(*, tas, mass, drag, idle_thrust, maximum_thrust,
+                            requested_acceleration, preferred_vertical_rate,
+                            minimum_vertical_rate, maximum_vertical_rate):
+    """Closest feasible acceleration, then closest preferred vertical response.
+
+    The caller supplies the permissible vertical interval. Solve the linear
+    power balance over that interval and the available thrust range; never
+    change TAS independently of the supplied force and vertical response.
+    An unavailable idle bound retains the existing upper-bound-only convention.
+    """
+    values = (tas, mass, drag, maximum_thrust, requested_acceleration,
+              preferred_vertical_rate, minimum_vertical_rate, maximum_vertical_rate)
+    if not np.all(np.isfinite(values)) or tas <= 0 or mass <= 0:
+        raise EvaluationError('speed allocation requires finite state and bounds')
+    if minimum_vertical_rate > maximum_vertical_rate:
+        raise EvaluationError('empty vertical interval for speed allocation')
+    # Also checks inverted finite thrust bounds.
+    _clamp_thrust(drag, idle_thrust, maximum_thrust)
+    idle = idle_thrust if np.isfinite(idle_thrust) else -np.inf
+    low_a = (idle - drag) / mass - g0 * maximum_vertical_rate / tas
+    high_a = (maximum_thrust - drag) / mass - g0 * minimum_vertical_rate / tas
+    feasible_a = float(np.clip(requested_acceleration, low_a, high_a))
+    low_w = max(minimum_vertical_rate,
+                ((idle - drag) / mass - feasible_a) * tas / g0)
+    high_w = min(maximum_vertical_rate,
+                 ((maximum_thrust - drag) / mass - feasible_a) * tas / g0)
+    # Coincident interval endpoints may differ by roundoff at a thrust bound.
+    if low_w > high_w + 1e-10:
+        raise EvaluationError('inconsistent feasible speed/vertical interval')
+    vertical = float(np.clip(preferred_vertical_rate, min(low_w, high_w), high_w))
+    required = drag + mass * (requested_acceleration + g0 * vertical / tas)
+    thrust, limited, reason, _, _ = _clamp_thrust(required, idle_thrust, maximum_thrust)
+    acceleration = (thrust - drag) / mass - g0 * vertical / tas
+    return thrust, acceleration, vertical, required, limited, reason
 
 
 class BadaConfigurationMode(str, Enum):
@@ -81,7 +122,8 @@ class EnergyResult:
     def validate(self):
         values = np.asarray((self.thrust, self.rated_thrust, self.drag,
                              self.fuel_flow, self.esf, self.rocd,
-                             self.acceleration, self.propulsion_bank_angle,
+                             self.acceleration, self.applied_acceleration,
+                             self.applied_vertical_rate, self.propulsion_bank_angle,
                              self.load_factor), dtype=float)
         if (not np.all(np.isfinite(values)) or self.fuel_flow < 0.0 or
                 self.load_factor < 1.0):
@@ -120,6 +162,7 @@ class BadaModelAdapter:
 
     def bluesky_energy(self, *, h, tas, mass, temperature, pressure, phase, schedule,
                        configuration_mode=BadaConfigurationMode.PYBADA,
+                       speed_evolution='constCAS',
                        requested_acceleration=0.0, requested_vertical_rate=0.0,
                        propulsion_bank_angle=0.0, load_factor=1.0):
         try:
@@ -136,7 +179,11 @@ class BadaModelAdapter:
         ac = self.model
         atm, dtemp, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
         bada_phase = {'Climb': 'cl', 'Descent': 'des'}.get(phase)
-        evolution = 'constCAS' if schedule == 'CONSCAS' or h <= 9144.0 else 'constM'
+        # Guidance owns CAS/Mach selection; altitude alone cannot identify it.
+        # Standalone model calls default to CAS. The live adapter passes intent.
+        evolution = 'constCAS' if schedule == 'CONSCAS' else speed_evolution
+        if evolution not in ('constCAS', 'constM', 'constTAS'):
+            raise EvaluationError(f'Unsupported speed evolution: {evolution}')
         if self.family == '3':
             cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
             config = self._configuration(
@@ -162,8 +209,6 @@ class BadaModelAdapter:
             airplane = import_module('pyBADA.aircraft').Airplane
             esf = airplane.esf(flightEvolution=evolution, h=h, M=mach, deltaTemp=dtemp) \
                 if bada_phase else 1.0
-            rocd = ac.ROCD(required_thrust, drag, tas, mass, esf, h, dtemp) \
-                if bada_phase else 0.0
         else:
             cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
             config = self._configuration(
@@ -186,18 +231,25 @@ class BadaModelAdapter:
                                (drag if phase == 'Cruise' else rated_thrust))
             esf = ac.esf(flightEvolution=evolution, h=h, M=mach, deltaTemp=dtemp) \
                 if bada_phase else 1.0
-            rocd = ac.ROCD(T=required_thrust, D=drag, v=tas, mass=mass, ESF=esf,
-                           h=h, deltaTemp=dtemp) if bada_phase else 0.0
         thrust, limited, reason, idle_thrust, maximum_thrust = _clamp_thrust(
             required_thrust, idle_thrust, maximum_thrust)
+        temperature_factor = (temperature - dtemp) / temperature
+        if self.family == '3':
+            rocd = ac.ROCD(thrust, drag, tas, mass, esf, h, dtemp) if bada_phase else 0.0
+        else:
+            rocd = ac.ROCD(T=thrust, D=drag, v=tas, mass=mass, ESF=esf,
+                           h=h, deltaTemp=dtemp) if bada_phase else 0.0
+        # pyBADA ROCD contains the pressure-altitude temperature factor. The
+        # host integrates geometric altitude; remove that factor for motion.
+        geometric_rate = rocd / temperature_factor
         if self.family == '3':
             fuel = max(ac.ff(h=h, v=tas, T=thrust, config=config,
                              flightPhase=phase,
-                             adapted=phase == 'Cruise' and bool(requested_acceleration)),
+                             adapted=(phase == 'Cruise' and bool(requested_acceleration)) or limited),
                        ac.ffMin(h=h))
         else:
             fuel_args = ({'M': mach, 'CT': thrust / (delta * ac.WREF)}
-                         if phase == 'Cruise' else {'M': mach, 'rating': rating})
+                         if phase == 'Cruise' or limited else {'M': mach, 'rating': rating})
             fuel = ac.flightEnvelope.ff(delta=delta, theta=theta,
                                          deltaTemp=dtemp, **fuel_args)
         acceleration = ((thrust - drag) / mass if phase == 'Cruise' else
@@ -212,11 +264,29 @@ class BadaModelAdapter:
                     applied_acceleration=float(acceleration), thrust_limited=limited,
                     limitation_reason=reason, required_thrust=float(required_thrust),
                     requested_vertical_rate=float(requested_vertical_rate),
-                    applied_vertical_rate=float(rocd),
+                    applied_vertical_rate=float(geometric_rate),
                     propulsion_bank_angle=float(propulsion_bank_angle),
                     load_factor=float(load_factor),
                     allocation_policy=('HORIZONTAL_ADAPTED' if phase == 'Cruise'
                                        else 'BADA_ESF'))
+
+    def bluesky_fuel(self, *, h, tas, mass, temperature, pressure, phase, thrust,
+                     configuration_mode=BadaConfigurationMode.PYBADA):
+        """Fuel for an applied, potentially capture-adapted thrust at this state."""
+        ac = self.model
+        atm, dtemp, theta, delta, sigma, mach = self._atmosphere(h, tas, temperature)
+        if self.family == '3':
+            cas = atm.tas2Cas(tas=tas, delta=delta, sigma=sigma)
+            config = self._configuration(phase=phase, h=h, mass=mass, cas=cas,
+                                         delta_temp=dtemp, configuration_mode=configuration_mode)
+            fuel = max(ac.ff(h=h, v=tas, T=thrust, config=config,
+                             flightPhase=phase, adapted=True), ac.ffMin(h=h))
+        else:
+            fuel = ac.flightEnvelope.ff(delta=delta, theta=theta, deltaTemp=dtemp,
+                                         M=mach, CT=thrust / (delta * ac.WREF))
+        if not np.isfinite(fuel) or fuel < 0:
+            raise EvaluationError('non-physical fuel flow for applied thrust')
+        return float(fuel)
 
     def bluesky_airdata(self, *, h, tas, temperature):
         """Convert TAS with the same applied-atmosphere convention as TEM."""
@@ -226,13 +296,18 @@ class BadaModelAdapter:
 
     def bluesky_vertical_envelope(self, *, h, tas, mass, temperature, pressure,
                                   schedule,
+                                  speed_evolution='constCAS',
                                   configuration_mode=BadaConfigurationMode.PYBADA):
-        """Return LIDL descent and MCMB climb ROCD at one operating point."""
+        """Return geometric vertical-rate bounds at one operating point.
+
+        minimum/maximum_rocd retain the existing interface names; their values
+        are the rates applied to geometric altitude, not raw pyBADA ROCD.
+        """
         common = dict(h=h, tas=tas, mass=mass, temperature=temperature,
-                      pressure=pressure, schedule=schedule,
+                      pressure=pressure, schedule=schedule, speed_evolution=speed_evolution,
                       configuration_mode=configuration_mode)
-        minimum = float(self.bluesky_energy(phase='Descent', **common)['rocd'])
-        maximum = float(self.bluesky_energy(phase='Climb', **common)['rocd'])
+        minimum = float(self.bluesky_energy(phase='Descent', **common)['applied_vertical_rate'])
+        maximum = float(self.bluesky_energy(phase='Climb', **common)['applied_vertical_rate'])
         if not np.all(np.isfinite((minimum, maximum))):
             raise EvaluationError('non-finite MCMB/LIDL ROCD bounds')
         if minimum > maximum:

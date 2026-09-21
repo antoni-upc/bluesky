@@ -54,6 +54,7 @@ def traffic(monkeypatch):
                                 bankdef=np.radians(np.array([25.0, 25.0])))
     monkeypatch.setattr(bs, 'traf', SimpleNamespace(
         id=['A1', 'A2'], cas=np.array([120.0, 120.0]), M=np.array([0.4, 0.4]),
+        selspd=np.array([120.0, 120.0]),
         alt=np.array([3000.0, 3000.0]), pressure_alt=np.array([3000.0, 3000.0]),
         vs=np.array([0.0, 0.0]), tas=np.array([120.0, 120.0]),
         hdg=np.array([90.0, 90.0]),
@@ -260,11 +261,13 @@ def test_lateral_guidance_report_and_enforce_are_isolated(monkeypatch):
     perf.limits(np.array([120.0, 120.0]), np.zeros(2),
                 np.array([3000.0, 3000.0]), np.zeros(2))
     assert np.degrees(bs.traf.ap.bankdef).tolist() == pytest.approx([75.0, 60.0])
-    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
-    assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
+    # Status describes the state evaluated before guidance is limited.
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'INFEASIBLE']
+    assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'ACCEPTED']
     assert perf.envelope_event_count.tolist() == [1, 1]
     perf.limits(np.array([120.0, 120.0]), np.zeros(2),
                 np.array([3000.0, 3000.0]), np.zeros(2))
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
     assert perf.envelope_event_count.tolist() == [1, 1]
 
 
@@ -301,20 +304,30 @@ def test_enforce_recovers_current_vertical_overshoot_as_a_limit(monkeypatch):
         np.array([120.0, 120.0]), np.array([20.0, 0.0]),
         np.array([0.0, 3000.0]), np.zeros(2))
     assert applied_vs[0] == 8.0
-    assert perf.envelope_status[0] == 'VALID'
-    assert perf.envelope_last_action[0] == 'LIMITED'
+    assert perf.envelope_status[0] == 'INFEASIBLE'
+    assert perf.envelope_last_action[0] == 'ACCEPTED'
     assert perf.envelope_last_reason[0] == 'ROD_MAX'
     assert perf.envelope_event_count[0] == 1
     assert ('requested={direction=DESCENT,vertical_rate_magnitude_m_s=20.00}'
             in messages[0])
-    assert ('applied={direction=DESCENT,vertical_rate_magnitude_m_s=8.00}'
+    assert ('applied={direction=DESCENT,vertical_rate_magnitude_m_s=20.00}'
             in messages[0])
+    # A changed request does not change actual vertical speed. Only a later
+    # evaluation of a recovered state may clear the current-state finding.
+    bs.traf.vs[0] = -8.0
+    perf.limits(np.array([120.0, 120.0]), np.array([8.0, 0.0]),
+                np.array([0.0, 3000.0]), np.zeros(2))
+    assert perf.envelope_status[0] == 'VALID'
 
 
 class FakeVerticalEnergyModel(FakeFlightModel):
+    def bluesky_fuel(self, **state):
+        return 0.0
+
     def bluesky_energy(self, **state):
         return dict(thrust=12_000.0, rated_thrust=14_000.0, drag=10_000.0,
                     fuel_flow=0.0, esf=0.5, rocd=20.0, acceleration=0.0,
+                    idle_thrust=0.0, maximum_thrust=1000000.0,
                     applied_vertical_rate=20.0, allocation_policy='BADA_ESF')
 
 

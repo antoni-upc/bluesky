@@ -124,8 +124,8 @@ def validate_manifest(manifest):
     if not isinstance(enabled, bool):
         raise ManifestError("recorder.enabled must be boolean")
     if enabled:
-        if recorder.get("schema_version") != "samples-v10":
-            raise ManifestError("enabled recorder must declare samples-v10")
+        if recorder.get("schema_version") not in ("samples-v10", "samples-v11"):
+            raise ManifestError("enabled recorder must declare samples-v10 or samples-v11")
         _positive_number(recorder.get("interval_s"), "recorder.interval_s")
 
     expected_performance, expected_atmosphere, expected_recorder = PROFILES[profile]
