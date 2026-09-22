@@ -1,0 +1,19 @@
+# Licensed BADA 3 mass ABORT/evidence-flush gate. Generated evidence is ignored.
+# Run only after pybada3-envelope-mass passes.
+00:00:00.00>ECHO TEST INFO === BADA 3 MASS ABORT AND FLUSH GATE ===
+00:00:00.05>ECHO TEST INFO The active model supplies its bounds at runtime, and none are embedded here.
+00:00:00.10>ECHO TEST EXPECT One MASS_MAX ABORTED event is finalized before simulation HOLD.
+00:00:00.15>PLUGIN LOAD PYBADATEM
+00:00:00.20>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.25>PERFMODEL BADA3
+00:00:00.30>DT 0.05
+00:00:00.35>DATE 11,8,2026,12:00:00
+00:00:01.00>CRE B3MA,A320,41.30,2.10,90,FL100,250
+00:00:01.10>DYNAMICS B3MA KINEMATIC
+00:00:01.20>ENVELOPECHECKS B3MA CUSTOM MASS_MIN MASS_MAX
+00:00:01.30>ENVELOPE B3MA ABORT
+00:00:02.00>RECORDRESEARCH START pybada3-envelope-mass-abort.csv
+00:00:03.00>ECHO TEST ACTION Assigning a deliberately excessive positive mass under ABORT.
+00:00:03.10>MASS B3MA 100000
+# MASS must synchronously emit, capture the final state, finalize CSV/events/
+# metadata, and enter HOLD. Later scheduled commands intentionally cannot run.

@@ -1,0 +1,21 @@
+# Licensed BADA 4 thrust-saturation, applied-motion, and capture gate.
+# Run: IC research/pybada-saturation-bada4
+# Validate: python tests/research/validate_horizontal_saturation_run.py
+#   output/pybada-saturation-bada4.csv --family 4
+00:00:00.00>ECHO TEST INFO === BADA 4 HORIZONTAL SATURATION GATE ===
+00:00:00.10>PLUGIN LOAD PYBADATEM
+00:00:00.20>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.30>PERFMODEL BADA4
+00:00:00.40>DATE 20,8,2026,12:00:00
+00:00:01.00>CRE B4ST,A320-232,41.24,2.00,90,10000,220
+00:00:01.30>DYNAMICS B4ST TEM
+00:00:01.50>ENVELOPE B4ST OFF
+00:00:01.60>RECORDRESEARCH INTERVAL 0.05
+00:00:02.00>RECORDRESEARCH START pybada-saturation-bada4.csv
+# The commands invoke BlueSky's 2 m/s2 native request. TEM must instead use
+# maximum/idle thrust and capture 225/220 kt without overshoot.
+00:00:05.00>SPD B4ST 225
+00:00:20.00>SPD B4ST 220
+00:00:42.00>RECORDRESEARCH STOP
+00:00:42.10>ECHO TEST INFO Validate pybada-saturation-bada4.csv with family 4.
+00:00:43.00>HOLD

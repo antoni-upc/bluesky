@@ -64,6 +64,15 @@ headless = [
   # no extra dependencies
 ]
 recording = ["openpyxl>=3.1,<4"]
+test = ["pytest>=9,<10"]
+research = [
+  "pyBADA>=0.1.12,<0.2",
+  "cdsapi>=0.7,<0.8",
+  "netCDF4>=1.7,<2",
+  "requests>=2.32,<3",
+  "pygrib>=2.1.6,<3",
+  "openpyxl>=3.1,<4",
+]
 
 [project.scripts]
 bluesky = "bluesky.__main__:main"
@@ -85,6 +94,7 @@ source = "vcs"
 markers = [
     "smoke: fast standalone smoke tests",
     "external_weather: tests requiring external weather datasets",
+    "licensed_bada: tests requiring external licensed BADA datasets",
 ]
 
 

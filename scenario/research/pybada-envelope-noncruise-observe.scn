@@ -1,0 +1,28 @@
+# Licensed BADA 4 non-cruise configuration observation gate.
+# Run with: IC research/pybada-envelope-noncruise-observe
+00:00:00.00>ECHO TEST INFO === PYBADATEM NON-CRUISE CONFIGURATION OBSERVATION GATE ===
+00:00:00.05>ECHO TEST INFO This gate only observes pyBADA configuration, HLid, landing gear, and selected DLM limits.
+00:00:00.10>ECHO TEST INFO Envelope policy remains OFF and no lateral command or enforcement is applied.
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.30>PERFMODEL BADA4
+00:00:01.00>CRE TOBS,A320-232,41.30,2.10,90,1500,160
+00:00:01.10>CRE AOBS,A320-232,41.32,2.10,90,5000,180
+00:00:01.20>CRE LOBS,A320-232,41.34,2.10,90,1000,140
+00:00:01.30>DYNAMICS TOBS KINEMATIC
+00:00:01.40>DYNAMICS AOBS KINEMATIC
+00:00:01.50>DYNAMICS LOBS KINEMATIC
+00:00:01.55>BADACONFIG TOBS PYBADA
+00:00:01.56>BADACONFIG AOBS PYBADA
+00:00:01.57>BADACONFIG LOBS PYBADA
+00:00:01.60>VS TOBS 1500
+00:00:01.70>VS AOBS -1000
+00:00:01.80>VS LOBS -500
+00:00:03.00>ECHO TEST ACTION Inspecting representative low-altitude climb, approach, and landing operating points.
+00:00:03.05>ECHO TEST EXPECT Each PERFSTATUS lateral_bounds field reports config, HLid, gear, DLM names, load bounds, and derived bank maximum.
+00:00:03.10>ECHO TEST EXPECT TOBS, AOBS, and LOBS must remain envelope OFF with no QUALITY event.
+00:00:03.20>PERFSTATUS TOBS
+00:00:03.30>PERFSTATUS AOBS
+00:00:03.40>PERFSTATUS LOBS
+00:00:04.00>ECHO TEST INFO Record the three lateral_bounds outputs before designing a deterministic transition gate.
+00:00:04.10>ECHO TEST ERROR Stop if config is unknown, HLid or gear is unknown, DLM names do not match HLid, or the intended non-cruise configurations are not exposed.
+00:00:05.00>HOLD

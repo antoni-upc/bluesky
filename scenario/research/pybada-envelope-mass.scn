@@ -1,0 +1,30 @@
+# Interactive mass-envelope gate for licensed BADA 4.2 A320-232 data.
+# Run from BlueSky with: IC research/pybada-envelope-mass
+00:00:00.00>ECHO === PYBADATEM MASS ENVELOPE INTERACTIVE GATE ===
+00:00:00.10>PLUGIN LOAD PYBADATEM
+00:00:00.20>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.30>PERFMODEL BADA4
+00:00:01.00>CRE MASSR,A320-232,41.30,2.10,90,FL100,250
+00:00:01.10>CRE MASSE,A320-232,41.32,2.10,90,FL100,250
+00:00:02.00>ENVELOPECHECKS MASSR CUSTOM MASS_MIN MASS_MAX
+00:00:02.10>ENVELOPECHECKS MASSE CUSTOM MASS_MIN MASS_MAX
+00:00:03.00>RECORDRESEARCH START pybada-envelope-mass.csv
+# OFF accepts a positive but deliberately impossible mass without BADA checks.
+00:00:04.00>MASS MASSR 100000
+# Enabling REPORT on the already-infeasible aircraft accepts and reports it.
+00:00:05.00>ENVELOPE MASSR REPORT
+# ENFORCE is enabled on the second, initially feasible aircraft.
+00:00:05.10>ENVELOPE MASSE ENFORCE
+# Fundamental invalidity is rejected even under an envelope policy.
+00:00:06.00>MASS MASSE 0
+# Selected-envelope failure is rejected without changing MASSE's mass.
+00:00:06.10>MASS MASSE 100000
+# Recover MASSR, then recur: REPORT accepts both and emits only on recurrence.
+00:00:07.00>MASS MASSR 65000
+00:00:08.00>MASS MASSR 100000
+00:00:09.00>PERFSTATUS MASSR
+00:00:09.10>PERFSTATUS MASSE
+00:00:10.00>RECORDRESEARCH STOP
+00:00:10.10>ECHO === EXPECT MASSR INFEASIBLE AT 100000 kg ===
+00:00:10.20>ECHO === EXPECT MASSE VALID WITH ITS PRESERVED, FUEL-DEPLETED MASS ===
+00:00:11.00>HOLD

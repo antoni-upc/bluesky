@@ -1,0 +1,18 @@
+# Licensed BADA 3 speed/Mach ABORT and synchronous evidence gate.
+# Run only after normal and direct flight gates pass.
+00:00:00.00>ECHO TEST INFO === BADA 3 FLIGHT ENVELOPE ABORT GATE ===
+00:00:00.05>ECHO TEST INFO Runtime model bounds decide the violation, and generated evidence is ignored.
+00:00:00.10>ECHO TEST EXPECT One high-speed ABORTED event is finalized before simulation HOLD.
+00:00:00.15>PLUGIN LOAD PYBADATEM
+00:00:00.20>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.25>PERFMODEL BADA3
+00:00:00.30>DT 0.05
+00:00:00.35>DATE 11,8,2026,12:00:00
+00:00:01.00>CRE B3FA,A320,41.30,2.10,90,FL100,250
+00:00:01.10>DYNAMICS B3FA KINEMATIC
+00:00:01.20>ENVELOPECHECKS B3FA CUSTOM HIGH_SPEED MACH_MAX ALTITUDE_MAX
+00:00:01.30>ENVELOPE B3FA ABORT
+00:00:02.00>RECORDRESEARCH START pybada3-envelope-flight-abort.csv
+00:00:03.00>ECHO TEST ACTION Requesting excessive speed under ABORT.
+00:00:03.10>SPD B3FA 600
+# The next limits pass must synchronously finalize evidence and enter HOLD.

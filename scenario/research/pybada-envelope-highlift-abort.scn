@@ -1,0 +1,21 @@
+# Licensed BADA 4 high-lift bank/load ABORT and evidence-flush gate.
+# Run with: IC research/pybada-envelope-highlift-abort
+00:00:00.00>ECHO TEST INFO === PYBADATEM HIGH-LIFT LATERAL ABORT GATE ===
+00:00:00.05>ECHO TEST INFO This gate reuses the validated PYBADA initial-climb state and high-lift nf3/nf1 bounds.
+00:00:00.10>ECHO TEST EXPECT Before the turn config is IC, HLid is 2, gear is up, and bank maximum is near 60 degrees.
+00:00:00.15>ECHO TEST ERROR Stop if the observed configuration or high-lift bounds differ from the passing REPORT and ENFORCE gate.
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.25>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.30>PERFMODEL BADA4
+00:00:01.00>CRE HLAB,A320-232,41.30,2.10,90,1500,160
+00:00:01.10>DYNAMICS HLAB KINEMATIC
+00:00:01.20>BADACONFIG HLAB PYBADA
+00:00:01.30>ALT HLAB FL100 1000
+00:00:01.40>BANK HLAB 70
+00:00:01.50>ENVELOPECHECKS HLAB CUSTOM BANK_ANGLE LOAD_FACTOR
+00:00:01.60>ENVELOPE HLAB ABORT
+00:00:01.70>RECORDRESEARCH START pybada-envelope-highlift-abort.csv
+00:00:01.80>PERFSTATUS HLAB BOUNDS
+00:00:01.90>ECHO TEST EXPECT No QUALITY event yet because effective bank is zero outside a turn.
+00:00:02.00>ECHO TEST ACTION Commanding a turn with 70 degrees. Expect one BANK_ANGLE,LOAD_FACTOR ABORTED event followed by HOLD.
+00:00:02.10>HDG HLAB 270

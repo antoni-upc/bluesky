@@ -1,0 +1,19 @@
+# Licensed BADA 4 simultaneous selected-speed/climb total-energy gate.
+# Run: IC research/pybada-joint-energy-bada4
+# Validate: python tests/research/validate_joint_energy_run.py
+#   output/pybada-joint-energy-bada4.csv --family 4
+00:00:00.00>ECHO TEST INFO === BADA 4 JOINT ENERGY GATE ===
+00:00:00.10>PLUGIN LOAD PYBADATEM
+00:00:00.20>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.30>PERFMODEL BADA4
+00:00:00.40>DATE 20,8,2026,12:00:00
+00:00:01.00>CRE B4JE,A320-232,41.20,2.00,90,10000,220
+00:00:01.10>DYNAMICS B4JE TEM
+00:00:01.20>ENVELOPE B4JE OFF
+00:00:01.30>RECORDRESEARCH INTERVAL 0.05
+00:00:02.00>RECORDRESEARCH START pybada-joint-energy-bada4.csv
+00:00:05.00>SPD B4JE 225
+00:00:05.00>ALT B4JE 12000 1000
+00:01:25.00>RECORDRESEARCH STOP
+00:01:25.10>ECHO TEST INFO Validate pybada-joint-energy-bada4.csv with family 4.
+00:01:26.00>HOLD
