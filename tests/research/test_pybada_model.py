@@ -297,7 +297,8 @@ def test_vertical_envelope_uses_lidl_and_mcmb_at_same_operating_point(monkeypatc
 
     def energy(**state):
         calls.append(state)
-        return {'rocd': -7.5 if state['phase'] == 'Descent' else 5.25}
+        return {'applied_vertical_rate': -7.5 if state['phase'] == 'Descent' else 5.25,
+                'rocd': -8.0 if state['phase'] == 'Descent' else 6.0}
 
     monkeypatch.setattr(adapter, 'bluesky_energy', energy)
     result = adapter.bluesky_vertical_envelope(
@@ -445,10 +446,10 @@ def test_packaged_dummy_bada_esf_joint_energy_balance(
     temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
     specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
     allocated_power = (state['tas'] * result.applied_acceleration +
-                       constants.g * result.applied_vertical_rate / temperature_factor)
+                       constants.g * result.applied_vertical_rate)
     assert allocated_power == pytest.approx(specific_power, rel=1e-10, abs=1e-10)
     assert result.requested_vertical_rate == pytest.approx(requested_vs)
-    assert result.applied_vertical_rate == pytest.approx(result.rocd)
+    assert result.applied_vertical_rate == pytest.approx(result.rocd / temperature_factor)
     assert result.allocation_policy == 'BADA_ESF'
 
 
@@ -476,12 +477,12 @@ def test_packaged_dummy_bada_esf_deceleration_descent_closes_signed_energy_balan
     temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
     specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
     allocated_power = (state['tas'] * result.applied_acceleration +
-                       constants.g * result.applied_vertical_rate / temperature_factor)
+                       constants.g * result.applied_vertical_rate)
     assert result.requested_acceleration == pytest.approx(requested_acceleration)
     assert result.requested_vertical_rate == pytest.approx(requested_vertical_rate)
     assert result.applied_acceleration < 0.0
     assert result.applied_vertical_rate < 0.0
-    assert result.applied_vertical_rate == pytest.approx(result.rocd)
+    assert result.applied_vertical_rate == pytest.approx(result.rocd / temperature_factor)
     assert result.thrust == pytest.approx(result.idle_thrust)
     assert result.allocation_policy == 'BADA_ESF'
     assert allocated_power < 0.0
@@ -512,9 +513,9 @@ def test_packaged_dummy_bada_esf_climb_overrides_conflicting_deceleration_reques
     temperature_factor = (state['temperature'] - delta_temp) / state['temperature']
     specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
     requested_power = (state['tas'] * requested_acceleration +
-                       constants.g * requested_vertical_rate / temperature_factor)
+                       constants.g * requested_vertical_rate)
     allocated_power = (state['tas'] * result.applied_acceleration +
-                       constants.g * result.applied_vertical_rate / temperature_factor)
+                       constants.g * result.applied_vertical_rate)
     assert result.requested_acceleration == pytest.approx(requested_acceleration)
     assert result.requested_vertical_rate == pytest.approx(requested_vertical_rate)
     assert result.applied_acceleration > 0.0
@@ -555,7 +556,30 @@ def test_packaged_dummy_turn_load_participates_in_joint_energy_balance(
                       state['mass'])
     allocated_power = (
         state['tas'] * turning.applied_acceleration +
-        constants.g * turning.applied_vertical_rate / temperature_factor)
+        constants.g * turning.applied_vertical_rate)
     assert allocated_power == pytest.approx(specific_power, rel=1e-10, abs=1e-10)
     assert allocated_power < (
         (straight.thrust - straight.drag) * state['tas'] / state['mass'])
+
+
+@pytest.mark.parametrize('family', ['3', '4'])
+@pytest.mark.parametrize(('height', 'evolution'), [
+    (11000., 'constCAS'), (5000., 'constM'), (11000., 'constTAS')])
+def test_packaged_esf_uses_explicit_speed_intent(family, height, evolution):
+    pybada = pytest.importorskip('pyBADA')
+    from pyBADA import atmosphere as atm
+    from pyBADA.aircraft import Airplane
+    data = Path(pybada.__file__).parent / 'aircraft' / f'BADA{family}' / 'DUMMY'
+    model, _ = ModelStore(family, str(data), version='3.15' if family == '3' else '4.2').resolve('A320')
+    temperature = atm.theta(h=height, deltaTemp=0.) * 288.15
+    state = dict(h=height, tas=220., mass=60000., temperature=temperature,
+                 pressure=atm.delta(h=height, deltaTemp=0.) * 101325.,
+                 schedule='ICAO', configuration_mode='CRUISE', speed_evolution=evolution)
+    mach = model.bluesky_airdata(h=height, tas=220., temperature=temperature)[1]
+    expected = Airplane.esf(flightEvolution=evolution, h=height, M=mach, deltaTemp=0.)
+    for phase in ['Climb', 'Descent']:
+        result = EnergyResult(**model.bluesky_energy(phase=phase, **state)).validate()
+        assert result.esf == pytest.approx(expected)
+    bounds = model.bluesky_vertical_envelope(**state)
+    assert bounds['maximum_rocd'] == pytest.approx(model.bluesky_energy(phase='Climb', **state)['rocd'])
+    assert bounds['minimum_rocd'] == pytest.approx(model.bluesky_energy(phase='Descent', **state)['rocd'])

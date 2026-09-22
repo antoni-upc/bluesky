@@ -1,0 +1,50 @@
+[
+  {
+    "route": "EGLL-EICK",
+    "sim_time_s": 1500,
+    "source": "output/numerical-correction-01/qualification-v2/dt05/EGLL-EICK/tem/samples.csv",
+    "values": {
+      "evaluation_tas_m_s": 249.92059998919314,
+      "evaluation_mass_kg": 54336.17268098255,
+      "drag_n": 52885.538503309355,
+      "idle_thrust_n": -395.51677328733257,
+      "maximum_thrust_n": 52906.52622838433,
+      "target_tas_m_s": 199.92099456646534,
+      "requested_acceleration_m_s2": -2.0,
+      "applied_acceleration_m_s2": 9.499918278501547e-05,
+      "applied_vertical_rate_m_s": 0.007422648849510445
+    }
+  },
+  {
+    "route": "LEBL-EICK",
+    "sim_time_s": 3600,
+    "source": "output/numerical-correction-01/qualification-v2/dt05/LEBL-EICK/tem/samples.csv",
+    "values": {
+      "evaluation_tas_m_s": 249.57762598705276,
+      "evaluation_mass_kg": 54398.633799149386,
+      "drag_n": 53741.157266773276,
+      "idle_thrust_n": -760.6554761443117,
+      "maximum_thrust_n": 53799.09719196284,
+      "target_tas_m_s": 199.8114477150181,
+      "requested_acceleration_m_s2": -2.0,
+      "applied_acceleration_m_s2": 0.00026161845376503686,
+      "applied_vertical_rate_m_s": 0.02044844499108455
+    }
+  },
+  {
+    "route": "CYHZ-EICK",
+    "sim_time_s": 7200,
+    "source": "output/numerical-correction-01/qualification-v2/dt05/CYHZ-EICK/tem/samples.csv",
+    "values": {
+      "evaluation_tas_m_s": 257.0704779374098,
+      "evaluation_mass_kg": 78861.1285271226,
+      "drag_n": 82141.3407583099,
+      "idle_thrust_n": -6310.466260766637,
+      "maximum_thrust_n": 81840.62499700484,
+      "target_tas_m_s": 210.41234895358804,
+      "requested_acceleration_m_s2": -2.0,
+      "applied_acceleration_m_s2": -0.0009738489396605989,
+      "applied_vertical_rate_m_s": -0.07443127909708078
+    }
+  }
+]

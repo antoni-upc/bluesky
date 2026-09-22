@@ -1,13 +1,16 @@
 """BlueSky performance implementation for longitudinal/vertical TEM."""
 
+from dataclasses import replace
+
 import numpy as np
 
 import bluesky as bs
 from bluesky.traffic.performance.perfbase import PerfBase
 from bluesky.traffic.dynamics import SpeedStepRequest, SpeedStepResult
-from bluesky.tools.aero import g0, vatmos
+from bluesky.tools import aero
+from bluesky.tools.aero import g0
 from .model import (EnergyResult, EvaluationError, ModelStore, ModelUnavailable,
-                    parse_configuration_mode)
+                    parse_configuration_mode, allocate_speed_priority)
 from .envelope import (EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile,
                        EnvelopeResult, EnvelopeStatus, FlightBounds, QualityEvent,
                        LateralBounds, VerticalBounds, combine_results, evaluate_flight,
@@ -57,6 +60,13 @@ class PyBadaTEM(PerfBase):
             self.speed_capture = np.array([], dtype=bool)
             self.requested_vertical_rate = np.array([])
             self.applied_vertical_rate = np.array([])
+            self.evaluation_tas = np.array([])
+            self.evaluation_alt = np.array([])
+            self.evaluation_mass = np.array([])
+            self.evaluation_temperature = np.array([])
+            self.evaluation_pressure_alt = np.array([])
+            self.evaluation_timestep = np.array([])
+            self.model_rocd = np.array([])
             self.energy_share_factor = np.array([])
             self.energy_allocation_policy = np.array([], dtype='U24')
             self.propulsion_bank_angle = np.array([])
@@ -210,6 +220,20 @@ class PyBadaTEM(PerfBase):
         return ('PYBADA' if values is None or idx >= len(values)
                 else parse_configuration_mode(values[idx]).value)
 
+    def _speed_evolution(self, idx):
+        """Match host CAS/Mach interpretation, independently of altitude."""
+        if self.schedule == 'CONSCAS':
+            return 'constCAS'
+        # Conflict resolution supplies a resolved TAS target rather than the
+        # autopilot's selected CAS/Mach. It must not inherit that stale mode.
+        active = getattr(getattr(bs.traf, 'cr', None), 'tasactive', None)
+        if active is not None and active[idx]:
+            return 'constTAS'
+        selected = float(bs.traf.selspd[idx])
+        if not np.isfinite(selected) or selected <= 0:
+            raise EvaluationError('Selected CAS/Mach speed must be finite and positive')
+        return 'constM' if 0.1 < selected < aero.casmach_thr else 'constCAS'
+
     @staticmethod
     def _call_configuration_aware(function, configuration_mode, **kwargs):
         try:
@@ -246,7 +270,7 @@ class PyBadaTEM(PerfBase):
                 tas=float(bs.traf.tas[idx] if tas is None else tas),
                 mass=float(self.mass[idx] if mass is None else mass),
                 temperature=float(bs.traf.Temp[idx]), pressure=float(bs.traf.p[idx]),
-                schedule=self.schedule)
+                schedule=self.schedule, speed_evolution=self._speed_evolution(idx))
             return VerticalBounds(**values)
         except Exception as exc:
             return VerticalBounds(None, None,
@@ -648,7 +672,7 @@ class PyBadaTEM(PerfBase):
                     self._configuration_mode(idx, configuration_mode),
                     h=h, tas=tas, mass=mass,
                     temperature=bs.traf.Temp[idx], pressure=bs.traf.p[idx], phase=phase,
-                    schedule=self.schedule,
+                    schedule=self.schedule, speed_evolution=self._speed_evolution(idx),
                     requested_acceleration=requested_acceleration,
                     requested_vertical_rate=requested_vertical_rate,
                     propulsion_bank_angle=propulsion_bank_angle,
@@ -692,8 +716,17 @@ class PyBadaTEM(PerfBase):
         # BADA implementation.  dyn_mode only decides whether those results
         # drive motion; KINEMATIC runs still retain usable performance/fuel data.
         for idx in range(traffic.ntraf):
+            must_hold = False
             try:
                 result = self._evaluate(idx)
+                if hasattr(self, 'evaluation_tas'):
+                    self.evaluation_tas[idx] = traffic.tas[idx]
+                    self.evaluation_alt[idx] = traffic.alt[idx]
+                    self.evaluation_mass[idx] = self.mass[idx]
+                    self.evaluation_temperature[idx] = traffic.Temp[idx]
+                    self.evaluation_pressure_alt[idx] = traffic.pressure_alt[idx]
+                    self.evaluation_timestep[idx] = dt
+                    self.model_rocd[idx] = result.rocd
                 self.thrust[idx], self.rated_thrust[idx], self.drag[idx], self.fuelflow[idx] = \
                     result.thrust, result.rated_thrust, result.drag, result.fuel_flow
                 if hasattr(self, 'requested_acceleration'):
@@ -725,25 +758,17 @@ class PyBadaTEM(PerfBase):
                         f'{result.idle_thrust:.3f}..{result.maximum_thrust:.3f} N')
                 candidate_vs = None
                 if self.dyn_mode[idx] == 1:
-                    applied_acceleration[idx] = result.applied_acceleration
-                    proposed_tas = traffic.tas[idx] + result.applied_acceleration * dt
+                    enforced_vertical = None
                     target_tas = request.target_tas[idx]
-                    direction = np.sign(target_tas - traffic.tas[idx])
-                    reaches_target = (direction == 0.0 or
-                                      direction * (proposed_tas - target_tas) >= 0.0)
-                    if reaches_target:
-                        proposed_tas = target_tas
-                        applied_acceleration[idx] = (target_tas - traffic.tas[idx]) / dt
-                    applied_next_tas[idx] = proposed_tas
-                    applied_capture[idx] = reaches_target
-                    if hasattr(self, 'applied_acceleration'):
-                        self.applied_acceleration[idx] = applied_acceleration[idx]
-                    if hasattr(self, 'speed_capture'):
-                        self.speed_capture[idx] = reaches_target
-                    speed_handled[idx] = True
                     delta_alt = traffic.aporasas.alt[idx] - traffic.alt[idx]
-                    candidate_vs = np.sign(delta_alt) * min(
-                        abs(result.applied_vertical_rate), abs(delta_alt) / dt)
+                    candidate_vs = result.applied_vertical_rate
+                    # Capture a boundary approached by the model's signed rate.
+                    # Do not reverse an infeasible climb/descent merely to chase it.
+                    if candidate_vs * delta_alt > 0:
+                        candidate_vs = np.sign(candidate_vs) * min(
+                            abs(candidate_vs), abs(delta_alt) / dt)
+                    elif delta_alt == 0:
+                        candidate_vs = 0.0
                     if (hasattr(self, 'envelope_policy') and
                             set(self.envelope_checks[idx]).intersection(
                                 {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX}) and
@@ -754,6 +779,8 @@ class PyBadaTEM(PerfBase):
                             if check in {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX})
                         vertical = self.vertical_bounds(
                             idx, mass=self.mass[idx], tas=traffic.tas[idx])
+                        if policy == EnvelopePolicy.ENFORCE:
+                            enforced_vertical = (vertical, selected_vertical)
                         vertical_result = evaluate_vertical(
                             candidate_vs, vertical, selected_vertical)
                         if vertical_result.status == EnvelopeStatus.UNKNOWN:
@@ -782,42 +809,73 @@ class PyBadaTEM(PerfBase):
                             self._set_result(idx, vertical_result, policy,
                                              EnvelopeAction.NONE, source='dynamics',
                                              contributes=False)
-                    # Exact altitude capture (or vertical envelope limiting)
-                    # changes the vertical share. Reassign the remaining
-                    # specific power to acceleration so the applied motion
-                    # still closes the same total-energy equation.
-                    if (result.allocation_policy == 'BADA_ESF' and
-                            abs(candidate_vs - result.applied_vertical_rate) > 1e-12):
-                        isa_temperature = float(vatmos(traffic.pressure_alt[idx])[2])
-                        temperature_factor = isa_temperature / traffic.Temp[idx]
-                        feasible_acceleration = (
-                            (result.thrust - result.drag) / self.mass[idx] -
-                            g0 * candidate_vs /
-                            (max(traffic.tas[idx], 1e-9) * temperature_factor))
-                        proposed_tas = traffic.tas[idx] + feasible_acceleration * dt
-                        direction = np.sign(target_tas - traffic.tas[idx])
-                        reaches_target = (direction == 0.0 or
-                                          direction * (proposed_tas - target_tas) >= 0.0)
-                        if reaches_target:
-                            proposed_tas = target_tas
-                            feasible_acceleration = (target_tas - traffic.tas[idx]) / dt
-                        applied_acceleration[idx] = feasible_acceleration
-                        applied_next_tas[idx] = proposed_tas
-                        applied_capture[idx] = reaches_target
-                        if hasattr(self, 'applied_acceleration'):
-                            self.applied_acceleration[idx] = feasible_acceleration
-                        if hasattr(self, 'speed_capture'):
-                            self.speed_capture[idx] = reaches_target
-                    if hasattr(self, 'applied_vertical_rate'):
+                    tas = float(traffic.tas[idx])
+                    mass = float(self.mass[idx])
+                    if dt <= 0 or tas <= 0 or mass <= 0:
+                        raise EvaluationError('positive timestep, TAS and mass required for TEM')
+                    direction = np.sign(target_tas - tas)
+                    desired_a = direction * min(abs(float(request.requested_acceleration[idx])),
+                                                abs(target_tas - tas) / dt)
+                    # Sacrifice vertical rate towards level flight before speed
+                    # tracking. Do not invent a reversal or exceed the already
+                    # captured/limited vertical request to achieve acceleration.
+                    low_w, high_w = min(0.0, candidate_vs), max(0.0, candidate_vs)
+                    if enforced_vertical is not None:
+                        bounds, checks = enforced_vertical
+                        if EnvelopeCheck.ROD_MAX in checks:
+                            low_w = max(low_w, bounds.minimum_rocd)
+                        if EnvelopeCheck.ROC_MAX in checks:
+                            high_w = min(high_w, bounds.maximum_rocd)
+                    thrust, acceleration, candidate_vs, required, limited, reason = allocate_speed_priority(
+                        tas=tas, mass=mass, drag=result.drag,
+                        idle_thrust=result.idle_thrust, maximum_thrust=result.maximum_thrust,
+                        requested_acceleration=desired_a, preferred_vertical_rate=candidate_vs,
+                        minimum_vertical_rate=low_w, maximum_vertical_rate=high_w)
+                    proposed_tas = tas + acceleration * dt
+                    reaches_target = abs(proposed_tas - target_tas) <= 1e-10
+                    if reaches_target:
+                        proposed_tas = target_tas
+                    fuel = result.fuel_flow
+                    if thrust != result.thrust:
+                        model = self.models[idx]
+                        if not hasattr(model, 'bluesky_fuel'):
+                            raise EvaluationError('speed-adapted thrust requires a fuel adapter')
+                        fuel = self._call_configuration_aware(model.bluesky_fuel,
+                            self._configuration_mode(idx), h=float(traffic.pressure_alt[idx]),
+                            tas=tas, mass=mass, temperature=float(traffic.Temp[idx]),
+                            pressure=float(traffic.p[idx]), phase=self._phase(idx), thrust=thrust)
+                    result = replace(result, thrust=thrust, required_thrust=required,
+                        fuel_flow=float(fuel), applied_acceleration=acceleration,
+                        applied_vertical_rate=candidate_vs, allocation_policy='SPEED_PRIORITY',
+                        thrust_limited=limited, limitation_reason=reason).validate()
+                    if not np.isfinite(proposed_tas) or proposed_tas <= 0:
+                        raise EvaluationError('TEM response produces non-positive TAS')
+                    applied_acceleration[idx] = acceleration
+                    applied_next_tas[idx] = proposed_tas
+                    applied_capture[idx] = reaches_target
+                    speed_handled[idx] = True
+                    self.thrust[idx], self.fuelflow[idx] = result.thrust, result.fuel_flow
+                    if hasattr(self, 'applied_acceleration'):
+                        self.applied_acceleration[idx] = acceleration
                         self.applied_vertical_rate[idx] = candidate_vs
+                        self.energy_allocation_policy[idx] = result.allocation_policy
+                        self.required_thrust[idx] = result.required_thrust
+                        self.thrust_limited[idx] = result.thrust_limited
+                        self.thrust_limitation_reason[idx] = result.limitation_reason
+                    if hasattr(self, 'speed_capture'):
+                        self.speed_capture[idx] = reaches_target
                 candidate_mass = self.mass[idx] - result.fuel_flow * dt
                 if hasattr(self, 'envelope_policy'):
                     override = bool(self.mass_override[idx]) if hasattr(self, 'mass_override') else False
                     ok, reason = self.assign_mass(idx, candidate_mass, override, runtime=True)
-                    if not ok and parse_policy(self.envelope_policy[idx]) != EnvelopePolicy.ENFORCE:
-                        raise EvaluationError(reason)
+                    if not ok:
+                        must_hold = True
+                        raise EvaluationError('fuel/mass update rejected: ' + reason)
                 else:  # Compatibility for minimal third-party/test implementations.
-                    self.mass[idx] = max(1.0, candidate_mass)
+                    if not np.isfinite(candidate_mass) or candidate_mass <= 0:
+                        must_hold = True
+                        raise EvaluationError('fuel consumption exhausts positive aircraft mass')
+                    self.mass[idx] = candidate_mass
                 if self.dyn_mode[idx] == 1:
                     traffic.vs[idx] = candidate_vs
                     vertical_handled[idx] = True
@@ -840,7 +898,7 @@ class PyBadaTEM(PerfBase):
                     self.propulsion_load_factor[idx] = np.nan
                     if hasattr(self, 'speed_capture'):
                         self.speed_capture[idx] = False
-                if self.strict:
+                if self.strict or must_hold:
                     message = (f'PYBADATEM strict evaluation failure: {exc}; simulation held. '
                                'If recording, use RECORDRESEARCH STOP to finalize partial evidence')
                     print(message)
@@ -900,8 +958,7 @@ class PyBadaTEM(PerfBase):
             state_action = (EnvelopeAction.ABORTED if policy == EnvelopePolicy.ABORT and
                             current_result.status == EnvelopeStatus.INFEASIBLE
                             else EnvelopeAction.ACCEPTED)
-            recorded_state = (EnvelopeResult(EnvelopeStatus.VALID)
-                              if policy == EnvelopePolicy.ENFORCE else current_result)
+            recorded_state = current_result
             self._set_result(idx, recorded_state, policy, state_action,
                              {'cas_m_s': float(bs.traf.cas[idx]),
                               'mach': float(bs.traf.M[idx]),
