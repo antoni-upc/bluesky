@@ -125,10 +125,7 @@ def compare():
         for label in ("off", "on"):
             output = temp / f"{label}.json"
             env = os.environ.copy()
-            env.update({
-                "PYTHONNOUSERSITE": "1", "PYTHONPATH": str(ROOT),
-                "MPLCONFIGDIR": str(temp / f"mpl-{label}"),
-            })
+            env["MPLCONFIGDIR"] = str(temp / f"mpl-{label}")
             subprocess.run([
                 sys.executable, str(Path(__file__).resolve()), "--child",
                 "--recorder", label, "--workdir", str(temp / f"work-{label}"),

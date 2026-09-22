@@ -3,6 +3,7 @@ import re
 
 
 DOCS = Path('docs')
+RECORDER_DOC = DOCS / 'plugin/recorder/recorder-v11-contract.md'
 ACTIVE_DOCS = tuple(DOCS / name for name in (
     'research-plugins.md', 'current-plugin-architecture.md',
     'recorder-v11-contract.md',
@@ -34,3 +35,7 @@ def test_documentation_links_to_local_markdown_exist():
             if not (path.parent / target).resolve().exists():
                 missing.append(f'{path}: {target}')
     assert not missing, '\n'.join(missing)
+
+
+def test_recorder_documentation_is_plugin_owned():
+    assert RECORDER_DOC.is_file()
