@@ -14,7 +14,7 @@ import bluesky as bs
 from bluesky import stack
 
 
-SCHEMA_VERSION = 'samples-v10'
+SCHEMA_VERSION = 'samples-v11'
 FIELDS = (
     'schema_version', 'run_id', 'sim_time_s', 'sample_interval_s', 'sim_utc', 'acid', 'actype',
     'lat_deg', 'lon_deg', 'geometric_alt_m', 'pressure_alt_m', 'tas_m_s',
@@ -29,6 +29,13 @@ FIELDS = (
     'requested_acceleration_m_s2', 'applied_acceleration_m_s2',
     'thrust_limited', 'thrust_limitation_reason', 'speed_capture',
     'requested_vertical_rate_m_s', 'applied_vertical_rate_m_s',
+    'evaluation_tas_m_s',
+    'evaluation_alt_m',
+    'evaluation_mass_kg',
+    'evaluation_temperature_k',
+    'evaluation_pressure_alt_m',
+    'evaluation_timestep_s',
+    'model_rocd_m_s',
     'energy_share_factor', 'energy_allocation_policy',
     'propulsion_bank_angle_deg', 'propulsion_load_factor',
     'envelope_policy', 'envelope_profile', 'envelope_checks',
@@ -51,6 +58,13 @@ UNITS = {
     'target_tas_m_s': 'm/s', 'requested_acceleration_m_s2': 'm/s^2',
     'applied_acceleration_m_s2': 'm/s^2',
     'requested_vertical_rate_m_s': 'm/s', 'applied_vertical_rate_m_s': 'm/s',
+    'evaluation_tas_m_s': 'm/s',
+    'evaluation_alt_m': 'm',
+    'evaluation_mass_kg': 'kg',
+    'evaluation_temperature_k': 'K',
+    'evaluation_pressure_alt_m': 'm',
+    'evaluation_timestep_s': 's',
+    'model_rocd_m_s': 'm/s',
     'energy_share_factor': '1',
     'propulsion_bank_angle_deg': 'deg', 'propulsion_load_factor': '1',
     'mass_max_kg': 'kg', 'minimum_cas_m_s': 'm/s', 'maximum_cas_m_s': 'm/s',
@@ -224,6 +238,13 @@ class StreamingRecorder:
                 'speed_capture': perf_value('speed_capture'),
                 'requested_vertical_rate_m_s': perf_value('requested_vertical_rate'),
                 'applied_vertical_rate_m_s': perf_value('applied_vertical_rate'),
+                'evaluation_tas_m_s': perf_value('evaluation_tas'),
+                'evaluation_alt_m': perf_value('evaluation_alt'),
+                'evaluation_mass_kg': perf_value('evaluation_mass'),
+                'evaluation_temperature_k': perf_value('evaluation_temperature'),
+                'evaluation_pressure_alt_m': perf_value('evaluation_pressure_alt'),
+                'evaluation_timestep_s': perf_value('evaluation_timestep'),
+                'model_rocd_m_s': perf_value('model_rocd'),
                 'energy_share_factor': perf_value('energy_share_factor'),
                 'energy_allocation_policy': perf_value('energy_allocation_policy'),
                 'propulsion_bank_angle_deg': perf_value('propulsion_bank_angle'),

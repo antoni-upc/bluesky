@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import bluesky as bs
-from bluesky.plugins.recorder import StreamingRecorder
+from bluesky.plugins.recorder import FIELDS, SCHEMA_VERSION, StreamingRecorder
 from bluesky.plugins.research_recorder import atmosstatus
 
 
@@ -33,7 +33,7 @@ class FixtureQualityEvent:
 def test_recorder_package_imports_without_meteo_or_pybada():
     script = (
         "import sys; import bluesky.plugins.recorder as recorder; "
-        "assert recorder.SCHEMA_VERSION == 'samples-v10'; "
+        "assert recorder.SCHEMA_VERSION == 'samples-v11'; "
         "assert not [name for name in sys.modules "
         "if name.startswith(('bluesky.plugins.meteo', 'bluesky.plugins.pybada'))]"
     )
@@ -62,6 +62,9 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
                 maximum_load_factor=2.5, maximum_bank_angle_deg=66.4218,
                 high_lift_id=0.0, landing_gear='LGUP',
                 minimum_limit_name='n3', maximum_limit_name='n1')))
+    traffic.perf.evaluation_tas = np.array([200.0])
+    traffic.perf.evaluation_mass = np.array([60000.5])
+    traffic.perf.evaluation_timestep = np.array([0.05])
     monkeypatch.setattr(bs, 'traf', traffic)
     monkeypatch.setattr(bs, 'sim', SimpleNamespace(
         simt=10.0, simdt=0.05,
@@ -78,7 +81,9 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert recorder.rows == 2
     csv_path, metadata_path = recorder.stop()
     with csv_path.open(newline='') as stream:
-        row = next(csv.DictReader(stream))
+        reader = csv.DictReader(stream)
+        assert tuple(reader.fieldnames) == FIELDS
+        row = next(reader)
     assert row['thrust_n'] == ''
     assert row['rated_thrust_n'] == '2.0'
     assert row['sample_interval_s'] == ''
@@ -90,12 +95,21 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert row['performance_dummy'] == 'True'
     assert row['performance_valid'] == 'True'
     assert row['performance_miss_count'] == '2'
-    assert row['schema_version'] == 'samples-v10'
+    assert row['schema_version'] == 'samples-v11'
+    assert float(row['evaluation_tas_m_s']) == 200.0
+    assert row['evaluation_alt_m'] == ''
+    assert float(row['evaluation_mass_kg']) == 60000.5
+    assert row['evaluation_temperature_k'] == ''
+    assert row['evaluation_pressure_alt_m'] == ''
+    assert float(row['evaluation_timestep_s']) == 0.05
+    assert row['model_rocd_m_s'] == ''
     for field in ('bank_angle_deg', 'load_factor', 'minimum_load_factor',
                   'maximum_load_factor', 'maximum_bank_angle_deg'):
         assert field in row
     metadata = json.loads(metadata_path.read_text())
-    assert metadata['schema_version'] == 'samples-v10'
+    assert SCHEMA_VERSION == 'samples-v11'
+    assert metadata['schema_version'] == SCHEMA_VERSION
+    assert tuple(metadata['columns']) == FIELDS
     assert metadata['rows'] == 2
     assert metadata['atmosphere_sources'] == ['ERA5', 'SYNTHETIC']
     assert metadata['dataset_times'] == [
