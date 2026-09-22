@@ -10,8 +10,8 @@ guidance.
 | Install and operate the plugins                           | `research-plugins.md`              |
 | Understand host hooks, lifecycle, ownership, and branches | `current-plugin-architecture.md`   |
 | Implement or consume recorder output                      | `recorder-v11-contract.md`         |
-| Review PyBADA envelopes and licensed validation scope     | `bada-envelope-implementation.md`  |
-| Reproduce scenarios and interpret comparisons             | `reproducibility-matrix.md`        |
+| Review PyBADA envelopes and validation gates              | `bada-envelope-implementation.md`  |
+| Execute scenarios and interpret evidence                  | `reproducibility-matrix.md`        |
 | Review unresolved model questions                         | `research-modeling-open-issues.md` |
 | Review explicitly deferred plugin work                    | `plugin-future-work.md`            |
 | Prepare ERA5/GFS cache data                               | `../scripts/README-weather.md`     |
@@ -28,5 +28,5 @@ evidence, and `research-run.local.json` remain outside version control.
 - `integration/plugin-stack`: reviewed composition, inert-hook gate, scenarios,
   orchestration, comparison, CI, and maintained technical documentation.
 
-The two former consolidation branches are migration inputs only; active
-instructions live on `integration/plugin-stack`.
+Maintained cross-plugin technical instructions live on
+`integration/plugin-stack`.

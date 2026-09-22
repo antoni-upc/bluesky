@@ -1,104 +1,89 @@
-# Research modeling open issues
+# Research modelling open issues
 
-This file records observations that need later design or validation work. It is
-not evidence that the underlying model or dependency is defective.
+This file records durable model and experiment-design limitations. It contains
+no campaign result and is not evidence that an upstream model or dependency is
+defective.
 
 ## Pressure altitude and geometric altitude
 
 pyBADA evaluates atmospheric and ceiling quantities in pressure-altitude
-coordinates, while BlueSky propagates geometric altitude. TEM now converts
-the model ROCD to a geometric vertical rate before propagation and records
-both the pressure and geometric evaluation state. The maximum-altitude
-envelope boundary still needs a dedicated non-ISA convention review: a model
-ceiling must not be compared or clipped across coordinate systems without an
-explicit conversion.
+coordinates, while BlueSky propagates geometric altitude. TEM converts model
+ROCD to a geometric vertical rate before propagation and records both pressure
+and geometric evaluation state.
+
+The maximum-altitude envelope boundary still needs an explicit non-ISA
+coordinate convention. A model ceiling must not be compared with or applied to
+geometric altitude until that conversion is defined and tested.
 
 ## Nominal speed-law intent
 
 PYBADATEM follows live selected CAS/Mach intent and uses `constTAS` only when
-conflict resolution owns the TAS channel. The same law is used for dynamics
-and vertical bounds. This is a nominal ESF choice, not transient optimiser
-replay. Source profiles containing separate climb/descent CAS and Mach phases
-must preserve that command type when future scenarios are generated.
+conflict resolution owns the TAS channel. Dynamics and vertical bounds receive
+the same choice. This is a nominal ESF selection, not replay of a transient
+optimiser.
 
-## Non-clean BADA configurations
+The current scenario-generation layer can lose source climb/descent CAS and
+Mach phase intent by emitting CAS at every waypoint. Preserving `CLB_CAS`,
+`CLB_MACH`, `DES_MACH`, and `DES_CAS` requires the planned `samples-v12`
+speed-law field and scenario-generation work; it must not be added under the
+v11 schema name.
 
-The current operational reproducibility matrix uses a clean (`CR`) aerodynamic
-configuration throughout the flight. `experiments/example_ops_full_clean.scn`
-therefore raises the initial and early-climb speeds to 200 kt so that the
-licensed BADA4 A320-232 can be created and propagated within the selected clean
-CAS envelope.
+## Non-clean BADA configuration management
 
-The original operational trajectory is preserved in
-`experiments/example_ops.scn`, including its lower terminal speeds. Supporting
-that trajectory faithfully requires a generic, phase-aware implementation of
-non-clean configurations (at least take-off, initial climb, approach, landing,
-and landing-gear state) rather than changing the source trajectory to fit the
-clean envelope.
+`BADACONFIG PYBADA` delegates aerodynamic-configuration selection to pyBADA
+using BlueSky phase intent and the current operating state. `BADACONFIG CRUISE`
+fixes configuration `CR`. The plugin does not yet own a generic phase-aware
+configuration state machine covering take-off, initial climb, approach,
+landing, and landing-gear transitions.
 
-Known observation: with envelope policy `ENFORCE` and the clean configuration,
-creation at 130.4 kt was rejected as below the BADA4 A320-232 minimum CAS. A
-180 kt trial was also rejected at the default creation mass; 200 kt was
-accepted. This behavior should be revisited with phase-aware configurations.
+A full-flight scenario forced to `CR` must therefore keep its state within the
+clean envelope; doing so is a test-fixture constraint, not a general model of
+terminal flight. The lower-speed source fixture in
+`experiments/example_ops.scn` must not be adapted by changing its intent merely
+to satisfy clean limits. Supporting it requires generic non-clean configuration
+management and new validation.
 
-## Minimum-speed and Mach checks
+## Phase-aware speed and Mach checks
 
-The stock `LONGITUDINAL` envelope applies both minimum CAS and minimum Mach to
-the complete flight. During low-altitude creation, the BADA cruise minimum Mach
-made an otherwise plausible terminal CAS infeasible. The clean operational
-profiles currently use an explicit set of mass, CAS, altitude, ROC, and ROD
-checks and omit Mach checks.
+The stock `LONGITUDINAL` profile applies minimum and maximum CAS and Mach checks
+throughout the flight. The implementation does not yet establish whether every
+model-returned Mach bound is appropriate for every phase and aerodynamic
+configuration.
 
-Future work should determine whether Mach bounds are phase/configuration
-dependent and implement that selection generically. Do not interpret the
-current workaround as validation that the pyBADA limit itself is wrong.
+Experiments may select a deliberate `CUSTOM` check set, but that is a declared
+scope restriction rather than validation that omitted limits are irrelevant.
+Future work should define and validate phase/configuration-dependent selection
+without encoding one aircraft's behaviour as a generic rule.
 
-## FL390 behavior
+## High-altitude energy feasibility
 
-With the original FL390 cruise segment, strict TEM propagation progressively
-lost CAS during climb. One run reached the three-hour safety hold at about
-9,537 m while still en route. With a longer guard, it reached about 11,806 m at
-55.18 m/s TAS and pyBADA returned an unbounded climb rate of 102.66 m/s; strict
-mode correctly held the simulation.
+A commanded cruise altitude is not necessarily reachable for an arbitrary
+aircraft, mass, speed law, weather state, and timestep. Strict TEM correctly
+rejects non-finite or unbounded model output, but that guard does not establish
+whether a failed climb was physically infeasible, poorly guided, or affected by
+configuration and speed-law selection.
 
-The clean test scenario currently uses FL350 and reaches its destination. Later
-work should determine whether FL390 is infeasible for this mass and schedule,
-whether the speed/altitude guidance needs different energy management, or
-whether phase/configuration-specific envelope logic changes the result. No
-conclusion has been established yet.
+High-altitude campaign scenarios therefore require an explicit feasibility
+question, recorded mass and speed-law intent, envelope checks, timestep study,
+and a completion criterion. No general maximum operational altitude should be
+inferred from a single route run.
 
-## Arrival condition
+## Arrival and safety-HOLD semantics
 
-All experiment scenarios use a one-nautical-mile destination condition:
+`ATDIST ..., HOLD` proves only horizontal proximity. `ATALT ..., HOLD` proves
+only altitude proximity, and two independent conditions are not equivalent to
+one compound condition because either can hold the simulation first.
 
-```text
-00:00:00.00>ATDIST EXAMPLE, <destination latitude>, <destination longitude>, 1.0, HOLD
-```
+A route experiment that claims destination arrival needs a compound horizontal
+and vertical completion rule. Until one exists, the manifest and validator must
+state exactly which component was tested. A separate safety HOLD must occur
+after the expected run and within the prepared weather horizon; reaching that
+safety guard is failure, not successful completion.
 
-This is a consistent horizontal completion guard and avoids an altitude-only
-condition firing after an abnormal descent far from the destination. It does
-not prove vertical arrival: an earlier PyBADA diagnostic run entered the
-one-nautical-mile circle while still thousands of metres above the destination.
-That limitation must remain visible in the evidence and should later be
-replaced by a true compound arrival condition requiring both horizontal and
-vertical proximity. Separate `ATDIST` and `ATALT` commands are not equivalent
-to a compound condition because either command can place the simulation in
-HOLD independently.
+## Timestep convergence
 
-The independent safety hold is 03:30:00. It prevents an unbounded run while
-leaving margin beyond the roughly three-hour expected flight and remaining
-inside the cached ERA5 time horizon.
-
-## Greenwich-crossing meteorology cubes
-
-This issue is resolved and covered by a regression test. Regional longitude
-axes crossing Greenwich were previously wrapped to `[0, 360)` and sorted
-linearly. A grid such as `[-5, 0, 5, 10]` consequently became
-`[0, 5, 10, 355]`, which falsely represented the small Greenwich crossing as a
-large missing interval.
-
-`bluesky/plugins/meteo/cube.py` now places the axis break at the largest
-unrepresented circular gap, yielding a continuous axis such as
-`[355, 360, 365, 370]`. Query longitudes below the new axis origin are shifted
-by 360 degrees before interpolation. The regression test verifies valid samples
-on both sides of Greenwich and rejection of a genuinely out-of-domain point.
+The implementation provides multi-timestep comparison scenarios and a
+convergence validator. Their existence does not make a chosen timestep
+converged for every route or operating regime. Each campaign must establish an
+acceptable observable and tolerance before using convergence as a scientific
+claim.

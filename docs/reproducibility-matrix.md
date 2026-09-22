@@ -1,110 +1,139 @@
-# Research plugin reproducibility matrix
+# Research plugin validation protocol
 
 ## Purpose
 
-This is the authoritative status matrix for standalone and combined research
-plugins. A configuration is marked validated only when its complete runtime
-combination has objective evidence; component tests do not silently close a
-missing end-to-end cell.
+This document defines the validation matrix, evidence requirements, and commands
+for the research-plugin stack. It does not record campaign results. A gate is
+current evidence only after it has been executed against the exact clean commit
+named by its run manifest and all required artefacts have been retained outside
+the integration branch.
 
-The integration branch owns common scenarios, configuration profiles,
-orchestration, external state sampling, cross-configuration comparison, and
-analysis. Production implementation remains on the corresponding plugin
-branch:
+The integration branch owns common scenarios, profiles, orchestration,
+external-state sampling, cross-configuration comparison, and validators.
+Production implementation remains owned by the corresponding plugin branch:
 
-- `plugin/pybada-tem`;
-- `plugin/NWP-meteo`;
 - `plugin/recorder`;
+- `plugin/NWP-meteo`;
+- `plugin/pybada-tem`;
 - combined validation on `integration/plugin-stack`.
+
+## Status vocabulary
+
+Documentation uses these terms deliberately:
+
+| Term                 | Meaning                                                                                                                                                       |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Implemented          | Production code and a callable validation interface exist.                                                                                                    |
+| Dependency-free gate | The gate runs without licensed BADA data or external weather files.                                                                                           |
+| External gate        | The gate requires resources declared by a local run manifest. Normal tests may skip it.                                                                       |
+| Revalidated          | A particular clean commit and resource set passed its complete gate, with retained artifacts. This status belongs in that evidence set, not in this document. |
+
+Unit or component coverage does not establish an end-to-end matrix cell, and a
+historical result does not revalidate a newer commit.
 
 ## Configuration matrix
 
-| Profile | Performance | Atmosphere | Recorder | Current status | Evidence or remaining gate |
-| --- | --- | --- | --- | --- | --- |
-| `baseline-recorder-free` | OpenAP | ISA | Off | Validated | Byte-identical final state against upstream `22fdf9e3`; SHA-256 `ff0df5d67a954ea88ab8c00e7d052ce81021ee78b2110061d881956fe38930f9` |
-| `baseline-recorder` | OpenAP | ISA | On | Validated | 241 external samples are byte-equivalent to recorder-free execution; recorder wrote 240 rows; external-sample SHA-256 `83bb38f343c09658152dac96bf2d5504b67d513ddfbe1381bd2920e31cae5420` |
-| `meteo-recorder` | OpenAP | ERA5 | On | Validated | Strict cached 2025-08-15 12Z run: 241 external samples, 240 recorder rows, exact agreement at common timestamps; external-sample SHA-256 `129bd850095dc0572cede40c50cae8c58366d874efc87c2460bee0cebac7e3a5` |
-| `meteo-recorder` | OpenAP | GFS | On | Validated | Strict cached 2025-08-15 12Z run: 241 external samples, 240 recorder rows, exact agreement at common timestamps; external-sample SHA-256 `5d0785c398db982be04f01ff4bc035fb11f058a42fb461aa76006a61477705c4` |
-| `pybada-recorder` | BADA 3.15 `A320__` | ISA | On | Validated for recorded scope | Licensed acceleration, saturation, energy, turn, envelope, route, and timestep gates pass |
-| `pybada-recorder` | BADA 4.2 `A320-232` | ISA | On | Validated for recorded scope | Licensed acceleration, saturation, energy, turn, envelope, route, and timestep gates pass |
-| `combined-recorder` | BADA 3.15 `A320__` | ERA5 | On | Validated | 38 samples; REPORT/OFF exact equality; maximum power residual `0.143169 W/kg` |
-| `combined-recorder` | BADA 4.2 `A320-232` | ERA5 | On | Validated | 38 samples; REPORT/OFF exact equality; maximum power residual `0.102854 W/kg` |
-| `combined-recorder` | BADA 3.15 `A320__` | GFS | On | Validated | 38 samples; REPORT/OFF exact equality; maximum power residual `0.142647 W/kg` |
-| `combined-recorder` | BADA 4.2 `A320-232` | GFS | On | Validated | 38 samples; REPORT/OFF exact equality; maximum power residual `0.102525 W/kg` |
+| Profile or combination   | Performance | Atmosphere  | Recorder | Gate type                                       | Required acceptance                                                                                                      |
+|--------------------------|-------------|-------------|----------|-------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `baseline-recorder-free` | OpenAP      | ISA         | Off      | Dependency-free plus pinned-upstream comparison | Scenario completes normally; plugin-disabled state is byte-identical to the pinned upstream result.                      |
+| `baseline-recorder`      | OpenAP      | ISA         | On       | Dependency-free                                 | External samples are exactly equal to the recorder-free run; recorder artifacts satisfy `samples-v11`.                   |
+| `meteo-recorder`         | OpenAP      | ERA5        | On       | External weather                                | Applied source, slots, bounds, strict policy, provenance, and recorder/external sample alignment all match the manifest. |
+| `meteo-recorder`         | OpenAP      | GFS         | On       | External weather                                | Same requirements as ERA5, using the selected GFS analysis cycles.                                                       |
+| `pybada-recorder`        | BADA 3      | ISA         | On       | Licensed BADA                                   | Model resolution, force/fuel/mass behavior, envelope behavior, completion, and the v11 numerical audit all pass.         |
+| `pybada-recorder`        | BADA 4      | ISA         | On       | Licensed BADA                                   | Same requirements as BADA 3 for the declared BADA 4 dataset and aircraft.                                                |
+| `combined-recorder`      | BADA 3      | ERA5 or GFS | On       | Licensed BADA plus external weather             | Both component contracts, their interaction validator, normal completion, and the numerical audit pass.                  |
+| `combined-recorder`      | BADA 4      | ERA5 or GFS | On       | Licensed BADA plus external weather             | Same requirements as BADA 3 for the declared BADA 4 dataset and aircraft.                                                |
 
-The four combined weather cells use strict, automatic, non-interpolated
-meteorology and `LONGITUDINAL` envelope checks. They establish only the tested
-date, domain, aircraft, datasets, timestep, and short trajectory recorded by
-their manifests and metadata.
+`experiments/profiles.json` supplies the five profile names used by the matrix
+runner. The profile configuration is an experiment input, not evidence that a
+run completed. Family-, aircraft-, weather-, and date-specific variants must be
+declared in the generated manifest.
 
-## Five-profile comparison gate
+## Five-profile comparison
 
-The plugin-neutral experiment is executed through these profiles:
+The plugin-neutral experiment renders the same source scenario through:
 
-1. OpenAP + ISA without recorder;
-2. OpenAP + ISA with recorder;
-3. OpenAP + ERA5 or GFS with recorder;
-4. PyBADA + ISA with recorder;
-5. PyBADA + ERA5 or GFS with recorder.
+1. OpenAP + ISA without the recorder;
+2. OpenAP + ISA with the recorder;
+3. OpenAP + ERA5 or GFS with the recorder;
+4. PyBADA + ISA with the recorder;
+5. PyBADA + ERA5 or GFS with the recorder.
 
-The direct matrix completed on 2026-09-03: all five profiles reached
-`destination_reached`, recorder non-interference was exact, invalid atmosphere
-samples were zero, and configured below-domain ISA was exercised by both ERA5
-profiles. The offline suite at that checkpoint reported 230 passed and 5
-deselected.
+Recorder non-interference is an exact comparison: externally sampled state is
+aligned by simulation time and aircraft and must have zero difference.
+Differences caused by selecting another atmosphere or performance model are
+reported but are not scientific pass/fail criteria without an independently
+defined physical reference.
 
-The final clean operational matrix completed on 2026-09-04 against
-`experiments/example_ops_full_clean.scn`, source SHA-256
-`621ef82cf2efbec39457d873aa41fb458d54456ab1a3d9798d611082370a214f`.
-All five profiles were valid and reached `destination_reached`:
+The runner writes `matrix-summary.json` as the structured comparison and
+`comparisons.csv` as its deterministic scalar projection. It also records
+termination, simulated duration, process timing, and simulation-speed metrics.
+Timing is operational telemetry only and must be regenerated in the target
+environment before drawing performance conclusions.
 
-| Profile | Simulated duration | Atmosphere samples | Fuel/mass change | Simulation wall time |
-| --- | ---: | --- | ---: | ---: |
-| `baseline-recorder-free` | 8,037.0 s | ISA 16,075 | 0 kg | 8.615 s |
-| `baseline-recorder` | 8,037.0 s | ISA 16,075 | 0 kg | 11.815 s |
-| `meteo-recorder` | 7,570.0 s | ERA5 15,141 | 0 kg | 36.955 s |
-| `pybada-recorder` | 8,095.5 s | ISA 16,192 | 4,412.152 kg | 158.514 s |
-| `combined-recorder` | 7,594.5 s | ERA5 15,190 | 4,200.160 kg | 187.281 s |
+## Evidence requirements
 
-Recorder-free and recorded baseline external samples were exactly identical.
-All profiles had zero invalid atmosphere samples and zero unexpected fallback
-samples. The operational `ATDIST` condition stops before the ERA5 lower
-vertical boundary, so this run contains no ERA5-to-ISA transition; it does not
-supersede the direct-matrix transition evidence.
+A result-generating run must preserve:
 
-Recorder non-interference uses exact time-and-aircraft alignment and has zero
-tolerance. Meteorology, performance, combined, interaction, and runtime
-differences remain informational: they receive no pass/fail threshold without
-an independently justified physical reference. `matrix-summary.json` is the
-authoritative structured comparison; `comparisons.csv` is its deterministic
-scalar flattening.
+- the full integration commit and pinned upstream base;
+- a clean-working-tree flag;
+- the source scenario and its rendered profile scenario;
+- simulation UTC, timestep, duration guard, and random seed;
+- exact plugin configuration and recorder interval;
+- licensed-dataset and weather-cache identities by reference;
+- provider bounds, time policy, interpolation policy, and fallback policy;
+- process exit status and explicit termination reason;
+- external samples and all authoritative recorder artefacts;
+- validator names, outputs, and generated artefact hashes.
 
-## Validated scientific scope
+`research-run.example.json` is a schema-valid template whose placeholder commit
+and paths must be replaced. `research-run.local.json`, licensed datasets,
+credentials, weather caches, and generated evidence remain outside version
+control.
 
-- Python 3.12.13 in the recorded environment;
-- pyBADA 0.1.14 with licensed BADA 3.15 `A320__` and BADA 4.2 `A320-232`;
-- KINEMATIC observation and TEM dynamics under ISA;
-- acceleration/deceleration, thrust saturation, climb/descent joint energy,
-  conflicting commands, coordinated turns, mass/fuel integration, route
-  capture, flight envelopes, and timestep convergence;
-- cached ERA5 and GFS atmospheric state with strict failure semantics, exact
-  provider timestamps, no extrapolation, and explicit provenance;
-- exact recorder schema `samples-v11`; active manifests and validators reject
-  every earlier sample schema.
+Validate a local manifest before running an external gate:
 
-This is not evidence for other BADA releases or aircraft, arbitrary weather
-products/domains/dates, all simulation timesteps, or numerical equivalence
-between different performance or atmospheric models.
+```shell
+python tests/research/validate_run_manifest.py research-run.local.json
+```
 
-## Current closing commands
+## Common acceptance rules
 
-The scenario-driven matrix runner performs a resource preflight before it
-starts any long-running profile. Each profile runs in a fresh process and emits
-its rendered scenario, manifest, external samples, recorder artifacts when
-enabled, termination reason, wall/CPU timings, simulated duration, and
-simulation-speed ratio. The matrix summary also records summed worker wall/CPU
-time and orchestration overhead. Runtime measurements are operational evidence and
-should be repeated before drawing performance conclusions.
+Every completed evidence set must satisfy all applicable rules:
+
+1. Resource preflight succeeds before a long-running profile starts.
+2. The manifest names the exact clean commit under test.
+3. The process exits normally and the scenario-specific completion condition is
+   reached before its safety HOLD, unless the gate explicitly tests a rejection
+   or ABORT transition.
+4. Every recorder CSV and metadata file declares exact `samples-v11`, the
+   metadata column list matches the CSV header, and metadata row/event totals
+   match their files.
+5. Intended atmosphere sources and dataset times are present; unexpected
+   invalid samples or fallback reasons reject a strict result.
+6. Performance resolution is non-dummy, required values are finite, and no
+   unexpected performance miss occurs.
+7. Every TEM recording passes `validate_numerical_run.py` using the recorded
+   pre-propagation evaluation state.
+8. Quality status and termination agree with the scenario objective. A held or
+   aborted artefact is partial unless that precise rejection or ABORT behaviour
+   is the gate being tested.
+
+The matrix establishes behaviour only for the commit, scenario, resources,
+aircraft, timestep, and domain recorded in the evidence. It is not evidence for
+other BADA releases or aircraft, arbitrary weather products or dates, all
+timesteps, or physical equivalence between different models.
+
+## Commands
+
+Run the dependency-free suite first:
+
+```shell
+PYTHONNOUSERSITE=1 PYTHONPATH=. \
+  python -m pytest tests/research -m "not licensed_bada and not external_weather"
+```
+
+Preflight and run the five-profile matrix in fresh child processes:
 
 ```shell
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
@@ -121,49 +150,40 @@ PYTHONNOUSERSITE=1 PYTHONPATH=. \
   --output output/matrix/example_direct
 ```
 
-The validated clean operational example uses the same commands with
-`experiments/example_ops_full_clean.scn` and a separate output directory.
-`experiments/example_ops.scn` preserves the original operational trajectory for
-future non-clean configuration work.
+`experiments/example_ops_full_clean.scn` is an alternative clean-configuration
+fixture. `experiments/example_ops.scn` preserves the lower-speed operational
+source fixture for future phase-aware non-clean work. Neither scenario carries
+a validation status until its outputs pass the rules above.
+
+Run the focused gates as applicable:
 
 ```shell
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python -m pytest tests/research -m "not licensed_bada and not external_weather"
+  python tests/research/run_pybada_revalidation.py
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_pybada_revalidation.py --validate-only --skip-unit
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_weather_tem_envelope.py --validate-only --skip-unit
+  python tests/research/run_weather_tem_envelope.py
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
   python tests/research/compare_disabled_baseline.py
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
   python tests/research/compare_recorder_noninterference.py
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_integration_profile.py --atmosphere ERA5 \
-  --workdir /tmp/bluesky-openap-era5 --output /tmp/bluesky-openap-era5.json
+  python -m pytest tests/research -m licensed_bada \
+  --run-manifest research-run.local.json
 PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_integration_profile.py --atmosphere GFS \
-  --workdir /tmp/bluesky-openap-gfs --output /tmp/bluesky-openap-gfs.json
-python tests/research/validate_run_manifest.py research-run.example.json
+  python -m pytest tests/research -m external_weather \
+  --run-manifest research-run.local.json
 ```
 
-The 2026-09-04 offline gate reported 240 passed, 5 deselected, and four known
-NumPy 2.5 fixture deprecation warnings.
+Use `--validate-only --skip-unit` with the two revalidation runners only when
+the existing outputs were generated from the same declared commit and resource
+set. Otherwise, rerun their scenarios. The disabled-baseline comparison requires
+the pinned upstream commit to be present locally; the external gates require
+their licensed or weather resources. The focused revalidation runners do not
+create an integration run manifest; retain their commit, resource identities,
+validator output, and artefact hashes explicitly before assigning evidence
+status.
 
-### ERA5 identity for the clean operational matrix
-
-- simulation date and start: 2025-05-01 12:00 UTC;
-- region label: `western-europe`;
-- bounds: 40°N, 5°W to 53°N, 10°E;
-- pressure levels: 100, 125, 150, 175, 200, 225, 250, 300, 350,
-  400, 450, 500, 550, 600, 650, 700, 750, 775, 800, 825, 850,
-  875, 900, 925, 950, 975, and 1000 hPa;
-- sampled slots: 12:00, 13:00, and 14:00 UTC;
-- time interpolation: disabled;
-- below-domain policy: configured ISA;
-- above, lateral, and time-domain policies: reject;
-- sampled cache SHA-256 values: `c6defbe2c37473d0c6bf295c6fb6bae10cbe8c2cf8cdcc034ee379c30e7f3e77`,
-  `0a4c27a1f4bbf75659d5c8ecc60b447627866a2e760df426e8be6da231dced47`,
-  and `9f434b134785e7ef98c7251f66cef2e653196d5e6c00559e1bcaccb95c030b13`.
-
-Licensed datasets, weather caches, credentials, generated CSV/JSONL/metadata,
-and local run manifests remain outside version control.
+Individual ERA5/GFS cache, transition, interpolation, policy, envelope, route,
+energy, and convergence validators remain available under `tests/research/` for
+diagnosis and focused evidence. Their successful execution proves only their
+declared scope.

@@ -4,14 +4,15 @@
 
 This is the current-code map for PYBADATEM, ERA5, GFS, and
 RESEARCHRECORDER. It distinguishes original BlueSky responsibilities, the
-minimal coexisting hooks added to BlueSky, and plugin-owned behaviour. Current
-validation status and claim boundaries are maintained in
+minimal coexisting hooks added to BlueSky, and plugin-owned behaviour. The
+validation protocol and claim boundaries are maintained in
 [`reproducibility-matrix.md`](reproducibility-matrix.md).
 
-The dependency-free, licensed BADA, weather/TEM, exact-v11-schema, and
-plugin-disabled gates are closed for the scope recorded in the matrix. Tests
-requiring licensed BADA data or external weather resources remain separately
-marked and require a validated local run manifest.
+Dependency-free checks, exact-v11 validation, licensed BADA gates,
+weather/TEM gates, and a plugin-disabled comparison are implemented. Tests that
+require licensed BADA data or external weather resources remain separately
+marked and require a validated local run manifest. A gate's result is current
+only for the exact commit and resources recorded with its retained evidence.
 
 ## Component map
 
@@ -43,9 +44,9 @@ flowchart LR
     PB -. quality events .-> REC
 ```
 
-The hooks are inert when the plugins are not selected. The closed disabled
-plugin baseline produced byte-identical final-state JSON against the tested
-upstream revision.
+The hooks are designed to remain inert when the plugins are not selected. The
+repository provides an exact final-state comparison against a pinned upstream
+revision; that gate must be rerun for the commit being assessed.
 
 ## Per-tick logic today
 
@@ -123,11 +124,11 @@ flowchart LR
 | Area                   | Original BlueSky owns                     | Plugin owns                                                  | Current state                                                                                |
 |------------------------|-------------------------------------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------|
 | Navigation             | SPD, LNAV/VNAV, waypoint and turn targets | Nothing                                                      | Preserved                                                                                    |
-| Horizontal propagation | Native target selection and capture       | Adapted thrust/fuel and feasibility                          | Saturation and joint horizontal/vertical allocation implemented and scoped by licensed gates |
+| Horizontal propagation | Native target selection and capture       | Adapted thrust/fuel and feasibility                          | Saturation and joint horizontal/vertical allocation implemented; licensed gate available     |
 | Vertical propagation   | Native VS/altitude capture                | PYBADATEM owns VS in TEM mode                                | Implemented and envelope-checked                                                             |
-| Performance            | Replaceable performance selection         | BADA 3/4 resolution, force/fuel/mass, strict failures        | Implemented; steady cruise defensible                                                        |
-| Envelopes              | No research policy                        | Per-aircraft OFF/REPORT/ENFORCE/ABORT                        | BADA 3.15 and 4.2 scoped validation closed                                                   |
-| Atmosphere             | ISA initialization and airdata            | ERA5/GFS temperature, pressure, density, wind and provenance | Implemented and validated                                                                    |
+| Performance            | Replaceable performance selection         | BADA 3/4 resolution, force/fuel/mass, strict failures        | Implemented; dependency-free and licensed gates available                                    |
+| Envelopes              | No research policy                        | Per-aircraft OFF/REPORT/ENFORCE/ABORT                        | Implemented; BADA 3/4 scenario-specific gates available                                      |
+| Atmosphere             | ISA initialization and airdata            | ERA5/GFS temperature, pressure, density, wind and provenance | Implemented; synthetic and external-resource gates available                                 |
 | Weather time           | Simulation UTC                            | Exact provider slots and opt-in interpolation                | ERA5 hourly; GFS six-hourly                                                                  |
 | Invalid weather        | ISA remains available                     | Strict abort or explicit interactive ISA fallback            | Implemented; no extrapolation                                                                |
 | Evidence               | Simulation state                          | Versioned streaming CSV, metadata, quality events            | `samples-v11`, bounded memory                                                                |
@@ -164,21 +165,21 @@ event is different: the recorder synchronously samples the triggering state and
 closes its CSV, event stream, and metadata before the simulation is held. Both
 remain partial runs unless the validator explicitly expects that failure mode.
 
-## Current claim boundary
+## Validation boundary
 
-Safe claims include exact tested weather-slot behaviour, bounded spatial and
-vertical interpolation, explicit fallback provenance, BADA resolution and
-envelope behaviour, route/speed target capture, and constant-speed level-flight
-`thrust = drag`.
+The available gates can establish exact weather-slot behaviour, bounded spatial
+and vertical interpolation, fallback provenance, BADA resolution and envelope
+behaviour, route/speed target capture, constant-speed level-flight force balance,
+and joint horizontal/vertical energy allocation. Those become claims only for
+the scenario, commit, resources, aircraft, and timestep retained with a passing
+validator result.
 
-Level-flight adapted-thrust force balance and joint horizontal/vertical energy
-allocation are covered by packaged and licensed BADA 3/4 gates in their
-recorded scope. The clean operational matrix adds one BADA 4.2 A320-232 route
-under enforced mass, CAS, altitude, ROC, and ROD checks. It is not evidence for
-non-clean terminal configurations, phase-aware Mach limits, or the preserved
-FL390 operational trajectory; those boundaries are recorded in
-`research-modeling-open-issues.md`. Route geometry remains BlueSky guidance
-evidence.
+The implementation and its gates do not by themselves establish observed-flight
+accuracy, arbitrary-aircraft coverage, generic non-clean terminal operation,
+phase-aware Mach-limit selection, high-altitude feasibility, or equivalence
+between different atmosphere and performance models. Route geometry remains a
+BlueSky guidance result rather than independent trajectory truth. Durable open
+questions are listed in `research-modeling-open-issues.md`.
 
 ## Branch architecture
 
@@ -191,7 +192,8 @@ evidence.
 
 The matrix runner and validators are analysis code, not a fourth production
 plugin. Shared host hooks remain inert when their plugin is not selected. The
-composition is checked against the pinned plugin-disabled OpenAP/ISA baseline.
+provided comparison tool checks the composition against the pinned
+plugin-disabled OpenAP/ISA baseline.
 
 ## Related documents
 

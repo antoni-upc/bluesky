@@ -1,9 +1,9 @@
 # PyBADA, NWP meteorology, and research recorder plugins
 
-The authoritative tested configuration matrix is
-[`reproducibility-matrix.md`](reproducibility-matrix.md). Dated checkpoint and
-`next-session` documents preserve development history; they are not current
-operator instructions.
+The authoritative validation matrix, evidence rules, and execution commands are
+in [`reproducibility-matrix.md`](reproducibility-matrix.md). Current validation
+status belongs to retained evidence for an exact commit, not to this operator
+guide.
 
 For diagrams of the current components, per-tick call order, lifecycle, and
 ownership boundary with original BlueSky, start with
@@ -15,7 +15,8 @@ defined in [`recorder-v11-contract.md`](recorder-v11-contract.md). The contract
 includes the pre-propagation TEM evaluation state and raw model ROCD. Every
 other sample-schema value is rejected by active manifests and validators.
 
-The validated local environment is the `bluesky_research` Conda environment.
+The project environment used for research dependencies is the
+`bluesky_research` Conda environment.
 Base BlueSky remains usable without any research dependencies.
 
 See [`current-plugin-architecture.md`](current-plugin-architecture.md) for
@@ -176,11 +177,11 @@ credentials. `--cache PATH` overrides the default; configure the matching
 
 ## Validation
 
-The current dependency-free suite, complete licensed PyBADA revalidation,
-ERA5/GFS by BADA 3/4 TEM envelope gate, and plugin-disabled upstream comparison
-are listed in [`reproducibility-matrix.md`](reproducibility-matrix.md). ERA5
-and GFS transition, opt-in interpolation, strict/interactive policy, cache, and
-matched TEM evidence gates pass for the documented 2025-08-15 datasets.
+The dependency-free suite, licensed PyBADA revalidation, ERA5/GFS by BADA 3/4
+TEM envelope gate, and plugin-disabled upstream comparison are defined in
+[`reproducibility-matrix.md`](reproducibility-matrix.md). Licensed and external
+weather gates require local resources and may be skipped by a normal test run.
+Their presence does not assert a result for the current commit.
 
 ```shell
 python -m pytest tests/research -m 'not licensed_bada and not external_weather'
@@ -195,7 +196,7 @@ ignored by Git. Validate it before use with
 Replace the example's all-zero commit and external-resource paths with the
 actual full revision and local resources before running a gate.
 Generated CSV is authoritative; metadata uses the matching versioned JSON
-schema. Optional Excel, KML, and plots must be derived from the closed CSV and
+schema. Optional Excel, KML, and plots must be derived from the finalised CSV and
 do not alter it. See the [v11 recorder contract](recorder-v11-contract.md) for
 the exact artefact interface.
 
@@ -218,17 +219,13 @@ the triggering state and finalises recorder artefacts synchronously, but the
 result is still an aborted partial run. Manifests and campaign validators must
 reject held or partial evidence unless that exact abort is the test objective.
 
-Licensed BADA 4.2 `A320-232` evidence covers CR, IC, AP, TO, and LD across
-observation, REPORT, ENFORCE, and ABORT. Licensed BADA 3.15 `A320__`
-full-envelope, lifecycle, and route validation is also closed. Both scopes are
-summarised in [`bada-envelope-implementation.md`](bada-envelope-implementation.md).
-Runtime-derived licensed values and generated evidence remain local and ignored.
-
-Licensed acceleration/deceleration, thrust saturation, joint climb/descent
-energy allocation, conflicting-command recovery, turn-load drag, turn energy,
-and timestep-convergence gates pass for both documented BADA families. Exact
-scenario counts, residuals, and claim limits are recorded in the matrix and
-dated checkpoints.
+The supplied licensed scenarios cover configuration observation and policy,
+horizontal acceleration and saturation, joint climb/descent allocation,
+conflicting commands, turn load and energy, envelopes, lifecycle, routes, and
+timestep comparison. Their expected behaviour and validator catalogue are
+described in
+[`bada-envelope-implementation.md`](bada-envelope-implementation.md). Generated
+values and pass/fail status remain with the local manifest and evidence set.
 
 At the default one-second interval, a `samples-v11` CSV writes 3,600 rows per
 aircraft-hour. Measure the average row length in the produced CSV and multiply
