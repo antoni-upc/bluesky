@@ -21,8 +21,6 @@ MATRIX = (
 
 def environment(label):
     env = os.environ.copy()
-    env['PYTHONNOUSERSITE'] = '1'
-    env['PYTHONPATH'] = str(ROOT)
     env['MPLCONFIGDIR'] = f'/tmp/bluesky-mpl-weather-envelope-{os.getpid()}-{label}'
     return env
 

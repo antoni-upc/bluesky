@@ -670,8 +670,7 @@ def orchestrate(args):
         evidence_path = run_dir / "evidence.json"
         workdir = run_dir / "work"
         env = os.environ.copy()
-        env.update({"PYTHONNOUSERSITE": "1", "PYTHONPATH": str(ROOT),
-                    "MPLCONFIGDIR": str(run_dir / "mpl")})
+        env["MPLCONFIGDIR"] = str(run_dir / "mpl")
         command = [sys.executable, str(Path(__file__).resolve()), "--worker",
                    "--scenario", str(run_dir / "scenario.scn"), "--config", str(args.config),
                    "--profile", name, "--output", str(run_dir), "--workdir", str(workdir),

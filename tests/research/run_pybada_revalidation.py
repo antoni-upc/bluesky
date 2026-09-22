@@ -77,8 +77,6 @@ def matrix():
 
 def environment(scenario='common'):
     env = os.environ.copy()
-    env['PYTHONNOUSERSITE'] = '1'
-    env['PYTHONPATH'] = str(ROOT)
     env['MPLCONFIGDIR'] = f'/tmp/bluesky-mpl-revalidation-{os.getpid()}-{scenario}'
     return env
 
