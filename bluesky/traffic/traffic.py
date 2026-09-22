@@ -444,10 +444,16 @@ class Traffic(Entity):
         self.aporasas.tas, self.aporasas.vs, self.aporasas.alt = \
             self.perf.limits(self.aporasas.tas, self.aporasas.vs,
                              self.aporasas.alt, self.ax)
+        # A performance policy may reject this tick. Do not propagate the
+        # rejected request after the provider has placed the simulation on HOLD.
+        if bs.sim.state == bs.HOLD:
+            return
 
         #---------- Kinematics --------------------------------
         self.speed_request = self.native_speed_request()
         handled = self.perf.update_dynamics(self, bs.sim.simdt)
+        if bs.sim.state == bs.HOLD:
+            return
         if isinstance(handled, tuple) and len(handled) == 2:
             speed_handled = np.asarray(handled[0], dtype=bool)
             vertical_handled = np.asarray(handled[1], dtype=bool)
@@ -542,6 +548,7 @@ class Traffic(Entity):
                             else vertical_handled)
         native_speed = ~speed_handled
         native_vertical = ~vertical_handled
+        self._vertical_dynamics_handled = np.asarray(vertical_handled, dtype=bool).copy()
         request = (Traffic.native_speed_request(self)
                    if speed_request is None else speed_request)
         request.validate(self.ntraf)
@@ -632,7 +639,9 @@ class Traffic(Entity):
 
     def update_pos(self):
         # Update position
-        self.alt = np.where(self.swaltsel, np.round(self.alt + self.vs * bs.sim.simdt, 6), self.aporasas.alt)
+        model_vertical = getattr(self, '_vertical_dynamics_handled', np.zeros_like(self.swaltsel, dtype=bool))
+        self.alt = np.where(self.swaltsel | model_vertical,
+                            np.round(self.alt + self.vs * bs.sim.simdt, 6), self.aporasas.alt)
         self.lat = self.lat + np.degrees(bs.sim.simdt * self.gsnorth / Rearth)
         self.coslat = np.cos(np.deg2rad(self.lat))
         self.lon = self.lon + np.degrees(bs.sim.simdt * self.gseast / self.coslat / Rearth)

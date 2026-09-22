@@ -21,7 +21,7 @@ class FakeModel:
         return dict(thrust=12000.0, rated_thrust=14000.0,
                     drag=10000.0, fuel_flow=0.5,
                     esf=0.5, rocd=5.0, acceleration=requested,
-                    idle_thrust=4000.0, maximum_thrust=11000.0,
+                    idle_thrust=0.0, maximum_thrust=1000000.0,
                     requested_acceleration=requested,
                     applied_acceleration=requested,
                     requested_vertical_rate=state.get('requested_vertical_rate', 0.0),
@@ -30,6 +30,10 @@ class FakeModel:
                     load_factor=state.get('load_factor', 1.0),
                     thrust_limited=self.limited,
                     limitation_reason='ABOVE_MAXIMUM_THRUST' if self.limited else '')
+
+
+    def bluesky_fuel(self, **state):
+        return 0.5
 
 
 def performance(model, strict=False):
@@ -67,7 +71,8 @@ def performance(model, strict=False):
 def traffic():
     traf = SimpleNamespace(
         ntraf=1, id=['TST1'], type=['A320'], pressure_alt=np.array([5000.0]),
-        tas=np.array([200.0]), Temp=np.array([260.0]), p=np.array([54000.0]),
+        tas=np.array([200.0]), selspd=np.array([150.0]),
+        Temp=np.array([260.0]), p=np.array([54000.0]),
         alt=np.array([5000.0]), ax=np.zeros(1), vs=np.zeros(1),
         hdg=np.array([90.0]), eps=np.array([0.01]),
         ap=SimpleNamespace(turnphi=np.array([0.0]), bankdef=np.radians([25.0])),
@@ -108,6 +113,42 @@ def test_kinematic_computes_performance_without_driving_motion(monkeypatch):
     assert perf.drag[0] == pytest.approx(10000.0)
     assert perf.fuelflow[0] == pytest.approx(0.5)
     assert perf.mass[0] == pytest.approx(59999.5)
+
+
+@pytest.mark.parametrize('stop_stage', ['limits', 'dynamics'])
+def test_traffic_does_not_propagate_after_performance_hold(monkeypatch, stop_stage):
+    """A strict rejection must not fall through to native motion on this tick."""
+    sim = SimpleNamespace(state=bs.OP, simdt=0.5)
+    monkeypatch.setattr(bs, 'sim', sim)
+    calls = []
+
+    def limits(*args):
+        if stop_stage == 'limits':
+            sim.state = bs.HOLD
+        return args[:3]
+
+    def dynamics(*args):
+        calls.append('dynamics')
+        sim.state = bs.HOLD
+        return np.array([False]), np.array([False])
+
+    noop = SimpleNamespace(update=lambda: None)
+    traf = SimpleNamespace(
+        ntraf=1, alt=np.array([5000.0]), update_atmosphere=lambda: None,
+        adsb=noop, ap=noop,
+        asastimer=SimpleNamespace(readynext=False),
+        aporasas=SimpleNamespace(update=lambda: None, tas=np.array([200.0]),
+                                vs=np.array([0.0]), alt=np.array([5000.0])),
+        ax=np.zeros(1), perf=SimpleNamespace(limits=limits, update_dynamics=dynamics,
+                                            requires_synced_direct_state=False),
+        native_speed_request=lambda: None,
+        update_airspeed=lambda *args: calls.append('airspeed'),
+        update_groundspeed=lambda: calls.append('groundspeed'),
+        update_pos=lambda: calls.append('position'),
+        turbulence=noop, cond=noop, trails=noop)
+    Traffic.update(traf)
+    assert sim.state == bs.HOLD
+    assert calls == ([] if stop_stage == 'limits' else ['dynamics'])
 
 
 def test_current_tick_turn_load_is_passed_without_stale_heading_mask(monkeypatch):
@@ -187,10 +228,12 @@ def test_strict_thrust_limit_holds_without_terminating_process(monkeypatch):
 
 
 @pytest.mark.parametrize(('applied', 'target', 'expected'), [
-    (0.25, 210.0, 200.25),
-    (-0.4, 190.0, 199.6),
+    (0.25, 210.0, 200.0 + 1000.0 / 60000.0),
+    (-0.4, 190.0, 200.0 - 6000.0 / 60000.0),
 ])
 def test_tem_applies_thrust_feasible_acceleration(monkeypatch, applied, target, expected):
+    # The force bounds, mass and zero vertical rate determine the feasible
+    # acceleration; the nominal fixture acceleration is not a physical bound.
     traf = traffic()
     traf.aporasas.tas[0] = target
     traf.speed_request = SpeedStepRequest(
@@ -211,7 +254,7 @@ def test_tem_applies_thrust_feasible_acceleration(monkeypatch, applied, target, 
     speed_handled, _ = perf.update_dynamics(traf, 1.0)
     assert speed_handled.tolist() == [True]
     assert traf.speed_result.next_tas[0] == pytest.approx(expected)
-    assert traf.speed_result.applied_acceleration[0] == pytest.approx(applied)
+    assert traf.speed_result.applied_acceleration[0] == pytest.approx(expected - 200.0)
 
 
 def test_tem_capture_does_not_overshoot_target(monkeypatch):
@@ -223,6 +266,7 @@ def test_tem_capture_does_not_overshoot_target(monkeypatch):
     monkeypatch.setattr(bs, 'traf', traf)
     perf = performance(FakeModel())
     perf.update_dynamics(traf, 1.0)
+    assert not perf.invalid[0]
     assert traf.speed_result.capture.tolist() == [True]
     assert traf.speed_result.next_tas[0] == pytest.approx(200.1)
     assert traf.speed_result.applied_acceleration[0] == pytest.approx(0.1)
@@ -331,3 +375,56 @@ def test_update_airspeed_consumes_precomputed_request(monkeypatch):
     Traffic.update_airspeed(state, np.array([False]), np.array([False]), request)
     assert state.tas[0] == pytest.approx(201.0)
     assert state.ax[0] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(('selected', 'height', 'expected'), [
+    (250 * .514444, 11000., 'constCAS'),
+    (.78, 5000., 'constM'),
+    (250 * .514444, 5000., 'constCAS'),
+    (.78, 11000., 'constM'),
+])
+def test_guidance_speed_mode_reaches_energy_and_vertical_bounds(monkeypatch, selected, height, expected):
+    class IntentModel(FakeModel):
+        def bluesky_energy(self, **state):
+            self.energy_intent = state['speed_evolution']
+            return super().bluesky_energy(**state)
+
+        def bluesky_vertical_envelope(self, **state):
+            self.bounds_intent = state['speed_evolution']
+            return dict(minimum_rocd=-5., maximum_rocd=5.)
+
+    traf = traffic()
+    traf.selspd[0] = selected
+    traf.alt[0] = traf.pressure_alt[0] = height
+    traf.aporasas.alt[0] = height + 1000
+    monkeypatch.setattr(bs, 'traf', traf)
+    model = IntentModel()
+    perf = performance(model)
+    perf._evaluate(0)
+    assert perf.vertical_bounds(0).maximum_rocd == 5.
+    assert model.energy_intent == model.bounds_intent == expected
+
+
+def test_speed_mode_override_resolution_and_live_selection(monkeypatch):
+    traf = traffic()
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(FakeModel())
+    assert perf._speed_evolution(0) == 'constCAS'
+    traf.selspd[0] = .78
+    assert perf._speed_evolution(0) == 'constM'
+    traf.cr = SimpleNamespace(tasactive=np.array([True]))
+    assert perf._speed_evolution(0) == 'constTAS'
+    perf.schedule = 'CONSCAS'
+    assert perf._speed_evolution(0) == 'constCAS'
+
+
+def test_speed_mode_uses_current_host_threshold(monkeypatch):
+    from bluesky.tools import aero
+    traf = traffic()
+    traf.selspd[0] = .78
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(FakeModel())
+    monkeypatch.setattr(aero, 'casmach_thr', .7)
+    assert perf._speed_evolution(0) == 'constCAS'
+    monkeypatch.setattr(aero, 'casmach_thr', 2.)
+    assert perf._speed_evolution(0) == 'constM'
