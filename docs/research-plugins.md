@@ -67,7 +67,8 @@ plugin-maintained allowlist. New aircraft use `TEM` dynamics by default.
 ### Weather settings
 
 The exact weather settings, defaults, accepted values, and command equivalents
-are maintained in [`../scripts/README-weather.md`](../scripts/README-weather.md#settings-reference).
+are maintained in
+[`README-weather.md`](plugin/nwp-meteo/README-weather.md#settings-reference).
 They cover `meteo_strict`, `meteo_below_domain_policy`,
 `meteo_time_autoupdate`, `meteo_time_interpolation`, `era5_cache_path`,
 `era5_region`, `era5_pressure_levels`, `gfs_cache_path`, `windgfs_source`, and
@@ -128,7 +129,7 @@ interval and records both timestamps and the blend fraction as provenance.
   select an explicit, reproducible analysis cycle. `METEOCONFIG` inspects or
   changes `STRICT`, `BELOW`, `TIMEUPDATE`, and `INTERPOLATION`;
   `METEOSTATUS lat,lon,alt` inspects one provider sample. Full syntax is in the
-  [weather guide](../scripts/README-weather.md#runtime-commands).
+  [weather guide](plugin/nwp-meteo/README-weather.md#runtime-commands).
 - `PLUGIN LOAD RESEARCHRECORDER`, then
   `RECORDRESEARCH START run.csv`, `STATUS`, `STOP`, `RESET`, or
   `INTERVAL seconds`. The default sampling interval is one simulation second.

@@ -4,6 +4,7 @@ import re
 
 DOCS = Path('docs')
 RECORDER_DOC = DOCS / 'plugin/recorder/recorder-v11-contract.md'
+WEATHER_DOC = DOCS / 'plugin/nwp-meteo/README-weather.md'
 ACTIVE_DOCS = tuple(DOCS / name for name in (
     'research-plugins.md', 'current-plugin-architecture.md',
     'recorder-v11-contract.md',
@@ -39,3 +40,8 @@ def test_documentation_links_to_local_markdown_exist():
 
 def test_recorder_documentation_is_plugin_owned():
     assert RECORDER_DOC.is_file()
+
+
+def test_nwp_documentation_is_plugin_owned():
+    assert WEATHER_DOC.is_file()
+    assert not Path('scripts/README-weather.md').exists()

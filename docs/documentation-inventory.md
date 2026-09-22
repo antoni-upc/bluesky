@@ -14,7 +14,7 @@ guidance.
 | Execute scenarios and interpret evidence                  | `reproducibility-matrix.md`        |
 | Review unresolved model questions                         | `research-modeling-open-issues.md` |
 | Review explicitly deferred plugin work                    | `plugin-future-work.md`            |
-| Prepare ERA5/GFS cache data                               | `../scripts/README-weather.md`     |
+| Prepare ERA5/GFS cache data                               | `plugin/nwp-meteo/README-weather.md` |
 
 `../research-run.example.json` is a schema-valid template, not an active local
 configuration. Licensed datasets, weather cache files, credentials, generated
