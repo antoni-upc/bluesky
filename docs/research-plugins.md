@@ -9,12 +9,11 @@ For diagrams of the current components, per-tick call order, lifecycle, and
 ownership boundary with original BlueSky, start with
 [`current-plugin-architecture.md`](current-plugin-architecture.md).
 
-The sole active recorder contract is `samples-v11`. It adds the exact
-pre-propagation state used by TEM (`evaluation_tas_m_s`, `evaluation_alt_m`,
-`evaluation_mass_kg`, `evaluation_temperature_k`,
-`evaluation_pressure_alt_m`, `evaluation_timestep_s`) and raw
-`model_rocd_m_s`. Older sample schemas are historical artefacts and are
-rejected by active manifests and validators.
+The sole active recorder contract is `samples-v11`. Its exact column order,
+units, missing values, metadata, event stream, lifecycle, and exports are
+defined in [`recorder-v11-contract.md`](recorder-v11-contract.md). The contract
+includes the pre-propagation TEM evaluation state and raw model ROCD. Every
+other sample-schema value is rejected by active manifests and validators.
 
 The validated local environment is the `bluesky_research` Conda environment.
 Base BlueSky remains usable without any research dependencies.
@@ -197,7 +196,8 @@ Replace the example's all-zero commit and external-resource paths with the
 actual full revision and local resources before running a gate.
 Generated CSV is authoritative; metadata uses the matching versioned JSON
 schema. Optional Excel, KML, and plots must be derived from the closed CSV and
-do not alter it.
+do not alter it. See the [v11 recorder contract](recorder-v11-contract.md) for
+the exact artefact interface.
 
 Every recorder-produced TEM CSV must also pass the aligned numerical audit:
 

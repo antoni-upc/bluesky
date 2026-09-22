@@ -5,6 +5,7 @@ import re
 DOCS = Path('docs')
 ACTIVE_DOCS = tuple(DOCS / name for name in (
     'research-plugins.md', 'current-plugin-architecture.md',
+    'recorder-v11-contract.md',
     'bada-envelope-implementation.md', 'reproducibility-matrix.md',
     'research-modeling-open-issues.md', 'plugin-future-work.md',
     'documentation-inventory.md'))

@@ -196,6 +196,7 @@ composition is checked against the pinned plugin-disabled OpenAP/ISA baseline.
 ## Related documents
 
 - `research-plugins.md`: operator-facing setup, commands, and validation.
+- `recorder-v11-contract.md`: exact CSV, event, metadata, and export contract.
 - `bada-envelope-implementation.md`: envelope behaviour and licensed scope.
 - `reproducibility-matrix.md`: scenarios, comparison semantics, and validation.
 - `research-modeling-open-issues.md`: deliberately unresolved questions.
