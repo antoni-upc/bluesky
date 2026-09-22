@@ -60,7 +60,6 @@ def first_difference(left, right, path="$"):
 
 def run_checkout(checkout, runner, workdir, output):
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(checkout)
     env["MPLCONFIGDIR"] = str(workdir.parent / f"mpl-{workdir.name}")
     command([
         sys.executable, str(runner), "--workdir", str(workdir),
