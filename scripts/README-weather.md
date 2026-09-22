@@ -11,7 +11,8 @@ For a reproducible run:
 2. Determine the complete route bounds and latest possible simulation time.
 3. Run the matching downloader with `--dry-run`, then without it.
 4. Run the cache validator before starting BlueSky.
-5. In the scenario, set `STRICT`, `TIMEUPDATE`, and `INTERPOLATION` explicitly.
+5. In the scenario, set `STRICT`, `BELOW`, `TIMEUPDATE`, and `INTERPOLATION`
+   explicitly.
 6. Load the provider only after setting `DATE`, then query one known point with
    `METEOSTATUS`.
 7. Record the run and validate the resulting CSV and metadata.
@@ -20,6 +21,7 @@ The normal scientific configuration is:
 
 ```text
 METEOCONFIG STRICT ON
+METEOCONFIG BELOW REJECT
 METEOCONFIG TIMEUPDATE ON
 METEOCONFIG INTERPOLATION OFF
 ```
@@ -28,6 +30,42 @@ This configuration advances through prepared slots but stops instead of using
 ISA when required weather is missing or the aircraft leaves the requested
 domain. Enable interpolation only when the experiment intentionally models
 intermediate meteorological states.
+
+## Settings reference
+
+Settings are read when the provider is loaded. The `METEOCONFIG` command below
+changes the corresponding policy on the active provider; set it before loading
+a weather cube so that the initial cube and any interpolation successor use the
+intended policy.
+
+| Setting                     | Default            | Meaning                                                                                                                                                                 |
+|-----------------------------|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `meteo_strict`              | `False`            | Reject an invalid atmospheric sample or unavailable time slot instead of allowing the host's explicit ISA fallback.                                                     |
+| `meteo_below_domain_policy` | `REJECT`           | Use `REJECT` or `ISA` below the cube's vertical domain. `ISA_ANCHORED` is reserved and rejected as unimplemented.                                                       |
+| `meteo_time_autoupdate`     | `True`             | Load the provider slot containing simulation UTC when the current slot expires.                                                                                         |
+| `meteo_time_interpolation`  | `False`            | When enabled before a cube is loaded, also load the following slot and blend the two states over the current interval.                                                  |
+| `era5_cache_path`           | empty              | ERA5 cache directory; empty selects `cache/weather/era5`.                                                                                                               |
+| `era5_region`               | `region`           | Human-readable cache label containing lowercase letters, numbers, and hyphens.                                                                                          |
+| `era5_pressure_levels`      | 27 standard levels | Exact requested levels: 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 775, 800, 825, 850, 875, 900, 925, 950, 975, and 1000 hPa. |
+| `gfs_cache_path`            | empty              | GFS cache directory; empty selects `cache/weather/gfs`.                                                                                                                 |
+| `windgfs_source`            | `AWS`              | GFS URL and filename layout: `AWS` or `NCEI`.                                                                                                                           |
+| `windgfs_url`               | empty              | Optional base-URL override for the selected GFS source.                                                                                                                 |
+
+Both cache directories must be writable. Provider activation creates the
+directory when necessary and checks write access.
+
+## Runtime commands
+
+| Command                                        | Behavior                                                                                                                                                            |
+|------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `METEOCONFIG`                                  | Show strict, below-domain, automatic-update, and interpolation policies.                                                                                            |
+| `METEOCONFIG STRICT ON\|OFF`                   | Change strict failure handling on the active provider.                                                                                                              |
+| `METEOCONFIG BELOW REJECT\|ISA`                | Reject samples below the source domain or substitute ISA at the actual aircraft altitude.                                                                           |
+| `METEOCONFIG TIMEUPDATE ON\|OFF`               | Allow or forbid acquisition of a new provider slot during the run.                                                                                                  |
+| `METEOCONFIG INTERPOLATION ON\|OFF`            | Enable or disable temporal interpolation. Set this before `WINDECMWF` or `WINDGFS`; enabling it does not retroactively load a successor for an already active cube. |
+| `WINDECMWF lat0,lon0,lat1,lon1`                | Load the ERA5 hourly slot at or before simulation UTC for the requested bounds.                                                                                     |
+| `WINDGFS lat0,lon0,lat1,lon1[,YYYYMMDD,cycle]` | Load the GFS six-hour slot at or before simulation UTC, or an explicit 00, 06, 12, or 18 UTC analysis.                                                              |
+| `METEOSTATUS lat,lon,alt`                      | Inspect the provider result, provenance, wind, temperature, pressure, and density at one point.                                                                     |
 
 ## ERA5
 
@@ -42,9 +80,12 @@ python scripts/download_era5.py 20250815 12 40 -5 45 5 \
   --until 20250815T18 --region western-europe
 ```
 
-The first command only lists the cache files. The second downloads missing or
-invalid files. Valid files already in `cache/weather/era5` are reused. ERA5
-requires CDS API credentials.
+The first command only lists the cache files. The second validates and reuses
+matching files and downloads missing or invalid files. ERA5 access requires CDS
+API credentials. Both `WINDECMWF` activation and a non-dry-run downloader check
+for credentials before cache use, even when all requested files are already
+present. A dry run only computes and lists deterministic cache targets and does
+not require credentials.
 
 Then configure and run BlueSky:
 
@@ -120,10 +161,11 @@ python scripts/download_gfs.py 20250815 12 --until 20250815T18 --dry-run
 python scripts/download_gfs.py 20250815 12 --until 20250815T18
 ```
 
-The default source is NOAA's public AWS GFS bucket. The former NCEI Grid 3 URL
-returns 404 for these cycles after NCEI's grid-specific archive reorganization;
-do not select `--source NCEI` for the August 2025 research run. Valid files in
-`cache/weather/gfs` are reused.
+The default source is the `AWS` URL layout. The implementation also supports the
+`NCEI` historical-analysis layout and a custom base URL, but availability is an
+external property that can vary by date and archive organisation. Inspect the
+resolved URL with `--dry-run` and verify the required cycles before selecting a
+source for a reproducible run. Valid files in `cache/weather/gfs` are reused.
 
 Validate the downloaded 12Z and 18Z files at the scenario test point:
 
@@ -168,7 +210,7 @@ python tests/research/validate_gfs_policies.py
 provider loads the next cached file or downloads it, validates it, and only
 then applies it. ERA5 slots are hourly; GFS slots are six-hourly.
 
-Experiment profiles define meteorological domain behavior explicitly:
+Experiment profiles define meteorological domain behaviour explicitly:
 
 ```json
 "domain_policy": {
@@ -195,6 +237,7 @@ Scenarios must record these choices explicitly for reproducible runs:
 
 ```text
 METEOCONFIG STRICT ON
+METEOCONFIG BELOW REJECT
 METEOCONFIG TIMEUPDATE ON
 METEOCONFIG INTERPOLATION OFF
 ```
@@ -223,13 +266,14 @@ the atmosphere actually applied to aircraft and requires
 
 ## Failure interpretation
 
-| Condition | Strict mode | Interactive mode |
-| --- | --- | --- |
-| Outside requested bounds or vertical domain | Stop | ISA with explicit spatial fallback |
-| New slot missing or invalid with `TIMEUPDATE ON` | Stop | ISA with `TIME_SLOT_UNAVAILABLE` |
-| Slot boundary with `TIMEUPDATE OFF` | Stop | ISA with `TIME_SLOT_EXPIRED` |
-| Interpolation enabled but successor missing | Stop | ISA with `TIME_SLOT_UNAVAILABLE` |
+| Condition                                        | Strict mode | Interactive mode                   |
+|--------------------------------------------------|-------------|------------------------------------|
+| Outside requested bounds or vertical domain      | Stop        | ISA with explicit spatial fallback |
+| New slot missing or invalid with `TIMEUPDATE ON` | Stop        | ISA with `TIME_SLOT_UNAVAILABLE`   |
+| Slot boundary with `TIMEUPDATE OFF`              | Stop        | ISA with `TIME_SLOT_EXPIRED`       |
+| Interpolation enabled but successor missing      | Stop        | ISA with `TIME_SLOT_UNAVAILABLE`   |
 
-No mode retains an expired or failed weather cube. A result-generating run is
-valid only when its evidence contains the intended source and slots, no
-fallback reason, and no performance misses.
+No mode retains an expired or failed weather cube. Weather evidence is valid
+only when it contains the intended source and slots and no unexpected fallback
+reason. A combined weather/performance run must additionally pass its separate
+performance and numerical validators.
