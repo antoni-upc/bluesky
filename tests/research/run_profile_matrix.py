@@ -669,8 +669,6 @@ def orchestrate(args):
         run_dir = output / name
         evidence_path = run_dir / "evidence.json"
         workdir = run_dir / "work"
-        env = os.environ.copy()
-        env["MPLCONFIGDIR"] = str(run_dir / "mpl")
         command = [sys.executable, str(Path(__file__).resolve()), "--worker",
                    "--scenario", str(run_dir / "scenario.scn"), "--config", str(args.config),
                    "--profile", name, "--output", str(run_dir), "--workdir", str(workdir),
@@ -678,7 +676,7 @@ def orchestrate(args):
                    "--timestep", str(args.timestep)]
         if args.bluesky_config:
             command.extend(("--bluesky-config", str(args.bluesky_config)))
-        completed = subprocess.run(command, cwd=ROOT, env=env)
+        completed = subprocess.run(command, cwd=ROOT)
         if not evidence_path.is_file():
             results[name] = {
                 "returncode": completed.returncode,

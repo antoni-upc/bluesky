@@ -4,7 +4,6 @@
 import argparse
 import csv
 import json
-import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -75,15 +74,8 @@ def matrix():
     return entries
 
 
-def environment(scenario='common'):
-    env = os.environ.copy()
-    env['MPLCONFIGDIR'] = f'/tmp/bluesky-mpl-revalidation-{os.getpid()}-{scenario}'
-    return env
-
-
-def execute(command, label, env=None):
-    result = subprocess.run(command, cwd=ROOT, env=env or environment(),
-                            text=True, stdout=subprocess.PIPE,
+def execute(command, label):
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise RuntimeError(f'{label} failed ({result.returncode})\n{result.stdout}')
@@ -93,7 +85,7 @@ def execute(command, label, env=None):
 def run_scenario(scenario):
     output = execute(
         [PYTHON, '-u', str(ROOT / 'tests/research/run_scenario_detached.py'),
-         f'research/{scenario}'], scenario, environment(scenario))
+         f'research/{scenario}'], scenario)
     return scenario, output
 
 

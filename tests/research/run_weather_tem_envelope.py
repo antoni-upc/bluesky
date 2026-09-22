@@ -2,7 +2,6 @@
 """Run and validate the licensed ERA5/GFS by BADA 3/4 TEM envelope matrix."""
 
 import argparse
-import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,16 +18,9 @@ MATRIX = (
 )
 
 
-def environment(label):
-    env = os.environ.copy()
-    env['MPLCONFIGDIR'] = f'/tmp/bluesky-mpl-weather-envelope-{os.getpid()}-{label}'
-    return env
-
-
 def execute(command, label):
-    result = subprocess.run(command, cwd=ROOT, env=environment(label), text=True,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            check=False)
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, check=False)
     if result.returncode:
         raise RuntimeError(f'{label} failed ({result.returncode})\n{result.stdout}')
     return result.stdout.strip()

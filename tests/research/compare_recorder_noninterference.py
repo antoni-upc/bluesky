@@ -4,7 +4,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -124,13 +123,11 @@ def compare():
         outputs = {}
         for label in ("off", "on"):
             output = temp / f"{label}.json"
-            env = os.environ.copy()
-            env["MPLCONFIGDIR"] = str(temp / f"mpl-{label}")
             subprocess.run([
                 sys.executable, str(Path(__file__).resolve()), "--child",
                 "--recorder", label, "--workdir", str(temp / f"work-{label}"),
                 "--output", str(output),
-            ], cwd=ROOT, env=env, check=True)
+            ], cwd=ROOT, check=True)
             outputs[label] = json.loads(output.read_text(encoding="utf-8"))
 
         difference = first_difference(outputs["off"]["samples"], outputs["on"]["samples"])

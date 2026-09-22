@@ -3,15 +3,12 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
-
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/bluesky-mpl-disabled-compare")
 
 from tests.research.run_disabled_baseline import validate_result
 
@@ -59,12 +56,10 @@ def first_difference(left, right, path="$"):
 
 
 def run_checkout(checkout, runner, workdir, output):
-    env = os.environ.copy()
-    env["MPLCONFIGDIR"] = str(workdir.parent / f"mpl-{workdir.name}")
     command([
         sys.executable, str(runner), "--workdir", str(workdir),
         "--output", str(output),
-    ], cwd=checkout, env=env)
+    ], cwd=checkout)
 
 
 def compare():
