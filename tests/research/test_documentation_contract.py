@@ -5,12 +5,13 @@ import re
 DOCS = Path('docs')
 RECORDER_DOC = DOCS / 'plugin/recorder/recorder-v11-contract.md'
 WEATHER_DOC = DOCS / 'plugin/nwp-meteo/README-weather.md'
+PYBADA_DOC = DOCS / 'plugin/pybada-tem/bada-envelope-implementation.md'
 ACTIVE_DOCS = tuple(DOCS / name for name in (
     'research-plugins.md', 'current-plugin-architecture.md',
     'recorder-v11-contract.md',
     'bada-envelope-implementation.md', 'reproducibility-matrix.md',
     'research-modeling-open-issues.md', 'plugin-future-work.md',
-    'documentation-inventory.md'))
+    'documentation-inventory.md')) + (RECORDER_DOC, WEATHER_DOC, PYBADA_DOC)
 RETIRED_TOPOLOGY = ('research/reproducibility', 'docs/research-consolidation')
 OLD_SCHEMAS = ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10')
 
@@ -45,3 +46,13 @@ def test_recorder_documentation_is_plugin_owned():
 def test_nwp_documentation_is_plugin_owned():
     assert WEATHER_DOC.is_file()
     assert not Path('scripts/README-weather.md').exists()
+
+
+def test_pybada_documentation_is_plugin_owned():
+    assert PYBADA_DOC.is_file()
+
+
+def test_pybada_documentation_links_exist():
+    text = PYBADA_DOC.read_text(encoding='utf-8')
+    for target in re.findall(r'\[[^]]+\]\(([^)#]+\.md)(?:#[^)]+)?\)', text):
+        assert (PYBADA_DOC.parent / target).resolve().is_file(), target
