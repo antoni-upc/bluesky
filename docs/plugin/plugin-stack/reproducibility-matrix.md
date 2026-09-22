@@ -129,22 +129,20 @@ timesteps, or physical equivalence between different models.
 Run the dependency-free suite first:
 
 ```shell
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python -m pytest tests/research -m "not licensed_bada and not external_weather"
+python -m pytest tests/research \
+  -m "not licensed_bada and not external_weather"
 ```
 
 Preflight and run the five-profile matrix in fresh child processes:
 
 ```shell
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_profile_matrix.py \
+python tests/research/run_profile_matrix.py \
   --scenario experiments/example_direct.scn \
   --config experiments/profiles.json \
   --output output/matrix/example_direct \
   --preflight-only
 
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_profile_matrix.py \
+python tests/research/run_profile_matrix.py \
   --scenario experiments/example_direct.scn \
   --config experiments/profiles.json \
   --output output/matrix/example_direct
@@ -158,19 +156,13 @@ a validation status until its outputs pass the rules above.
 Run the focused gates as applicable:
 
 ```shell
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_pybada_revalidation.py
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/run_weather_tem_envelope.py
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/compare_disabled_baseline.py
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python tests/research/compare_recorder_noninterference.py
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python -m pytest tests/research -m licensed_bada \
+python tests/research/run_pybada_revalidation.py
+python tests/research/run_weather_tem_envelope.py
+python tests/research/compare_disabled_baseline.py
+python tests/research/compare_recorder_noninterference.py
+python -m pytest tests/research -m licensed_bada \
   --run-manifest research-run.local.json
-PYTHONNOUSERSITE=1 PYTHONPATH=. \
-  python -m pytest tests/research -m external_weather \
+python -m pytest tests/research -m external_weather \
   --run-manifest research-run.local.json
 ```
 

@@ -179,7 +179,8 @@ accuracy, arbitrary-aircraft coverage, generic non-clean terminal operation,
 phase-aware Mach-limit selection, high-altitude feasibility, or equivalence
 between different atmosphere and performance models. Route geometry remains a
 BlueSky guidance result rather than independent trajectory truth. Durable open
-questions are listed in `research-modeling-open-issues.md`.
+questions are listed in
+[`research-modeling-open-issues.md`](research-modeling-open-issues.md).
 
 ## Branch architecture
 
@@ -197,8 +198,13 @@ plugin-disabled OpenAP/ISA baseline.
 
 ## Related documents
 
-- `research-plugins.md`: operator-facing setup, commands, and validation.
-- `recorder-v11-contract.md`: exact CSV, event, metadata, and export contract.
-- `bada-envelope-implementation.md`: envelope behaviour and licensed scope.
-- `reproducibility-matrix.md`: scenarios, comparison semantics, and validation.
-- `research-modeling-open-issues.md`: deliberately unresolved questions.
+- [`research-plugins.md`](research-plugins.md): operator-facing setup, commands,
+  and validation.
+- [`recorder-v11-contract.md`](../recorder/recorder-v11-contract.md): exact CSV,
+  event, metadata, and export contract.
+- [`bada-envelope-implementation.md`](../pybada-tem/bada-envelope-implementation.md):
+  envelope behaviour and licensed scope.
+- [`reproducibility-matrix.md`](reproducibility-matrix.md): scenarios,
+  comparison semantics, and validation.
+- [`research-modeling-open-issues.md`](research-modeling-open-issues.md):
+  deliberately unresolved questions.

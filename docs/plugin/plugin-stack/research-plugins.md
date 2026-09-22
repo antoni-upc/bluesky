@@ -11,7 +11,8 @@ ownership boundary with original BlueSky, start with
 
 The sole active recorder contract is `samples-v11`. Its exact column order,
 units, missing values, metadata, event stream, lifecycle, and exports are
-defined in [`recorder-v11-contract.md`](recorder-v11-contract.md). The contract
+defined in
+[`recorder-v11-contract.md`](../recorder/recorder-v11-contract.md). The contract
 includes the pre-propagation TEM evaluation state and raw model ROCD. Every
 other sample-schema value is rejected by active manifests and validators.
 
@@ -21,7 +22,9 @@ Base BlueSky remains usable without any research dependencies.
 
 See [`current-plugin-architecture.md`](current-plugin-architecture.md) for
 lifecycle, configuration ownership, failure semantics, and branch boundaries.
-See [`bada-envelope-implementation.md`](bada-envelope-implementation.md) for
+See
+[`bada-envelope-implementation.md`](../pybada-tem/bada-envelope-implementation.md)
+for
 the implemented per-aircraft envelope policies, checks, and evidence gates.
 ```shell
 conda activate bluesky_research
@@ -68,7 +71,7 @@ plugin-maintained allowlist. New aircraft use `TEM` dynamics by default.
 
 The exact weather settings, defaults, accepted values, and command equivalents
 are maintained in
-[`README-weather.md`](plugin/nwp-meteo/README-weather.md#settings-reference).
+[`README-weather.md`](../nwp-meteo/README-weather.md#settings-reference).
 They cover `meteo_strict`, `meteo_below_domain_policy`,
 `meteo_time_autoupdate`, `meteo_time_interpolation`, `era5_cache_path`,
 `era5_region`, `era5_pressure_levels`, `gfs_cache_path`, `windgfs_source`, and
@@ -129,7 +132,7 @@ interval and records both timestamps and the blend fraction as provenance.
   select an explicit, reproducible analysis cycle. `METEOCONFIG` inspects or
   changes `STRICT`, `BELOW`, `TIMEUPDATE`, and `INTERPOLATION`;
   `METEOSTATUS lat,lon,alt` inspects one provider sample. Full syntax is in the
-  [weather guide](plugin/nwp-meteo/README-weather.md#runtime-commands).
+  [weather guide](../nwp-meteo/README-weather.md#runtime-commands).
 - `PLUGIN LOAD RESEARCHRECORDER`, then
   `RECORDRESEARCH START run.csv`, `STATUS`, `STOP`, `RESET`, or
   `INTERVAL seconds`. The default sampling interval is one simulation second.
@@ -198,8 +201,9 @@ Replace the example's all-zero commit and external-resource paths with the
 actual full revision and local resources before running a gate.
 Generated CSV is authoritative; metadata uses the matching versioned JSON
 schema. Optional Excel, KML, and plots must be derived from the finalised CSV and
-do not alter it. See the [v11 recorder contract](recorder-v11-contract.md) for
-the exact artefact interface.
+do not alter it. See the
+[v11 recorder contract](../recorder/recorder-v11-contract.md) for the exact
+artefact interface.
 
 Every recorder-produced TEM CSV must also pass the aligned numerical audit:
 
@@ -225,7 +229,8 @@ horizontal acceleration and saturation, joint climb/descent allocation,
 conflicting commands, turn load and energy, envelopes, lifecycle, routes, and
 timestep comparison. Their expected behaviour and validator catalogue are
 described in
-[`bada-envelope-implementation.md`](bada-envelope-implementation.md). Generated
+[`bada-envelope-implementation.md`](../pybada-tem/bada-envelope-implementation.md).
+Generated
 values and pass/fail status remain with the local manifest and evidence set.
 
 At the default one-second interval, a `samples-v11` CSV writes 3,600 rows per

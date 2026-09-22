@@ -2,16 +2,18 @@ from pathlib import Path
 import re
 
 
-DOCS = Path('docs')
-RECORDER_DOC = DOCS / 'plugin/recorder/recorder-v11-contract.md'
-WEATHER_DOC = DOCS / 'plugin/nwp-meteo/README-weather.md'
-PYBADA_DOC = DOCS / 'plugin/pybada-tem/bada-envelope-implementation.md'
+DOCS = Path('docs/plugin')
+RECORDER_DOC = DOCS / 'recorder/recorder-v11-contract.md'
+WEATHER_DOC = DOCS / 'nwp-meteo/README-weather.md'
+PYBADA_DOC = DOCS / 'pybada-tem/bada-envelope-implementation.md'
 ACTIVE_DOCS = tuple(DOCS / name for name in (
-    'research-plugins.md', 'current-plugin-architecture.md',
-    'recorder-v11-contract.md',
-    'bada-envelope-implementation.md', 'reproducibility-matrix.md',
-    'research-modeling-open-issues.md', 'plugin-future-work.md',
-    'documentation-inventory.md')) + (RECORDER_DOC, WEATHER_DOC, PYBADA_DOC)
+    'plugin-stack/research-plugins.md',
+    'plugin-stack/current-plugin-architecture.md',
+    'plugin-stack/reproducibility-matrix.md',
+    'plugin-stack/research-modeling-open-issues.md',
+    'plugin-stack/plugin-future-work.md',
+    'plugin-stack/documentation-inventory.md')) + (
+        RECORDER_DOC, PYBADA_DOC, WEATHER_DOC)
 RETIRED_TOPOLOGY = ('research/reproducibility', 'docs/research-consolidation')
 OLD_SCHEMAS = ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10')
 
@@ -39,20 +41,8 @@ def test_documentation_links_to_local_markdown_exist():
     assert not missing, '\n'.join(missing)
 
 
-def test_recorder_documentation_is_plugin_owned():
-    assert RECORDER_DOC.is_file()
-
-
-def test_nwp_documentation_is_plugin_owned():
-    assert WEATHER_DOC.is_file()
+def test_research_documentation_is_plugin_owned():
+    assert all(path.is_file() and path.is_relative_to(DOCS)
+               for path in ACTIVE_DOCS)
+    assert not tuple(Path('docs').glob('*.md'))
     assert not Path('scripts/README-weather.md').exists()
-
-
-def test_pybada_documentation_is_plugin_owned():
-    assert PYBADA_DOC.is_file()
-
-
-def test_pybada_documentation_links_exist():
-    text = PYBADA_DOC.read_text(encoding='utf-8')
-    for target in re.findall(r'\[[^]]+\]\(([^)#]+\.md)(?:#[^)]+)?\)', text):
-        assert (PYBADA_DOC.parent / target).resolve().is_file(), target
