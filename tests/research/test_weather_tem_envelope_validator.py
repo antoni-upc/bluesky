@@ -42,6 +42,8 @@ def _evidence(tmp_path, schema=SCHEMA_VERSION, source='ERA5', family='4'):
                 'applied_acceleration_m_s2': 0.0,
                 'applied_vertical_rate_m_s': 0.0,
                 'energy_allocation_policy': 'SPEED_PRIORITY',
+                'speed_capture': True, 'evaluation_speed_target_cas_m_s': 125.0,
+                'evaluation_speed_target_mach': '',
                 'envelope_policy': policy, 'envelope_profile': 'LONGITUDINAL',
                 'envelope_status': 'VALID', 'envelope_failed_checks': '',
                 'envelope_event_count': 0,
@@ -123,3 +125,19 @@ def test_weather_tem_energy_uses_the_geometric_vertical_rate(tmp_path):
         writer.writerows(rows)
     result = validate(path, '4', 'ERA5', scenario, *acids)
     assert result.startswith('VALID:'), result
+
+
+def test_weather_tem_validator_rejects_isa_equivalent_speed_tracking(tmp_path):
+    # Flying the ISA TAS of a 125 m/s selection in warmer air leaves the flown
+    # CAS about 1.7 m/s low, as the gate recorded before weather-aware targets.
+    path, scenario, acids = _evidence(tmp_path)
+    rows = list(csv.DictReader(path.open(newline='', encoding='utf-8')))
+    for row in rows:
+        row['cas_m_s'] = '123.3'
+    with path.open('w', newline='', encoding='utf-8') as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0])
+        writer.writeheader()
+        writer.writerows(rows)
+    result = validate(path, '4', 'ERA5', scenario, *acids)
+    assert 'flown cas_m_s differs from evaluation_speed_target_cas_m_s' in result
+

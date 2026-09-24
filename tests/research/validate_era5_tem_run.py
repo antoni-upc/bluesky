@@ -33,6 +33,25 @@ def _number(row, field):
     return value
 
 
+# A captured selection must be flown in the applied atmosphere, not its ISA
+# equivalent. The residual allows for climbing between capture and sampling.
+TRACKING_TOLERANCES = {'evaluation_speed_target_cas_m_s': ('cas_m_s', 0.05),
+                       'evaluation_speed_target_mach': ('mach', 1.5e-4)}
+
+
+def speed_tracking(rows):
+    """Largest flown-minus-selected CAS/Mach gap per target field on captured rows."""
+    worst = {}
+    for row in rows:
+        if row.get('speed_capture') != 'True':
+            continue
+        for target, (flown, _) in TRACKING_TOLERANCES.items():
+            if row.get(target):
+                gap = abs(_number(row, flown) - _number(row, target))
+                worst[target] = max(worst.get(target, 0.0), gap)
+    return worst
+
+
 def validate(path, family='4', source='ERA5', scenario=None,
              report_acid=None, off_acid=None, power_tolerance=0.75):
     path = Path(path)
@@ -157,11 +176,20 @@ def validate(path, family='4', source='ERA5', scenario=None,
         errors.append('no applied SPEED_PRIORITY energy samples')
     if max_power_residual > power_tolerance:
         errors.append(f'maximum total-energy residual {max_power_residual:.6f} W/kg')
+    tracking = speed_tracking(rows)
+    if not tracking:
+        errors.append('no captured rows with a selected CAS or Mach target')
+    for target, gap in tracking.items():
+        flown, tolerance = TRACKING_TOLERANCES[target]
+        if gap > tolerance:
+            errors.append(f'flown {flown} differs from {target} by {gap:.6g} '
+                          f'(tolerance {tolerance})')
     if errors:
         return 'INVALID weather/TEM envelope evidence:\n  - ' + '\n  - '.join(errors)
     return (f'VALID: {len(rows)} {source}/BADA {family} TEM envelope samples; '
             f'REPORT/OFF matched, max pair delta={max(maxima.values(), default=0.0):.6g}, '
-            f'max power residual={max_power_residual:.6f} W/kg')
+            f'max power residual={max_power_residual:.6f} W/kg, '
+            f'max speed tracking gap={max(tracking.values()):.6g}')
 
 
 def main(argv=None):
