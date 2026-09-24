@@ -1,7 +1,10 @@
 """Model resolution and typed pyBADA evaluation boundaries."""
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from enum import Enum
+import functools
+import math
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -129,6 +132,42 @@ class EnergyResult:
                 self.load_factor < 1.0):
             raise EvaluationError(f'Non-physical pyBADA result: {values!r}')
         return self
+
+
+MEMO_SIZE = 4096
+
+
+def _memo_key(kwargs):
+    """Exact key: floats also carry their sign so -0.0 and 0.0 stay distinct."""
+    return tuple((name, value, math.copysign(1.0, value) if isinstance(value, float) else None)
+                 for name, value in sorted(kwargs.items()))
+
+
+def _memoised(method):
+    """Exactly memoise a pure adapter method with keyword-only arguments.
+
+    The result depends only on the adapter's model and the arguments, so an
+    identical call returns a copy of the stored result instead of evaluating
+    pyBADA again. Exceptions are not stored; NaN arguments never match and are
+    re-evaluated. Each adapter keeps a least-recently-used store per method.
+    """
+    @functools.wraps(method)
+    def wrapper(self, **kwargs):
+        store = self.__dict__.setdefault(f'_memo_{method.__name__}', OrderedDict())
+        try:
+            key = _memo_key(kwargs)
+            stored = store.get(key)
+        except TypeError:  # unhashable argument: evaluate without memoisation
+            return method(self, **kwargs)
+        if stored is not None:
+            store.move_to_end(key)
+            return dict(stored)
+        result = method(self, **kwargs)
+        store[key] = dict(result)
+        if len(store) > MEMO_SIZE:
+            store.popitem(last=False)
+        return dict(result)
+    return wrapper
 
 
 class BadaModelAdapter:
@@ -315,6 +354,7 @@ class BadaModelAdapter:
                 f'contradictory MCMB/LIDL ROCD bounds {minimum}..{maximum}')
         return dict(minimum_rocd=minimum, maximum_rocd=maximum)
 
+    @_memoised
     def bluesky_lateral_envelope(self, *, configuration, phase):
         """Return documented BADA lateral/load limits without defaults."""
         if self.family == '3':
@@ -387,6 +427,7 @@ class BadaModelAdapter:
                     landing_gear=str(gear), minimum_limit_name=minimum_name,
                     maximum_limit_name=maximum_name)
 
+    @_memoised
     def bluesky_envelope(self, *, h, cas, mach, mass, temperature, pressure, phase,
                          configuration_mode=BadaConfigurationMode.PYBADA):
         """Normalize BADA 3/4 longitudinal limits at one operating point."""

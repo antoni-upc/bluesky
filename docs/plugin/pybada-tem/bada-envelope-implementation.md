@@ -199,6 +199,13 @@ Every new event is printed to both the process terminal and the interactive
 BlueSky console. Fields include aircraft, component, reason, policy, action,
 requested values, applied values, and continuation.
 
+Flight- and lateral-envelope evaluations are pure functions of their inputs and
+are memoised exactly: an evaluation with identical arguments (every float
+compared exactly) returns a copy of the stored result instead of calling
+pyBADA again. Failures are not stored. Results are therefore unchanged; only
+repeated calls, such as the recorder sampling the state the next step then
+evaluates, are skipped.
+
 The recorder is optional and does not influence envelope or simulation
 behaviour. When active it writes:
 
