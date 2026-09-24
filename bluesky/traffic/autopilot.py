@@ -270,7 +270,9 @@ class Autopilot(Entity, replaceable=True):
 
             # Reduce turn dist for reduced turnspd
             if bs.traf.actwp.flyturn[i] and bs.traf.actwp.turnrad[i]<0.0 and bs.traf.actwp.turnspd[i]>=0.:
-                turntas = cas2tas(bs.traf.actwp.turnspd[i], bs.traf.alt[i])
+                turntas = bs.traf.applied_tas(
+                    cas2tas(bs.traf.actwp.turnspd[i], bs.traf.alt[i]),
+                    bs.traf.actwp.turnspd[i], i, mach=False)
                 bs.traf.actwp.turndist[i] = bs.traf.actwp.turndist[i]*turntas*turntas/(bs.traf.tas[i]*bs.traf.tas[i])
 
             # VNAV = FMS ALT/SPD mode incl. RTA
@@ -376,7 +378,9 @@ class Autopilot(Entity, replaceable=True):
         # use the turn speed
 
         # Is turn speed specified and are we not already slow enough? We only decelerate for turns, not accel.
-        turntas       = np.where(bs.traf.actwp.nextturnspd>0.0, vcas2tas(bs.traf.actwp.nextturnspd, bs.traf.alt),
+        turntas       = np.where(bs.traf.actwp.nextturnspd>0.0, bs.traf.applied_tas(
+                                     vcas2tas(bs.traf.actwp.nextturnspd, bs.traf.alt),
+                                     bs.traf.actwp.nextturnspd, mach=False),
                                  -1.0+0.*bs.traf.tas)
         
         # Switch is now whether the aircraft has any turn waypoints
@@ -390,7 +394,8 @@ class Autopilot(Entity, replaceable=True):
         # Note that because nextspd comes from the stack, and can be either a mach number or
         # a calibrated airspeed, it can only be converted from Mach / CAS [kts] to TAS [m/s]
         # once the altitude is known.
-        nexttas = vcasormach2tas(bs.traf.actwp.nextspd, bs.traf.alt)
+        nexttas = bs.traf.applied_tas(vcasormach2tas(bs.traf.actwp.nextspd, bs.traf.alt),
+                                      bs.traf.actwp.nextspd)
 #
         dxspdconchg = distaccel(bs.traf.tas, nexttas, bs.traf.perf.axmax)
 
@@ -457,7 +462,8 @@ class Autopilot(Entity, replaceable=True):
         bs.traf.selspd = np.where(usecruisespd, self.cruisespd, bs.traf.selspd)
 
         # Below crossover altitude: CAS=const, above crossover altitude: Mach = const
-        self.tas = vcasormach2tas(bs.traf.selspd, bs.traf.alt)
+        self.tas = bs.traf.applied_tas(vcasormach2tas(bs.traf.selspd, bs.traf.alt),
+                                       bs.traf.selspd)
 
     def ComputeVNAV(self, idx, toalt, xtoalt, torta, xtorta):
         """

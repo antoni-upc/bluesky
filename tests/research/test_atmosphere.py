@@ -4,9 +4,10 @@ from types import SimpleNamespace
 
 import bluesky as bs
 from bluesky.tools.aero import R, T0, gamma, p0, vatmos
-from bluesky.traffic.atmosphere import AtmosphereSample, mach_to_cas, pressure_altitude, tas_to_mach
+from bluesky.traffic.atmosphere import (AtmosphereSample, cas_to_mach, casormach_to_tas, mach_to_cas,
+                                        pressure_altitude, tas_to_mach)
 from bluesky.traffic.traffic import Traffic
-from bluesky.tools.aero import vtas2cas, vtas2mach
+from bluesky.tools.aero import kts, vcasormach2tas, vtas2cas, vtas2mach
 
 
 @pytest.mark.smoke
@@ -99,3 +100,77 @@ def test_provider_atmosphere_preserves_vectorized_provenance(monkeypatch):
     assert state.atmos_source == ['ISA', 'ERA5']
     assert state.atmos_dataset_time == ['', '2025-08-15T12:00:00']
     assert state.atmos_fallback_reason == ['CONFIGURED_BELOW_ERA5_DOMAIN', '']
+
+
+def test_cas_to_mach_inverts_mach_to_cas():
+    mach = np.array([0.2, 0.5, 0.78, 0.9])
+    pressure = np.array([95000.0, 50000.0, 23000.0, 19000.0])
+    np.testing.assert_allclose(cas_to_mach(mach_to_cas(mach, pressure), pressure), mach,
+                               rtol=1e-12)
+
+
+def test_applied_conversion_matches_native_isa_conversion_in_isa_air():
+    speed = np.array([250.0 * kts, 0.78, 310.0 * kts])
+    alt = np.array([3000.0, 11000.0, 7000.0])
+    pressure, _, temperature = vatmos(alt)
+    # Agreement to BlueSky's rounded aero constants; ISA traffic keeps the
+    # native functions themselves, so the native path stays exact.
+    np.testing.assert_allclose(casormach_to_tas(speed, temperature, pressure),
+                               vcasormach2tas(speed, alt), rtol=1e-8)
+
+
+def weather_state(sources, temperature, pressure):
+    n = len(sources)
+    state = SimpleNamespace(
+        atmos_source=list(sources), alt=np.full(n, 10000.0), Temp=np.asarray(temperature),
+        p=np.asarray(pressure), tas=np.zeros(n), cas=np.zeros(n), M=np.zeros(n),
+        selspd=np.zeros(n), groundspeed_updates=[])
+    state._update_airdata = lambda: Traffic._update_airdata(state)
+    state.applied_tas = lambda *args, **kwargs: Traffic.applied_tas(state, *args, **kwargs)
+    state.update_groundspeed = lambda accumulate_work=True: \
+        state.groundspeed_updates.append(accumulate_work)
+    return state
+
+
+def test_applied_tas_keeps_the_native_result_without_weather():
+    state = weather_state(['ISA', 'ISA'], [250.0, 250.0], [30000.0, 30000.0])
+    native = vcasormach2tas(np.array([0.78, 128.6]), state.alt)
+    assert Traffic.applied_tas(state, native, np.array([0.78, 128.6])) is native
+
+
+def test_applied_tas_flies_the_selected_cas_or_mach_in_weather():
+    # ISA+10 K air; the ISA aircraft and a negative speed keep native values.
+    temperature, pressure = np.full(4, 233.2), np.full(4, 26500.0)
+    state = weather_state(['ISA', 'ERA5', 'ERA5', 'ERA5'], temperature, pressure)
+    speed = np.array([0.78, 0.78, 128.6, -1.0])
+    native = vcasormach2tas(speed, state.alt)
+    tas = Traffic.applied_tas(state, native, speed)
+    assert tas[0] == native[0] and tas[3] == native[3]
+    assert tas_to_mach(tas[1], temperature[1]) == pytest.approx(0.78, rel=1e-12)
+    assert mach_to_cas(tas_to_mach(tas[2], temperature[2]), pressure[2]) == \
+        pytest.approx(128.6, rel=1e-12)
+    # Turn speeds are CAS only: 0.78 is a 0.78 m/s CAS, not Mach 0.78 (~240 m/s TAS).
+    cas_only = Traffic.applied_tas(state, native, speed, mach=False)
+    assert cas_only[1] < 5.0 and cas_only[2] == tas[2]
+
+
+def test_commanded_airspeed_uses_the_applied_atmosphere():
+    state = weather_state(['ERA5', 'ERA5', 'ISA'], [233.2] * 3, [26500.0] * 3)
+    command = np.array([128.6, 0.78, 0.78])
+    state.tas[:], _, _ = (np.asarray(v) for v in __import__('bluesky.tools.aero', fromlist=['x'])
+                          .vcasormach(command, state.alt))
+    native_isa = state.tas[2]
+    Traffic._command_airspeed(state, slice(0, 3), command)
+    assert state.cas[0] == pytest.approx(128.6, rel=1e-12)
+    assert state.M[1] == pytest.approx(0.78, rel=1e-12)
+    assert state.tas[2] == native_isa
+    np.testing.assert_array_equal(state.selspd, state.cas)
+    assert state.groundspeed_updates == [False]
+
+
+def test_commanded_airspeed_leaves_isa_traffic_untouched():
+    state = weather_state(['ISA'], [250.0], [30000.0])
+    state.tas[:] = 200.0
+    Traffic._command_airspeed(state, 0, 0.78)
+    assert state.tas[0] == 200.0 and state.groundspeed_updates == []
+
