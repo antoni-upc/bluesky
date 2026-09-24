@@ -24,6 +24,11 @@ from .envelope import (EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopePr
                        parse_policy, quality_events)
 
 
+# Vertical-led policies approach the envelope's minimum TAS with this time
+# constant [s] rather than within one step, so the floor law does not depend
+# on the simulation timestep.
+SPEED_FLOOR_TIME_CONSTANT_S = 10.0
+
 bs.settings.set_variable_defaults(
     pybada3_data_path='', pybada4_data_path='', pybada_family='4',
     pybada3_version='', pybada4_version='',
@@ -1143,32 +1148,53 @@ class PyBadaTEM(PerfBase):
                         # envelope's minimum TAS.
                         floor_tas = getattr(self.flight_bounds(idx), 'minimum_tas', None)
                         if floor_tas is not None and np.isfinite(floor_tas):
-                            minimum_acceleration = (float(floor_tas) - tas) / dt
+                            minimum_acceleration = ((float(floor_tas) - tas) /
+                                                    max(SPEED_FLOOR_TIME_CONSTANT_S, dt))
                     allocation_state = dict(
                         tas=tas, mass=mass, drag=result.drag, idle_thrust=result.idle_thrust,
                         maximum_thrust=result.maximum_thrust,
                         reference_vertical_rate=candidate_vs, minimum_vertical_rate=low_w,
                         maximum_vertical_rate=high_w, minimum_acceleration=minimum_acceleration,
                         weights=self._joint_weights(idx))
-                    allocation = allocate_energy(energy_policy, requested_acceleration=desired_a,
-                                                 **allocation_state)
+                    policy_state = allocation_state
+                    if energy_policy == AllocationPolicy.JOINT:
+                        # JOINT weighs targets that do not depend on the step:
+                        # the native acceleration request and the guidance rate.
+                        # Captures stay hard: the vertical interval already
+                        # bounds the final altitude step, and the speed step
+                        # that would reach the target closes it exactly.
+                        policy_state = dict(allocation_state, reference_vertical_rate=guidance_vs)
+                        allocation = allocate_energy(
+                            energy_policy, requested_acceleration=direction * float(self.axmax[idx]),
+                            **policy_state)
+                        if direction and abs(allocation.acceleration) * dt >= abs(target_tas - tas):
+                            allocation = allocate_energy(
+                                AllocationPolicy.SPEED, requested_acceleration=desired_a,
+                                **allocation_state)
+                    else:
+                        allocation = allocate_energy(energy_policy, requested_acceleration=desired_a,
+                                                     **allocation_state)
                     thrust, acceleration, candidate_vs = (
                         allocation.thrust, allocation.acceleration, allocation.vertical_rate)
                     required, limited, reason = (
                         allocation.required_thrust, allocation.limited, allocation.reason)
                     if hasattr(self, 'acceleration_capability_up'):
                         up, down = acceleration_capability(
-                            energy_policy, self.axmax[idx], **allocation_state)
+                            energy_policy, self.axmax[idx], **policy_state)
                         (self.acceleration_capability_up[idx],
                          self.acceleration_capability_down[idx]) = \
                             self._capability_over_speed_change(
-                                idx, traffic, energy_policy, allocation_state, intent, up, down)
+                                idx, traffic, energy_policy, policy_state, intent, up, down)
                     proposed_tas = tas + acceleration * dt
                     reaches_target = abs(proposed_tas - target_tas) <= 1e-10
                     if reaches_target:
                         proposed_tas = target_tas
                     fuel = result.fuel_flow
-                    if thrust != result.thrust:
+                    # Within 1 N the allocation reproduces the model's thrust up
+                    # to roundoff; keep the model's fuel law. An exact comparison
+                    # would let roundoff switch BADA 3 between its idle and
+                    # thrust-specific fuel laws at the same idle thrust.
+                    if not np.isclose(thrust, result.thrust, rtol=0.0, atol=1.0):
                         model = self.models[idx]
                         if not hasattr(model, 'bluesky_fuel'):
                             raise EvaluationError('speed-adapted thrust requires a fuel adapter')

@@ -149,10 +149,18 @@ def test_capability_follows_the_energy_equation_of_each_policy():
     assert (up, down) == pytest.approx((0.1, -0.1))
 
 
-def tem(monkeypatch, target, policy=None, weights=None, maximum=70_000.0):
-    """One-aircraft TEM step: fake model rate 16.3 m/s, guidance 5 m/s."""
+def tem(monkeypatch, target, policy=None, weights=None, maximum=70_000.0, capture=True):
+    """One-aircraft TEM step: fake model rate 16.3 m/s, guidance 5 m/s.
+
+    With capture=False the request asks for 0.8 m/s2 towards a target that is
+    not reached within the step.
+    """
     from tests.research.test_numerical_corrections import configure
+    from bluesky.traffic.dynamics import SpeedStepRequest
     traf, model, perf = configure(monkeypatch, target=target)
+    if not capture:
+        traf.speed_request = SpeedStepRequest(
+            np.array([target]), np.array([0.8]), np.array([False]), np.array([200.4]))
     model.maximum = maximum
     perf.axmax = np.array([2.0])
     perf.energy_policy = np.array([AllocationPolicy.SPEED.value], dtype='U24')
@@ -201,10 +209,13 @@ def test_joint_is_configured_with_explicit_weights_only(monkeypatch):
         tem(monkeypatch, target=200.4, policy='JOINT')
     with pytest.raises(ValueError, match='takes no weights'):
         tem(monkeypatch, target=200.4, policy='SPEED', weights=(1.0, 1.0))
-    traf, _, perf = tem(monkeypatch, target=200.4, policy='JOINT', weights=(1.0, 0.04))
+    traf, _, perf = tem(monkeypatch, target=210.0, policy='JOINT', weights=(1.0, 0.04),
+                        capture=False)
     assert perf.energy_allocation_policy[0] == 'JOINT'
-    assert 0.8 * (1.0 - 5.0 * g0 / 200.0) < traf.speed_result.applied_acceleration[0] < 0.8
-    assert 1.0 / 0.4 < traf.vs[0] < 5.0
+    # JOINT weighs the native 2 m/s2 request against the 5 m/s guidance rate:
+    # between vertical priority (keep 5 m/s) and levelling at maximum thrust.
+    assert 1.0 - 5.0 * g0 / 200.0 < traf.speed_result.applied_acceleration[0] < 1.0
+    assert 0.0 < traf.vs[0] < 5.0
     balance(traf, perf)
 
 
@@ -272,3 +283,68 @@ def test_capability_uses_the_weaker_deceleration_at_the_pending_target(monkeypat
     monkeypatch.setattr(perf, '_evaluate', fail)
     perf.update_dynamics(traf, 0.5)
     assert perf.acceleration_limits()[1][0] == pytest.approx(10_000.0 / 60_000.0)
+
+
+def test_joint_closes_the_final_capture_step_like_speed_priority(monkeypatch):
+    # In capture mode the request is the remaining error over one step; JOINT
+    # meets it exactly instead of trading against a 1/dt-scaled target.
+    traf, _, perf = tem(monkeypatch, target=200.4, policy='JOINT', weights=(1.0, 0.04))
+    assert traf.speed_result.applied_acceleration[0] == pytest.approx(0.8)
+    assert traf.speed_result.capture[0]
+    assert perf.energy_allocation_policy[0] == 'JOINT'
+    balance(traf, perf)
+
+
+@pytest.mark.parametrize(('offset', 'recomputed'), [(0.5, False), (5.0, True)])
+def test_roundoff_thrust_keeps_the_model_fuel_law(monkeypatch, offset, recomputed):
+    # A thrust within 1 N of the model's is the model's thrust up to roundoff;
+    # otherwise fuel follows the applied thrust.
+    import bluesky.plugins.pybada.performance as performance
+    from bluesky.plugins.pybada.allocation import Allocation
+    from tests.research.test_numerical_corrections import configure
+    traf, model, perf = configure(monkeypatch, target=200.0)
+    model_thrust = 10_000.0 + 60_000.0
+    monkeypatch.setattr(performance, 'allocate_energy', lambda *args, **kwargs: Allocation(
+        model_thrust + offset, 0.0, 0.0, model_thrust + offset, False, ''))
+    perf.update_dynamics(traf, 0.5)
+    assert (model.last_fuel_thrust is not None) == recomputed
+    assert perf.fuelflow[0] == pytest.approx((model_thrust + recomputed * offset) / 100_000.0)
+
+
+def test_joint_closes_the_final_altitude_capture_step_exactly(monkeypatch):
+    from tests.research.test_numerical_corrections import configure
+    from bluesky.traffic.dynamics import SpeedStepRequest
+    traf, model, perf = configure(monkeypatch, target=210.0, delta_alt=0.5)
+    traf.speed_request = SpeedStepRequest(
+        np.array([210.0]), np.array([0.8]), np.array([False]), np.array([200.4]))
+    model.maximum = 70_000.0
+    perf.axmax = np.array([2.0])
+    perf.energy_policy = np.array([AllocationPolicy.SPEED.value], dtype='U24')
+    perf.joint_weight_acceleration = perf.joint_weight_vertical = np.full(1, np.nan)
+    perf.acceleration_capability_up = perf.acceleration_capability_down = np.full(1, np.nan)
+    perf.configure_energy_policy(0, 'JOINT', (1.0, 0.04))
+    perf.update_dynamics(traf, 0.5)
+    assert traf.vs[0] == pytest.approx(0.5 / 0.5)
+    assert perf.energy_allocation_policy[0] == 'JOINT'
+    balance(traf, perf)
+
+
+def test_speed_floor_is_regained_with_a_fixed_time_constant(monkeypatch):
+    # 1 m/s below the minimum TAS: regain at 1/10 s-1 = 0.1 m/s2, keeping the
+    # guidance climb; a one-step law would demand 2 m/s2 at dt = 0.5 s.
+    from types import SimpleNamespace
+    from bluesky.plugins.pybada.performance import SPEED_FLOOR_TIME_CONSTANT_S
+    from tests.research.test_numerical_corrections import configure
+    traf, model, perf = configure(monkeypatch, target=200.0)
+    model.maximum = 70_000.0
+    perf.axmax = np.array([2.0])
+    perf.energy_policy = np.array([AllocationPolicy.SPEED.value], dtype='U24')
+    perf.joint_weight_acceleration = perf.joint_weight_vertical = np.full(1, np.nan)
+    perf.acceleration_capability_up = perf.acceleration_capability_down = np.full(1, np.nan)
+    perf.configure_energy_policy(0, 'VERTICAL')
+    monkeypatch.setattr(perf, 'flight_bounds', lambda idx: SimpleNamespace(minimum_tas=201.0))
+    perf.update_dynamics(traf, 0.5)
+    assert traf.speed_result.applied_acceleration[0] == pytest.approx(
+        1.0 / SPEED_FLOOR_TIME_CONSTANT_S)
+    assert traf.vs[0] == pytest.approx(5.0)
+    balance(traf, perf)
