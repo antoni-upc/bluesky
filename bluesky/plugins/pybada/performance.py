@@ -292,16 +292,18 @@ class PyBadaTEM(PerfBase):
             return function(**kwargs)
 
     def flight_bounds(self, idx, *, mass=None, cas=None, mach=None, model=None,
-                      configuration_mode=None):
+                      configuration_mode=None, pressure_alt=None, temperature=None,
+                      pressure=None):
         model = model or self.models[idx]
         try:
             values = self._call_configuration_aware(model.bluesky_envelope,
                 self._configuration_mode(idx, configuration_mode),
-                h=float(bs.traf.pressure_alt[idx]),
+                h=float(bs.traf.pressure_alt[idx] if pressure_alt is None else pressure_alt),
                 cas=float(bs.traf.cas[idx] if cas is None else cas),
                 mach=float(bs.traf.M[idx] if mach is None else mach),
                 mass=float(self.mass[idx] if mass is None else mass),
-                temperature=float(bs.traf.Temp[idx]), pressure=float(bs.traf.p[idx]),
+                temperature=float(bs.traf.Temp[idx] if temperature is None else temperature),
+                pressure=float(bs.traf.p[idx] if pressure is None else pressure),
                 phase=self._phase(idx))
             return FlightBounds(**values)
         except Exception as exc:
@@ -311,14 +313,25 @@ class PyBadaTEM(PerfBase):
     @staticmethod
     def _pressure_altitude_at(idx, geometric_altitude):
         """Use the same atmosphere source as Traffic at a geometric target."""
+        return PyBadaTEM._atmosphere_at(idx, geometric_altitude)[2]
+
+    @staticmethod
+    def _atmosphere_at(idx, geometric_altitude):
+        """Temperature, pressure and pressure altitude at a geometric target.
+
+        Uses the same atmosphere source as Traffic; all three are NaN where
+        that source has no valid sample.
+        """
         altitude = float(geometric_altitude)
         if altitude == float(bs.traf.alt[idx]):
-            return float(bs.traf.pressure_alt[idx])
+            return (float(bs.traf.Temp[idx]), float(bs.traf.p[idx]),
+                    float(bs.traf.pressure_alt[idx]))
         if not np.isfinite(altitude):
-            return np.nan
+            return np.nan, np.nan, np.nan
+        pressure, _, temperature = (float(value[0])
+                                    for value in aero.vatmos(np.array([altitude])))
         if pressure_altitude is None:
-            return altitude
-        pressure = float(aero.vatmos(np.array([altitude]))[0][0])
+            return temperature, pressure, altitude
         get_atmosphere = getattr(getattr(bs.traf, 'wind', None), 'get_atmosphere', None)
         if get_atmosphere is not None:
             sample = get_atmosphere(
@@ -332,9 +345,40 @@ class PyBadaTEM(PerfBase):
                 if (valid.size != 1 or any(value.size != 1 for value in values)
                         or not bool(valid[0]) or not all(np.isfinite(value[0]) and value[0] > 0
                                                          for value in values)):
-                    return np.nan
-                pressure = float(values[1][0])
-        return float(pressure_altitude(np.array([pressure]))[0])
+                    return np.nan, np.nan, np.nan
+                temperature, pressure = float(values[0][0]), float(values[1][0])
+        return temperature, pressure, float(pressure_altitude(np.array([pressure]))[0])
+
+    def _target_ceiling(self, idx, altitude, fbounds, *, mass, model, configuration_mode):
+        """Replace the ceiling with one evaluated at a guidance altitude target.
+
+        The target keeps the captured speed representation (selected Mach,
+        selected CAS, or resolution TAS) in its own sampled atmosphere. Other
+        flight bounds stay at the current operating point, and the recorder
+        keeps the current-state ceiling.
+        """
+        temperature, pressure, target_pressure_alt = self._atmosphere_at(idx, altitude)
+        if not np.isfinite(target_pressure_alt):
+            return fbounds
+        try:
+            intent = self._capture_speed_intent(idx)
+        except EvaluationError as exc:
+            return replace(fbounds, maximum_altitude=None,
+                           reason=f'target speed intent unknown: {exc}')
+        # CAS/Mach conversions depend only on static pressure, which ISA has
+        # at the pressure altitude.
+        if np.isfinite(intent.target_mach):
+            mach = float(intent.target_mach)
+        elif np.isfinite(intent.target_cas):
+            mach = float(aero.vcas2mach(intent.target_cas, target_pressure_alt))
+        else:
+            mach = float(intent.target_tas / np.sqrt(aero.gamma * aero.R * temperature))
+        target = self.flight_bounds(
+            idx, mass=mass, cas=float(aero.vmach2cas(mach, target_pressure_alt)), mach=mach,
+            model=model, configuration_mode=configuration_mode,
+            pressure_alt=target_pressure_alt, temperature=temperature, pressure=pressure)
+        return replace(fbounds, maximum_altitude=target.maximum_altitude,
+                       reason=fbounds.reason or target.reason)
 
     def _geometric_ceiling(self, idx, ceiling, requested_altitude):
         """Find a geometric target at the pressure-altitude ceiling."""
@@ -428,6 +472,10 @@ class PyBadaTEM(PerfBase):
                                      configuration_mode=configuration_mode)
                    if set(checks).intersection(flight_checks)
                    else FlightBounds('', None, None, None, None, None))
+        if (altitude is not None and EnvelopeCheck.ALTITUDE_MAX in checks
+                and float(altitude) != float(bs.traf.alt[idx])):
+            fbounds = self._target_ceiling(idx, altitude, fbounds, mass=candidate_mass,
+                                           model=model, configuration_mode=configuration_mode)
         vertical_checks = {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX}
         vbounds = (self.vertical_bounds(
                        idx, mass=candidate_mass, model=model,
