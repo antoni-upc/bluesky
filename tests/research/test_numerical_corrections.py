@@ -52,10 +52,23 @@ def assert_balance(traf,perf,mass=60000.,tas=200.):
 def test_speed_and_combined_capture_close_applied_energy(monkeypatch,delta_alt):
     traf,model,perf=configure(monkeypatch,delta_alt=delta_alt)
     perf.update_dynamics(traf,.5)
+    assert perf.energy_allocation_policy[0]=='SPEED_PRIORITY'
+    assert perf.energy_share_factor[0]==pytest.approx(.8)
     assert traf.speed_result.next_tas[0]==pytest.approx(200.05)
     assert_balance(traf,perf)
     assert model.last_fuel_thrust==pytest.approx(perf.thrust[0])
     assert perf.mass[0]==pytest.approx(60000.-perf.fuelflow[0]*.5)
+
+
+def test_esf_model_proposal_is_reallocated_for_speed_request(monkeypatch):
+    traf, model, perf = configure(monkeypatch, target=200.4)
+    model.maximum = 70000.
+    perf.update_dynamics(traf, .5)
+    assert perf.energy_allocation_policy[0] == 'SPEED_PRIORITY'
+    assert perf.energy_share_factor[0] == pytest.approx(.8)
+    assert traf.speed_result.applied_acceleration[0] == pytest.approx(.8)
+    assert 0. < traf.vs[0] < 200. * .8 / g0
+    assert_balance(traf, perf)
 
 
 def test_idle_bound_prevents_unphysical_exact_capture(monkeypatch):
