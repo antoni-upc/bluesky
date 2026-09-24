@@ -265,6 +265,19 @@ class MeteorologyProvider(WindSim):
             bs.settings.meteo_time_interpolation = enabled
             if not enabled:
                 self.next_cube = None
+            elif (self.cube is not None and self.next_cube is None and
+                  self.current_slot is not None and
+                  getattr(self, 'request_bounds', None) is not None):
+                # The active slot is not reloaded automatically, so load its
+                # successor now; the current cube is kept if that fails.
+                try:
+                    success, message = self.load(*self.request_bounds, slot=self.current_slot)
+                except Exception as exc:
+                    success, message = False, str(exc)
+                if not success:
+                    bs.settings.meteo_time_interpolation = False
+                    return False, (f'{self.source}: temporal interpolation not enabled; '
+                                   f'next slot unavailable: {message}')
         else:
             return False, 'METEOCONFIG option must be STRICT, BELOW, TIMEUPDATE, or INTERPOLATION'
         return self.configure()
