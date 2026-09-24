@@ -14,6 +14,6 @@
 00:00:02.00>RECORDRESEARCH START pybada-joint-energy-bada3.csv
 00:00:05.00>SPD B3JE 225
 00:00:05.00>ALT B3JE 12000 1000
-00:01:25.00>RECORDRESEARCH STOP
-00:01:25.10>ECHO TEST INFO Validate pybada-joint-energy-bada3.csv with family 3.
-00:01:26.00>HOLD
+00:02:45.00>RECORDRESEARCH STOP
+00:02:45.10>ECHO TEST INFO Validate pybada-joint-energy-bada3.csv with family 3.
+00:02:46.00>HOLD
