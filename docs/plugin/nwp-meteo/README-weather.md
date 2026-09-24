@@ -254,6 +254,20 @@ time. Strict mode stops the run; interactive mode switches to ISA with a
 `TIME_SLOT_EXPIRED` reason. Pre-caching alone does not disable automatic time
 updates: keep the setting enabled to advance through the prepared files.
 
+## Selected speeds under weather
+
+A selected CAS or Mach keeps its meaning in the applied atmosphere. Guidance
+converts it to a target TAS with each aircraft's applied temperature and
+pressure, so a captured selection is flown at the selected CAS or Mach rather
+than at its ISA equivalent. `CRE` and `MOVE` apply a commanded CAS or Mach the
+same way once the atmosphere at the new position is sampled, and select the
+resulting CAS, as they select the ISA CAS without weather. Aircraft on ISA,
+including ISA fallback samples, keep BlueSky's native conversion unchanged.
+
+Route ETA and RTA leg estimates still convert waypoint speeds with ISA at the
+waypoint altitude, because they describe future positions whose atmosphere
+is not sampled.
+
 ## Inspecting a point
 
 After loading a provider, query latitude, longitude, and altitude with:

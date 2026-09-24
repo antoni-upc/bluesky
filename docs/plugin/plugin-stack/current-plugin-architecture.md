@@ -82,7 +82,9 @@ sequenceDiagram
 
 The first atmosphere update is unconditional and supplies the pressure,
 temperature, density, wind, pressure altitude, and airdata used by guidance and
-performance evaluation for the tick. After position propagation, models such
+performance evaluation for the tick. Guidance converts selected CAS/Mach to a
+target TAS with that applied atmosphere; ISA aircraft keep the native
+conversion. After position propagation, models such
 as PYBADATEM request a second synchronisation so their direct applied state and
 the subsequently sampled traffic atmosphere describe the new position. Native
 performance models do not request that second update.

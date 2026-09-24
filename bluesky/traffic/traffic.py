@@ -25,7 +25,7 @@ from .activewpdata import ActiveWaypoint
 from .turbulence import Turbulence
 from .trafficgroups import TrafficGroups
 from .performance.perfbase import PerfBase
-from .atmosphere import mach_to_cas, pressure_altitude, tas_to_mach
+from .atmosphere import casormach_to_tas, mach_to_cas, pressure_altitude, tas_to_mach
 from .dynamics import SpeedStepRequest
 
 # Register settings defaults
@@ -300,6 +300,9 @@ class Traffic(Entity):
 
         # Synchronize an already-active atmosphere provider with new traffic.
         self.update_atmosphere()
+        new = slice(self.ntraf - n, self.ntraf)
+        self._command_airspeed(new, acspd)
+        self.aptas[new] = self.tas[new]
 
         new_indices = list(range(self.ntraf - n, self.ntraf))
         for idx in new_indices:
@@ -595,6 +598,38 @@ class Traffic(Entity):
         self.vs = np.where(native_vertical, native_vs, self.vs)
         self.vs = np.where(np.isfinite(self.vs), self.vs, 0)    # fix vs nan issue
 
+    def applied_tas(self, isa_tas, speed, idx=slice(None), mach=True):
+        """Replace ISA conversions of a CAS/Mach speed where weather is applied.
+
+        isa_tas is the native conversion at geometric altitude and is returned
+        unchanged for ISA aircraft and non-positive speeds, keeping the native
+        path exact. Other aircraft use their applied temperature and pressure,
+        so a captured selection flies the selected CAS or Mach.
+        """
+        speed = np.asarray(speed, dtype=float)
+        applied = (np.asarray(np.asarray(self.atmos_source, dtype=object)[idx] != 'ISA', dtype=bool)
+                   & (speed > 0.0))
+        if not np.any(applied):
+            return isa_tas
+        return np.where(applied, casormach_to_tas(
+            speed, self.Temp[idx], self.p[idx], mach=mach), isa_tas)
+
+    def _command_airspeed(self, idx, casmach):
+        """Give a commanded CAS/Mach its meaning in the applied atmosphere.
+
+        CRE and MOVE convert with ISA before the atmosphere is sampled. Once it
+        is, weather aircraft get the TAS of the commanded speed and select the
+        resulting CAS, as the native path selects its ISA CAS.
+        """
+        isa_tas = self.tas[idx]
+        tas = self.applied_tas(isa_tas, casmach, idx)
+        if tas is isa_tas:
+            return
+        self.tas[idx] = tas
+        self._update_airdata()
+        self.selspd[idx] = self.cas[idx]
+        self.update_groundspeed(accumulate_work=False)
+
     def _update_airdata(self):
         """Update CAS/Mach, preserving the exact native ISA code path."""
         actual = np.asarray([source != 'ISA' for source in self.atmos_source], dtype=bool)
@@ -718,6 +753,8 @@ class Traffic(Entity):
             self.vs[idx]     = vspd
             self.swvnav[idx] = False
         self.update_atmosphere()
+        if casmach is not None:
+            self._command_airspeed(idx, casmach)
         accepted, reason = self.perf.assess_direct_state(idx, previous)
         if accepted:
             return True
