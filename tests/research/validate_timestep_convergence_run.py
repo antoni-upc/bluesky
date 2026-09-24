@@ -75,7 +75,7 @@ def _load(path, family, label):
         if values != {expected}:
             errors.append(f'{label}: {field} values are {sorted(values)}')
 
-    conflict, recovery, stable = [], [], []
+    conflict, captured_climb, stable = [], [], []
     residuals, motion_errors, mass_bound_errors = [], [], []
     for row in rows:
         thrust = _number(row, 'thrust_n')
@@ -87,17 +87,31 @@ def _load(path, family, label):
         if _number(row, 'fuel_flow_kg_s') < 0 or _number(row, 'mass_kg') <= 0:
             errors.append(f'{label}: non-physical fuel flow or mass')
             break
-        if (row.get('energy_allocation_policy') == 'BADA_ESF'
+        if (row.get('energy_allocation_policy') == 'SPEED_PRIORITY'
                 and _number(row, 'requested_acceleration_m_s2') < -0.01
                 and _number(row, 'requested_vertical_rate_m_s') > 0.1
-                and _number(row, 'applied_acceleration_m_s2') > 0
+                and not _true(row, 'speed_capture')):
+            tas = _number(row, 'tas_m_s')
+            mass = _number(row, 'mass_kg')
+            temperature_factor = ((288.15 - 0.0065 *
+                                   _number(row, 'pressure_alt_m')) /
+                                  _number(row, 'temperature_k'))
+            requested_power = (tas * _number(row, 'requested_acceleration_m_s2') +
+                               G0 * _number(row, 'requested_vertical_rate_m_s') /
+                               temperature_factor)
+            idle_power = ((_number(row, 'idle_thrust_n') -
+                           _number(row, 'drag_n')) * tas / mass)
+            if idle_power - requested_power > 10.0:
+                conflict.append(row)
+                if (_number(row, 'applied_acceleration_m_s2') >= -0.01 or
+                        _number(row, 'applied_vertical_rate_m_s') <= 0.1 or
+                        abs(thrust - _number(row, 'idle_thrust_n')) > 1e-6):
+                    errors.append(f'{label}: infeasible request did not decelerate '
+                                  'and climb at idle thrust')
+        if (row.get('energy_allocation_policy') == 'SPEED_PRIORITY'
+                and _true(row, 'speed_capture')
                 and _number(row, 'applied_vertical_rate_m_s') > 0.1):
-            conflict.append(row)
-        if (row.get('energy_allocation_policy') == 'HORIZONTAL_ADAPTED'
-                and _number(row, 'requested_acceleration_m_s2') < -0.01
-                and _number(row, 'applied_acceleration_m_s2') < 0
-                and abs(_number(row, 'applied_vertical_rate_m_s')) <= 1e-9):
-            recovery.append(row)
+            captured_climb.append(row)
         if (_number(row, 'sim_time_s') > 100 and _true(row, 'speed_capture')
                 and abs(_number(row, 'vertical_speed_m_s')) <= 1e-6):
             stable.append(row)
@@ -130,9 +144,9 @@ def _load(path, family, label):
                 current, 'applied_acceleration_m_s2')),
                                   abs(observed_vs - _number(
                 current, 'applied_vertical_rate_m_s'))))
-    if len(conflict) < 50 or len(recovery) < 10 or len(stable) < 20:
-        errors.append(f'{label}: insufficient conflict/recovery/stable evidence '
-                      f'({len(conflict)}/{len(recovery)}/{len(stable)})')
+    if len(conflict) < 10 or len(captured_climb) < 20 or len(stable) < 20:
+        errors.append(f'{label}: insufficient conflict/captured-climb/stable evidence '
+                      f'({len(conflict)}/{len(captured_climb)}/{len(stable)})')
     if max(residuals, default=math.inf) > 0.75:
         errors.append(f'{label}: energy residual exceeds 0.75 W/kg')
     if max(motion_errors, default=math.inf) > 0.15:
@@ -158,8 +172,9 @@ def _load(path, family, label):
                          if _true(row, 'speed_capture') and
                          _number(row, 'sim_time_s') > 5.0), default=math.inf)
     metrics = {'rows': len(rows), 'times': times, 'altitude_capture': altitude_capture,
-               'speed_capture': speed_capture, 'max_energy_residual': max(residuals),
-               'max_motion_error': max(motion_errors),
+               'speed_capture': speed_capture,
+               'max_energy_residual': max(residuals, default=math.inf),
+               'max_motion_error': max(motion_errors, default=math.inf),
                'max_mass_bound_error': max(mass_bound_errors)}
     return errors, metrics
 

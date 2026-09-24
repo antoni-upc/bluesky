@@ -11,9 +11,13 @@ import bluesky as bs
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('scenario', help='Scenario name relative to scenario/, without .scn')
+    parser.add_argument('--pybada-nonstrict', action='store_true',
+                        help='Allow kinematic baselines to continue through infeasible BADA requests')
     args = parser.parse_args(argv)
 
     bs.init(mode='sim', detached=True)
+    if args.pybada_nonstrict:
+        bs.settings.pybada_strict = False
     original_send = bs.net.send
 
     def report_stack_messages(topic, data='', to_group=b''):

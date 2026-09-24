@@ -66,6 +66,7 @@ def validate(path, family='4', source='ERA5', scenario=None,
     if set(by_acid) != expected_acids:
         errors.append(f'aircraft are {sorted(by_acid)}, expected {sorted(expected_acids)}')
     max_power_residual = 0.0
+    applied_energy_samples = 0
     for acid, policy in ((report_acid, 'REPORT'), (off_acid, 'OFF')):
         samples = sorted(by_acid[acid], key=lambda row: _number(row, 'sim_time_s'))
         if len(samples) < 15:
@@ -126,8 +127,9 @@ def validate(path, family='4', source='ERA5', scenario=None,
             if not fuel_bounds[0] - 2e-3 <= mass_loss <= fuel_bounds[1] + 2e-3:
                 errors.append(f'{acid} mass/fuel integration mismatch at {current["sim_time_s"]}')
                 break
-            if current.get('energy_allocation_policy') != 'BADA_ESF':
+            if current.get('energy_allocation_policy') != 'SPEED_PRIORITY':
                 continue
+            applied_energy_samples += 1
             tas = _number(current, 'tas_m_s')
             specific_power = ((_number(current, 'thrust_n') -
                                _number(current, 'drag_n')) * tas /
@@ -152,6 +154,8 @@ def validate(path, family='4', source='ERA5', scenario=None,
             maxima[field] = max(differences)
             if maxima[field] > tolerance:
                 errors.append(f'REPORT/OFF {field} difference {maxima[field]:.6g} exceeds {tolerance}')
+    if not applied_energy_samples:
+        errors.append('no applied SPEED_PRIORITY energy samples')
     if max_power_residual > power_tolerance:
         errors.append(f'maximum total-energy residual {max_power_residual:.6f} W/kg')
     if errors:

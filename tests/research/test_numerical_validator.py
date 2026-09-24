@@ -35,3 +35,44 @@ def test_strata_include_capture_and_limit_instead_of_filtering_them():
     row=sample();row['speed_capture']='True';row['thrust_limited']='True'
     result=validate([row]);assert result['passed']
     assert any('capture=True|limited=True' in key for key in result['strata'])
+
+
+def aborted_mass_command():
+    before=sample()
+    after={**sample(), 'sim_time_s':'2', 'evaluation_mass_kg':'999.5',
+           'mass_kg':'1500', 'thrust_n':'1099.5', 'mass_max_kg':'1200',
+           'envelope_policy':'ABORT',
+           'envelope_status':'INFEASIBLE', 'envelope_last_action':'ABORTED',
+           'envelope_last_reason':'MASS_MAX'}
+    event={'component':'PYBADATEM', 'action':'ABORTED', 'continuation':'STOP',
+           'policy':'ABORT', 'reason':'MASS_MAX', 'aircraft':'T1',
+           'sim_time_s':2.0, 'requested':1500.0, 'applied':1500.0}
+    return before,after,event
+
+
+def test_terminal_mass_command_exempts_only_mass_integration():
+    before,after,event=aborted_mass_command()
+    audit=validate([before,after], [event])
+    assert audit['passed'] and audit['external_mass_command_samples']==1
+    after['drag_n']='200'
+    broken=validate([before,after], [event])
+    assert not broken['passed']
+    assert any('energy_w_kg' in error for error in broken['errors'])
+
+
+@pytest.mark.parametrize('change', ['missing_event','wrong_mass','wrong_time',
+                                     'wrong_action','not_terminal'])
+def test_mass_command_exemption_requires_matching_terminal_abort(change):
+    before,after,event=aborted_mass_command()
+    rows=[before,after]
+    events=[event]
+    if change=='missing_event': events=[]
+    elif change=='wrong_mass': event['applied']=1499.0
+    elif change=='wrong_time': event['sim_time_s']=3.0
+    elif change=='wrong_action': event['action']='ACCEPTED'
+    else:
+        rows.append({**sample(),'sim_time_s':'3','evaluation_mass_kg':'1500',
+                     'mass_kg':'1499.5'})
+    audit=validate(rows,events)
+    assert not audit['passed']
+    assert any('mass_kg' in error for error in audit['errors'])

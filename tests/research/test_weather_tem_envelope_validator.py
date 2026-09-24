@@ -41,7 +41,7 @@ def _evidence(tmp_path, schema=SCHEMA_VERSION, source='ERA5', family='4'):
                 'mass_kg': 60000.0 - 0.5 * second,
                 'applied_acceleration_m_s2': 0.0,
                 'applied_vertical_rate_m_s': 0.0,
-                'energy_allocation_policy': 'HORIZONTAL_ADAPTED',
+                'energy_allocation_policy': 'SPEED_PRIORITY',
                 'envelope_policy': policy, 'envelope_profile': 'LONGITUDINAL',
                 'envelope_status': 'VALID', 'envelope_failed_checks': '',
                 'envelope_event_count': 0,
@@ -73,7 +73,7 @@ def test_weather_tem_validator_accepts_matrix_cells(tmp_path, source, family):
 
 
 @pytest.mark.parametrize('schema', ['samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'])
-def test_weather_tem_validator_rejects_pre_v11_schema(tmp_path, schema):
+def test_weather_tem_validator_rejects_pre_v12_schema(tmp_path, schema):
     path, scenario, acids = _evidence(tmp_path, schema=schema)
     result = validate(path, '4', 'ERA5', scenario, *acids)
     assert result.startswith('INVALID')
@@ -91,3 +91,15 @@ def test_weather_tem_validator_rejects_fallback(tmp_path):
     result = validate(path, '4', 'ERA5', scenario, *acids)
     assert result.startswith('INVALID')
     assert 'fallback reasons' in result
+
+
+def test_weather_tem_validator_checks_applied_energy(tmp_path):
+    path, scenario, acids = _evidence(tmp_path)
+    rows = list(csv.DictReader(path.open(newline='', encoding='utf-8')))
+    rows[1]['drag_n'] = '5000.0'
+    with path.open('w', newline='', encoding='utf-8') as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0])
+        writer.writeheader()
+        writer.writerows(rows)
+    result = validate(path, '4', 'ERA5', scenario, *acids)
+    assert 'maximum total-energy residual' in result

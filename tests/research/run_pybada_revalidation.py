@@ -86,7 +86,7 @@ def execute(command, label):
 
 def run_scenario(scenario):
     output = execute(
-        [PYTHON, '-u', str(ROOT / 'tests/research/run_scenario_detached.py'),
+        [PYTHON, '-u', '-m', 'tests.research.run_scenario_detached',
          f'research/{scenario}'], scenario)
     return scenario, output
 
@@ -122,13 +122,13 @@ def validate_generic(scenario):
         raise RuntimeError(f'{scenario}: event ledger is not newline-flushed')
     if any(row.get('dynamics_mode') == 'TEM' for row in rows):
         from tests.research.validate_numerical_run import validate as validate_numerical
-        audit = validate_numerical(rows)
+        audit = validate_numerical(rows, events)
         audit_path = path.with_suffix('.numerical-audit.json')
         audit_path.write_text(json.dumps(audit, indent=2, allow_nan=False) + '\n',
                               encoding='utf-8')
         if not audit['passed']:
             raise RuntimeError(
-                f'{scenario}: v11 numerical audit failed: {audit["errors"][:3]}')
+                f'{scenario}: numerical audit failed: {audit["errors"][:3]}')
     return f'{scenario}: {len(rows)} rows, {len(events)} events, dt={base_dt:g} s'
 
 

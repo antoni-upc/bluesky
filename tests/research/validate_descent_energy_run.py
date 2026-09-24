@@ -62,7 +62,7 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
 
     ordered = sorted(rows, key=lambda row: _number(row, 'sim_time_s'))
     joint = [row for row in ordered
-             if row.get('energy_allocation_policy') == 'BADA_ESF'
+             if row.get('energy_allocation_policy') == 'SPEED_PRIORITY'
              and _number(row, 'requested_acceleration_m_s2') < -0.01
              and _number(row, 'requested_vertical_rate_m_s') < -0.1
              and _number(row, 'applied_acceleration_m_s2') < -1e-6
@@ -120,6 +120,10 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
     if max(mass_errors, default=math.inf) > 0.01:
         errors.append(f'maximum mass/fuel mismatch '
                       f'{max(mass_errors, default=math.inf):.6f} kg')
+    if any(not (_number(row, 'idle_thrust_n') - 1e-6 <=
+                _number(row, 'thrust_n') <=
+                _number(row, 'maximum_thrust_n') + 1e-6) for row in joint):
+        errors.append('joint samples exceed recorded thrust bounds')
     if joint and not all(0.0 <= _number(row, 'energy_share_factor') <= 2.0
                          for row in joint):
         errors.append('joint samples contain implausible energy-share factors')

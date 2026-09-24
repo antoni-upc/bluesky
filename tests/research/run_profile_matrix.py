@@ -558,7 +558,10 @@ def _run_worker(args):
                 recorded_rows = list(csv.DictReader(stream))
             if any(row.get("dynamics_mode") == "TEM" for row in recorded_rows):
                 from tests.research.validate_numerical_run import validate as validate_numerical
-                numerical = validate_numerical(recorded_rows)
+                event_path = Path(recorder_module.recorder.event_path)
+                events = [json.loads(line) for line in event_path.read_text(
+                    encoding='utf-8').splitlines() if line.strip()]
+                numerical = validate_numerical(recorded_rows, events)
                 numerical_path = Path(paths[0]).with_suffix(".numerical-audit.json")
                 numerical_path.write_text(
                     json.dumps(numerical, indent=2, allow_nan=False) + "\n",

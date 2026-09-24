@@ -77,29 +77,41 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
         if _number(row, 'fuel_flow_kg_s') < 0.0 or _number(row, 'mass_kg') <= 0.0:
             errors.append('fuel flow or mass is non-physical')
             break
-    conflict = [row for row in ordered
-                if row.get('energy_allocation_policy') == 'BADA_ESF'
-                and _number(row, 'requested_acceleration_m_s2') < -0.01
-                and _number(row, 'requested_vertical_rate_m_s') > 0.1
-                and _number(row, 'applied_acceleration_m_s2') > 1e-6
-                and _number(row, 'applied_vertical_rate_m_s') > 0.1]
-    recovery = [row for row in ordered
-                if row.get('energy_allocation_policy') == 'HORIZONTAL_ADAPTED'
-                and _number(row, 'requested_acceleration_m_s2') < -0.01
-                and _number(row, 'applied_acceleration_m_s2') < -1e-6
-                and abs(_number(row, 'applied_vertical_rate_m_s')) <= 1e-9]
+    # Select an infeasible deceleration-plus-climb request independently of
+    # its applied response. In these scenarios requested power lies below the
+    # idle-thrust floor; speed-priority must produce feasible motion instead.
+    conflict = []
+    for row in ordered:
+        if (row.get('energy_allocation_policy') != 'SPEED_PRIORITY'
+                or _number(row, 'requested_acceleration_m_s2') >= -0.01
+                or _number(row, 'requested_vertical_rate_m_s') <= 0.1
+                or _true(row, 'speed_capture')):
+            continue
+        tas = _number(row, 'tas_m_s')
+        mass = _number(row, 'mass_kg')
+        requested_power = (tas * _number(row, 'requested_acceleration_m_s2') +
+                           G0 * _number(row, 'requested_vertical_rate_m_s') /
+                           _temperature_factor(row))
+        idle_power = ((_number(row, 'idle_thrust_n') - _number(row, 'drag_n')) *
+                      tas / mass)
+        if idle_power - requested_power > 10.0:
+            conflict.append(row)
+    captured_climb = [row for row in ordered
+                      if row.get('energy_allocation_policy') == 'SPEED_PRIORITY'
+                      and _true(row, 'speed_capture')
+                      and _number(row, 'applied_vertical_rate_m_s') > 0.1]
     stable = [row for row in ordered
               if _number(row, 'sim_time_s') > 100.0
               and abs(_number(row, 'vertical_speed_m_s')) <= 1e-6
               and _true(row, 'speed_capture')]
-    if len(conflict) < 100:
+    if len(conflict) < 20:
         errors.append(f'insufficient conflicting-command evidence: {len(conflict)}')
-    if len(recovery) < 20:
-        errors.append(f'insufficient post-climb deceleration evidence: {len(recovery)}')
+    if len(captured_climb) < 20:
+        errors.append(f'insufficient captured-speed climb evidence: {len(captured_climb)}')
     if len(stable) < 20:
         errors.append(f'insufficient stable dual-capture evidence: {len(stable)}')
 
-    residuals, request_gaps, ax_errors, vs_errors, mass_errors = [], [], [], [], []
+    residuals, idle_gaps, ax_errors, vs_errors, mass_errors = [], [], [], [], []
     conflict_ids = {id(row) for row in conflict}
     for previous, current in zip(ordered, ordered[1:]):
         dt = _number(current, 'sim_time_s') - _number(previous, 'sim_time_s')
@@ -123,12 +135,15 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
             tas * _number(current, 'applied_acceleration_m_s2') +
             G0 * _number(current, 'applied_vertical_rate_m_s') / temperature_factor)
         residuals.append(abs(available_power - allocated_power))
-        request_gaps.append(abs(available_power - requested_power))
-        if requested_power >= 0.0 or allocated_power <= 0.0:
-            errors.append('commands do not demonstrate opposing requested/applied power')
+        idle_power = ((_number(current, 'idle_thrust_n') -
+                       _number(current, 'drag_n')) * tas / mass)
+        idle_gaps.append(idle_power - requested_power)
+        if (_number(current, 'applied_acceleration_m_s2') >= -0.01 or
+                _number(current, 'applied_vertical_rate_m_s') <= 0.1):
+            errors.append('conflicting command did not decelerate while climbing')
         if abs(_number(current, 'thrust_n') -
-               _number(current, 'maximum_thrust_n')) > 1e-6:
-            errors.append('conflicting climb does not use maximum thrust')
+               _number(current, 'idle_thrust_n')) > 1e-6:
+            errors.append('conflicting climb does not use idle thrust')
         observed_ax = (_number(current, 'tas_m_s') -
                        _number(previous, 'tas_m_s')) / dt
         observed_vs = (_number(current, 'geometric_alt_m') -
@@ -137,8 +152,8 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
                              _number(current, 'applied_acceleration_m_s2')))
         vs_errors.append(abs(observed_vs -
                              _number(current, 'applied_vertical_rate_m_s')))
-    if min(request_gaps, default=-math.inf) < 10.0:
-        errors.append('requested power is not materially incompatible with available power')
+    if min(idle_gaps, default=-math.inf) < 10.0:
+        errors.append('requested power is not materially below idle power')
     if max(residuals, default=math.inf) > power_tolerance:
         errors.append(f'maximum applied total-energy residual '
                       f'{max(residuals, default=math.inf):.6f} W/kg')
@@ -170,8 +185,8 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
     if errors:
         return 'INVALID evidence:\n  - ' + '\n  - '.join(dict.fromkeys(errors))
     return (f'VALID: {len(rows)} BADA {family} conflict-energy rows; '
-            f'conflict={len(conflict)}, recovery={len(recovery)}, stable={len(stable)}, '
-            f'min request gap={min(request_gaps):.6f} W/kg, '
+            f'conflict={len(conflict)}, captured climb={len(captured_climb)}, '
+            f'stable={len(stable)}, min idle gap={min(idle_gaps):.6f} W/kg, '
             f'max power residual={max(residuals):.6f} W/kg, '
             f'max ax error={max(ax_errors):.6f} m/s2, '
             f'max vs error={max(vs_errors):.6f} m/s')

@@ -51,11 +51,12 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
                 errors.append(f'{field} values are {sorted(values)}, expected {expected}')
 
     joint = [row for row in rows
-             if row.get('energy_allocation_policy') == 'BADA_ESF'
-             and abs(_number(row, 'applied_vertical_rate_m_s')) > 0.1]
+             if row.get('energy_allocation_policy') == 'SPEED_PRIORITY'
+             and abs(_number(row, 'applied_vertical_rate_m_s')) > 0.1
+             and abs(_number(row, 'applied_acceleration_m_s2')) > 0.01]
     if len(joint) < 20:
-        errors.append(f'only {len(joint)} joint BADA_ESF samples')
-    residuals, ax_errors, vs_errors = [], [], []
+        errors.append(f'only {len(joint)} joint SPEED_PRIORITY samples')
+    residuals, ax_errors, vs_errors, mass_errors = [], [], [], []
     ordered = sorted(rows, key=lambda row: _number(row, 'sim_time_s'))
     for previous, current in zip(ordered, ordered[1:]):
         if current not in joint:
@@ -64,6 +65,9 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
         if dt <= 0.0:
             errors.append('timestamps are not strictly increasing')
             continue
+        mass_errors.append(abs(_number(current, 'mass_kg') -
+                               (_number(previous, 'mass_kg') -
+                                _number(current, 'fuel_flow_kg_s') * dt)))
         tas = _number(current, 'tas_m_s')
         mass = _number(previous, 'mass_kg')
         excess_specific_power = ((_number(current, 'thrust_n') -
@@ -91,6 +95,13 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
     if max(vs_errors, default=math.inf) > motion_tolerance:
         errors.append(f'maximum vertical motion mismatch '
                       f'{max(vs_errors, default=math.inf):.6f} m/s')
+    if max(mass_errors, default=math.inf) > 0.01:
+        errors.append(f'maximum mass/fuel mismatch '
+                      f'{max(mass_errors, default=math.inf):.6f} kg')
+    if any(not (_number(row, 'idle_thrust_n') - 1e-6 <=
+                _number(row, 'thrust_n') <=
+                _number(row, 'maximum_thrust_n') + 1e-6) for row in joint):
+        errors.append('joint samples exceed recorded thrust bounds')
     if joint and not all(0.0 <= _number(row, 'energy_share_factor') <= 2.0
                          for row in joint):
         errors.append('joint samples contain implausible energy-share factors')
