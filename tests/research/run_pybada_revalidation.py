@@ -61,6 +61,12 @@ LEGACY = [
     ('pybada3-route', 'validate_bada3_route.py', []),
 ]
 
+# Scenarios whose correct outcome is an unplanned strict-failure HOLD, with the
+# failure reason the detached runner must report.
+EXPECTED_FAILURES = {
+    'pybada-envelope-lateral-strict70': 'Unbounded TEM output',
+}
+
 
 def matrix():
     entries = []
@@ -85,10 +91,27 @@ def execute(command, label):
 
 
 def run_scenario(scenario):
-    output = execute(
-        [PYTHON, '-u', '-m', 'tests.research.run_scenario_detached',
-         f'research/{scenario}'], scenario)
-    return scenario, output
+    command = [PYTHON, '-u', '-m', 'tests.research.run_scenario_detached',
+               f'research/{scenario}']
+    if scenario not in EXPECTED_FAILURES:
+        return scenario, execute(command, scenario)
+    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, check=False)
+    failure_log(scenario).write_text(f'exit={result.returncode}\n{result.stdout}',
+                                     encoding='utf-8')
+    return scenario, result.stdout.strip()
+
+
+def failure_log(scenario):
+    return ROOT / 'output' / f'{scenario}.runner.log'
+
+
+def validate_expected_failure(scenario, reason):
+    status, _, output = failure_log(scenario).read_text(encoding='utf-8').partition('\n')
+    if status != 'exit=1' or 'UNPLANNED HOLD:' not in output or reason not in output:
+        raise RuntimeError(f'{scenario}: expected an unplanned strict-failure HOLD '
+                           f'({reason}), got {status}\n{output[-2000:]}')
+    return f'{scenario}: unplanned strict-failure HOLD detected ({reason})'
 
 
 def evidence_path(scenario):
@@ -141,6 +164,8 @@ def specialized_validations(entries):
                 [PYTHON, str(ROOT / 'tests/research' / validator),
                  str(evidence_path(scenario)), *extra], f'validator for {scenario}')
             results.append(output)
+    for scenario, reason in EXPECTED_FAILURES.items():
+        results.append(validate_expected_failure(scenario, reason))
     for family in ('3', '4'):
         prefix = ROOT / 'output' / f'pybada-convergence-bada{family}'
         output = execute([
@@ -172,7 +197,9 @@ def main(argv=None):
                 'dependency-free research suite'))
         if not args.validate_only:
             with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-                futures = {pool.submit(run_scenario, item[0]): item[0] for item in entries}
+                scenarios = [item[0] for item in entries] + list(EXPECTED_FAILURES)
+                futures = {pool.submit(run_scenario, scenario): scenario
+                           for scenario in scenarios}
                 for future in as_completed(futures):
                     scenario, _ = future.result()
                     print(f'RAN {scenario}', flush=True)
@@ -183,7 +210,8 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
         parser.exit(1, f'REVALIDATION FAILED: {exc}\n')
     print(f'REVALIDATION PASSED: {len(entries)} licensed scenarios, '
-          f'{sum(item[1] is not None for item in entries) + 2} scientific validators')
+          f'{sum(item[1] is not None for item in entries) + 2} scientific validators, '
+          f'{len(EXPECTED_FAILURES)} expected strict-failure gate(s)')
     return 0
 
 

@@ -166,6 +166,11 @@ python -m pytest tests/research -m external_weather \
   --run-manifest research-run.local.json
 ```
 
+The PyBADA revalidation runner also runs expected-failure gates. For example,
+`pybada-envelope-lateral-strict70` passes only if its 70° REPORT turn reaches an
+unbounded TEM output and the detached runner exits with `UNPLANNED HOLD`. Its
+log is kept as `output/<scenario>.runner.log` for `--validate-only` runs.
+
 Use `--validate-only --skip-unit` with the two revalidation runners only when
 the existing outputs were generated from the same declared commit and resource
 set. Otherwise, rerun their scenarios. The disabled-baseline comparison requires

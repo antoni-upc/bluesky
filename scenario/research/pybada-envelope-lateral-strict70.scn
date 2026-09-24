@@ -1,0 +1,31 @@
+# Expected-failure regression gate for licensed BADA 4.2.
+# Run with: python -m tests.research.run_scenario_detached research/pybada-envelope-lateral-strict70
+# The unconstrained 70 degree REPORT turn drives modeled drag to an unbounded
+# TEM output at about 5.3 s, shortly after the 4.2 s turn command. Strict
+# PYBADATEM must hold, and the detached runner must exit 1 with UNPLANNED
+# HOLD. Recording is never finalized, so this run produces no metadata. The
+# canonical REPORT/ENFORCE comparison is pybada-envelope-lateral at 67 degrees.
+00:00:00.00>ECHO TEST INFO === PYBADATEM STRICT-FAILURE LATERAL GATE (70 DEGREES) ===
+00:00:00.20>PLUGIN LOAD PYBADATEM
+00:00:00.30>PLUGIN LOAD RESEARCHRECORDER
+00:00:00.40>PERFMODEL BADA4
+00:00:01.00>CRE LATR,A320-232,41.30,2.10,90,FL200,250
+00:00:01.10>CRE LATE,A320-232,41.32,2.10,90,FL200,250
+00:00:01.20>DYNAMICS LATR TEM
+00:00:01.30>DYNAMICS LATE TEM
+00:00:01.35>BADACONFIG LATR CRUISE
+00:00:01.36>BADACONFIG LATE CRUISE
+00:00:02.10>BANK LATR 70
+00:00:02.20>BANK LATE 70
+00:00:02.30>ENVELOPECHECKS LATR CUSTOM BANK_ANGLE LOAD_FACTOR
+00:00:02.40>ENVELOPECHECKS LATE CUSTOM BANK_ANGLE LOAD_FACTOR
+00:00:02.50>ENVELOPE LATR REPORT
+00:00:02.60>ENVELOPE LATE ENFORCE
+00:00:03.00>RECORDRESEARCH START pybada-envelope-lateral-strict70.csv
+00:00:04.00>ECHO TEST ACTION Commanding both aircraft to turn with the requested 70 degree bank.
+00:00:04.05>ECHO TEST EXPECT LATR REPORT keeps 70 degrees; strict PYBADATEM holds on an unbounded TEM output.
+00:00:04.20>HDG LATR 270
+00:00:04.30>HDG LATE 270
+00:00:20.00>ECHO TEST ERROR Expected strict evaluation failure did not hold the simulation.
+00:00:20.10>RECORDRESEARCH STOP
+00:00:20.20>HOLD
