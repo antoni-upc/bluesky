@@ -1,6 +1,7 @@
 """Atomic HTTP cache helper for meteorological datasets."""
 
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -32,3 +33,14 @@ def atomic_download(session, url, target, validate, timeout=(10, 120)):
     except Exception:
         part.unlink(missing_ok=True)
         raise
+
+
+def probe_writable(folder):
+    """Fail early unless the cache folder accepts new files.
+
+    The probe file has a unique name, so processes starting together on one
+    shared cache cannot delete each other's probe.
+    """
+    handle, name = tempfile.mkstemp(dir=folder, prefix='.write-capability-')
+    os.close(handle)
+    os.unlink(name)

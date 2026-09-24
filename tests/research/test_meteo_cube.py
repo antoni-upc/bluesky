@@ -476,3 +476,17 @@ def test_unavailable_successor_keeps_interpolation_off_and_current_weather(monke
     assert not success and 'next slot missing' in message
     assert not bs.settings.meteo_time_interpolation
     assert provider.cube is current and provider.next_cube is None
+
+
+@pytest.mark.parametrize('provider_class', [WindECMWF, WindGFS])
+def test_cache_probe_does_not_collide_with_a_concurrent_start(monkeypatch, tmp_path,
+                                                             provider_class):
+    # A fixed probe name let two processes starting together delete each
+    # other's probe, so one weather plugin failed to load and flew ISA. A
+    # leftover of that fixed name must not matter, and no probe may remain.
+    (tmp_path / '.write-capability').mkdir()
+    monkeypatch.setattr('bluesky.settings.era5_cache_path', str(tmp_path))
+    monkeypatch.setattr('bluesky.settings.gfs_cache_path', str(tmp_path))
+    provider = object.__new__(provider_class)
+    provider_class.__init__(provider)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ['.write-capability']
