@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
-"""Run one research scenario in a fresh detached process and exit on HOLD."""
+"""Run one research scenario in a fresh detached process and exit on HOLD.
+
+The exit status is 1 when the HOLD followed a strict model failure rather
+than a scenario command or a planned envelope ABORT.
+"""
 
 import argparse
+import sys
 import threading
 import time
 
 import bluesky as bs
+
+
+# Echoed by PYBADATEM immediately before it holds on a failed evaluation.
+STRICT_FAILURE_MARKER = 'strict evaluation failure'
+
+
+def unplanned_hold(messages):
+    """Return the first echoed message that reports a strict-failure HOLD."""
+    return next((message for message in messages if STRICT_FAILURE_MARKER in message), None)
 
 
 def main(argv=None):
@@ -19,12 +33,14 @@ def main(argv=None):
     if args.pybada_nonstrict:
         bs.settings.pybada_strict = False
     original_send = bs.net.send
+    messages = []
 
     def report_stack_messages(topic, data='', to_group=b''):
         if topic in ('ECHO', b'ECHO') and isinstance(data, dict):
             message = data.get('text', '')
             if message:
                 print(message, flush=True)
+                messages.append(message)
         return original_send(topic, data, to_group)
 
     bs.net.send = report_stack_messages
@@ -48,6 +64,10 @@ def main(argv=None):
     watcher.start()
     bs.sim.run()
     watcher.join(timeout=1.0)
+    failure = unplanned_hold(messages)
+    if failure:
+        print(f'UNPLANNED HOLD: {failure}', file=sys.stderr, flush=True)
+        return 1
     return 0
 
 
