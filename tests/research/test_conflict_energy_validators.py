@@ -1,4 +1,4 @@
-"""Portable regression evidence for below-idle requests and timestep gates."""
+"""Portable regression evidence for below-idle conflict requests."""
 
 import csv
 import json
@@ -7,18 +7,16 @@ import pytest
 
 from tests.research.schema_compat import SCHEMA_VERSION
 from tests.research.validate_conflict_energy_run import validate as validate_conflict
-from tests.research.validate_timestep_convergence_run import validate as validate_convergence
 
 
 G = 9.80665
 
 
-def make_evidence(tmp_path, family, *, label=None):
-    cadence = 0.05 if label is None else 0.1
+def make_evidence(tmp_path, family):
+    cadence = 0.05
     count = round(120.0 / cadence) + 1
     climb_end = round(100.0 / cadence)
-    stem = (f'pybada-conflict-energy-bada{family}' if label is None else
-            f'pybada-convergence-bada{family}-{label}')
+    stem = f'pybada-conflict-energy-bada{family}'
     path = tmp_path / f'{stem}.csv'
     rows = []
     tas, altitude = 200.0, 3557.6
@@ -42,7 +40,7 @@ def make_evidence(tmp_path, family, *, label=None):
         thrust = (10000.0 if conflict else
                   30000.0 + old_mass * (acceleration + G * vertical / tas))
         rows.append({
-            'acid': f'B{family}' + ('CE' if label is None else 'CV'),
+            'acid': f'B{family}CE',
             'sim_time_s': t, 'performance_model': f'PYBADATEM-BADA{family}',
             'performance_dataset_version': '3.15' if family == '3' else '4.2',
             'performance_aircraft': 'A320__' if family == '3' else 'A320-232',
@@ -69,8 +67,7 @@ def make_evidence(tmp_path, family, *, label=None):
         writer.writerows(rows)
     path.with_suffix('.metadata.json').write_text(json.dumps({
         'schema_version': SCHEMA_VERSION, 'scenario': stem,
-        'sample_intervals_s': [cadence], 'base_timestep_s': (
-            None if label is None else {'dt100': .1, 'dt050': .05, 'dt020': .02}[label]),
+        'sample_intervals_s': [cadence], 'base_timestep_s': None,
         'event_total': 0, 'columns': list(rows[0]),
     }), encoding='utf-8')
     return path, rows
@@ -88,9 +85,3 @@ def test_conflict_gate_accepts_idle_deceleration_and_rejects_old_policy(tmp_path
         writer.writerows(rows)
     assert 'insufficient conflicting-command evidence: 0' in validate_conflict(path, family)
 
-
-@pytest.mark.parametrize('family', ['3', '4'])
-def test_convergence_gate_compares_complete_applied_trajectories(tmp_path, family):
-    paths = {label: make_evidence(tmp_path, family, label=label)[0]
-             for label in ('dt100', 'dt050', 'dt020')}
-    assert validate_convergence(paths, family).startswith('VALID:')

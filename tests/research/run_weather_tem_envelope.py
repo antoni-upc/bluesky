@@ -7,6 +7,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from tests.research.run_convergence_study import (DEFAULT_DTS, GATES, gate_scenario,
+                                                  run_variant, study, variants)
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
@@ -16,6 +18,8 @@ MATRIX = (
     ('gfs-tem-envelope-bada3', 'GFS', '3', 'G3ER', 'G3EO'),
     ('gfs-tem-envelope-bada4', 'GFS', '4', 'G4ER', 'G4EO'),
 )
+# Timestep-convergence gate in weather, run at DEFAULT_DTS through the study tool.
+CONVERGENCE_GATE = 'era5-convergence-bada4'
 
 
 def execute(command, label):
@@ -64,14 +68,23 @@ def main(argv=None):
         if not args.validate_only:
             with ThreadPoolExecutor(max_workers=args.jobs) as pool:
                 futures = [pool.submit(run_scenario, entry) for entry in MATRIX]
+                futures += [pool.submit(run_variant, path) for path, _ in
+                            variants(gate_scenario(CONVERGENCE_GATE), DEFAULT_DTS).values()]
                 for future in as_completed(futures):
                     print(f'RAN {future.result()}', flush=True)
         for entry in MATRIX:
             print(validate_entry(entry))
+        errors, report = study(gate_scenario(CONVERGENCE_GATE), run=False,
+                               **GATES[CONVERGENCE_GATE])
+        if errors:
+            raise RuntimeError(f'{CONVERGENCE_GATE}: timestep convergence failed: {errors[:3]}')
+        print(f'{CONVERGENCE_GATE}: first-order convergence for '
+              f'{len(report["aircraft"])} aircraft')
         execute(['git', 'diff', '--check'], 'git diff --check')
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
         parser.exit(1, f'WEATHER/TEM ENVELOPE GATE FAILED: {exc}\n')
-    print('WEATHER/TEM ENVELOPE GATE PASSED: 4 licensed scenarios, 4 validators')
+    print('WEATHER/TEM ENVELOPE GATE PASSED: 4 licensed scenarios, 4 validators, '
+          '1 convergence gate')
     return 0
 
 

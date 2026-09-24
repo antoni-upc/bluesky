@@ -171,6 +171,43 @@ The PyBADA revalidation runner also runs expected-failure gates. For example,
 unbounded TEM output and the detached runner exits with `UNPLANNED HOLD`. Its
 log is kept as `output/<scenario>.runner.log` for `--validate-only` runs.
 
+### Timestep convergence
+
+The TEM integrates each step explicitly, so recorded trajectories carry a
+first-order discretisation error. `tests/research/run_convergence_study.py`
+runs one scenario at 0.10, 0.05 and 0.025 s, applies the generic evidence and
+numerical audit to each run, and compares them per aircraft:
+
+- the observed order `p = log2(d12 / d23)` on the smooth segment before the
+  aircraft's first discrete event must lie in 0.7–1.3;
+- over the whole run, where a capture leaves a converging but grid-dependent
+  offset, the error against the finest run must shrink at least as order 0.5
+  predicts;
+- speed-capture and level-off times must agree within three steps plus the
+  recorder cadence;
+- fields declared exact must agree at every timestep.
+
+Differences below about 1 cm, 0.1 mm/s or 10 g are treated as resolved and are
+not used for order estimates. The report is written to
+`output/convergence/<scenario>/report.json`.
+
+The PyBADA revalidation runner includes the BADA 3 and BADA 4 gates
+(`pybada-convergence-bada3|4`) and the weather runner includes
+`era5-convergence-bada4`. Their aircraft isolate a capped climb (which must
+integrate exactly), an uncapped rated-thrust climb, a thrust-limited
+acceleration, an idle descent, `VERTICAL_PRIORITY` and `JOINT` climbs, and a
+climbing turn. A gate passing does not establish convergence for another
+route: run the tool on the campaign scenario itself and bound the quantity
+the study reports, for example
+
+```shell
+python tests/research/run_convergence_study.py research/my-route \
+  --observable fuel_burn_kg --production-dt 0.05 --tolerance 5
+```
+
+which fails if the Richardson-extrapolated fuel-burn error at 0.05 s exceeds
+5 kg for any aircraft.
+
 Use `--validate-only --skip-unit` with the two revalidation runners only when
 the existing outputs were generated from the same declared commit and resource
 set. Otherwise, rerun their scenarios. The disabled-baseline comparison requires

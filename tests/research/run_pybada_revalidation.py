@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from tests.research.schema_compat import SCHEMA_VERSION
+from tests.research.run_convergence_study import (DEFAULT_DTS, GATES, gate_scenario,
+                                                  run_variant, study, variants)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +63,9 @@ LEGACY = [
     ('pybada3-route', 'validate_bada3_route.py', []),
 ]
 
+# Timestep-convergence gates, each run at DEFAULT_DTS through the study tool.
+CONVERGENCE_GATES = ('pybada-convergence-bada3', 'pybada-convergence-bada4')
+
 # Scenarios whose correct outcome is an unplanned strict-failure HOLD, with the
 # failure reason the detached runner must report.
 EXPECTED_FAILURES = {
@@ -76,9 +81,6 @@ def matrix():
             entries.append((scenario, f'validate_{validator}_run.py',
                             ['--family', family]))
     entries.extend(LEGACY)
-    for family in ('3', '4'):
-        for label in ('dt100', 'dt050', 'dt020'):
-            entries.append((f'pybada-convergence-bada{family}-{label}', None, []))
     return entries
 
 
@@ -166,16 +168,16 @@ def specialized_validations(entries):
             results.append(output)
     for scenario, reason in EXPECTED_FAILURES.items():
         results.append(validate_expected_failure(scenario, reason))
-    for family in ('3', '4'):
-        prefix = ROOT / 'output' / f'pybada-convergence-bada{family}'
-        output = execute([
-            PYTHON, str(ROOT / 'tests/research/validate_timestep_convergence_run.py'),
-            '--family', family,
-            '--dt100', f'{prefix}-dt100.csv',
-            '--dt050', f'{prefix}-dt050.csv',
-            '--dt020', f'{prefix}-dt020.csv'], f'convergence validator BADA {family}')
-        results.append(output)
+    for gate in CONVERGENCE_GATES:
+        results.append(validate_convergence(gate))
     return results
+
+
+def validate_convergence(gate):
+    errors, report = study(gate_scenario(gate), run=False, **GATES[gate])
+    if errors:
+        raise RuntimeError(f'{gate}: timestep convergence failed: {errors[:3]}')
+    return f'{gate}: first-order convergence for {len(report["aircraft"])} aircraft'
 
 
 def main(argv=None):
@@ -198,11 +200,14 @@ def main(argv=None):
         if not args.validate_only:
             with ThreadPoolExecutor(max_workers=args.jobs) as pool:
                 scenarios = [item[0] for item in entries] + list(EXPECTED_FAILURES)
-                futures = {pool.submit(run_scenario, scenario): scenario
-                           for scenario in scenarios}
+                futures = [pool.submit(run_scenario, scenario) for scenario in scenarios]
+                futures += [pool.submit(run_variant, path)
+                            for gate in CONVERGENCE_GATES
+                            for path, _ in variants(gate_scenario(gate), DEFAULT_DTS).values()]
                 for future in as_completed(futures):
-                    scenario, _ = future.result()
-                    print(f'RAN {scenario}', flush=True)
+                    result = future.result()
+                    print(f'RAN {result[0] if isinstance(result, tuple) else result}',
+                          flush=True)
         results = specialized_validations(entries)
         for result in results:
             print(result)
@@ -210,7 +215,8 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, json.JSONDecodeError, RuntimeError) as exc:
         parser.exit(1, f'REVALIDATION FAILED: {exc}\n')
     print(f'REVALIDATION PASSED: {len(entries)} licensed scenarios, '
-          f'{sum(item[1] is not None for item in entries) + 2} scientific validators, '
+          f'{sum(item[1] is not None for item in entries)} scientific validators, '
+          f'{len(CONVERGENCE_GATES)} convergence gates, '
           f'{len(EXPECTED_FAILURES)} expected strict-failure gate(s)')
     return 0
 
