@@ -231,6 +231,67 @@ when the audit fails. The audit checks geometric point-mass balance and
 one-step TAS, altitude, and mass updates against the v12 evaluation state; it
 does not establish observed-flight accuracy.
 
+### Timestep-convergence study
+
+TEM results carry a first-order discretisation error that depends on the
+simulation timestep. Before relying on a campaign's results, show that the
+chosen timestep is converged for that campaign's scenario:
+
+```shell
+python tests/research/run_convergence_study.py research/my-route \
+  --observable fuel_burn_kg --production-dt 0.05 --tolerance 5
+```
+
+The tool writes one variant of the scenario per timestep to
+`output/convergence/<scenario>/<scenario>-dtNNN.scn` (any `DT` line replaced,
+the recorder output renamed to `<scenario>-dtNNN.csv`), runs each in a fresh
+detached process, applies the generic evidence and numerical audit to each run,
+and compares them per aircraft. It prints one line per aircraft and writes the
+full result to `output/convergence/<scenario>/report.json`; the exit status is
+non-zero if any check fails.
+
+The scenario must contain exactly one `RECORDRESEARCH START`, and its
+`RECORDRESEARCH INTERVAL` must be a whole multiple of every timestep studied.
+Give it relative to `scenario/` without `.scn`, or as an absolute path.
+
+| Option                   | Meaning                                                                                                   |
+|--------------------------|-----------------------------------------------------------------------------------------------------------|
+| `--dt A B C`             | Three timesteps with one constant ratio; default `0.10 0.05 0.025`.                                       |
+| `--fields ...`           | Recorded fields to compare; default altitude (geometric and pressure), TAS, mass, latitude and longitude. |
+| `--exact ACID:FIELD ...` | Fields that must agree at every timestep, e.g. a constant-rate climb.                                     |
+| `--observable NAME`      | `fuel_burn_kg` or `final:<field>`, extrapolated to its zero-timestep limit.                               |
+| `--production-dt S`      | The timestep the campaign uses; must be one of the three.                                                 |
+| `--tolerance X`          | Maximum estimated observable error at `--production-dt`, in its units.                                    |
+| `--order-band LOW HIGH`  | Accepted observed order on smooth segments; default `0.7 1.3`.                                            |
+| `--validate-only`        | Re-analyse existing variant outputs without running them.                                                 |
+| `--jobs N`               | Variants run concurrently; default 3.                                                                     |
+| `--pybada-nonstrict`     | Pass `--pybada-nonstrict` to each run, e.g. for kinematic baselines.                                      |
+
+For each aircraft and field the report gives the error against the finest run
+and a status:
+
+- `first order` (with its observed order `p`): the order measured on the
+  smooth segment before the aircraft's first speed capture or level-off lies
+  in the band;
+- `resolved`: differences are below the resolution of about 1 cm of altitude
+  or position, 0.1 mm/s of TAS, or 10 g of fuel, so there is no order to
+  measure;
+- `exact` or `not exact` for fields given with `--exact`;
+- `order outside band`: a failure.
+
+Independently of the status, the whole-run error must shrink at least as
+order 0.5 predicts, and capture and level-off times must agree within three
+steps plus the recorder cadence. The observable entry reports its values, its
+observed order, the extrapolated limit and, with `--production-dt`, the
+estimated error there. Choose the observable and tolerance from the quantity
+the campaign reports.
+
+The same tool runs the fixed gates by name: `pybada-convergence-bada3`,
+`pybada-convergence-bada4` (both in the PyBADA revalidation runner) and
+`era5-convergence-bada4` (in the weather runner). Passing them shows the
+integration converges in the regimes they isolate; it is not evidence for
+another route.
+
 A simulation in HOLD has not thereby completed its experiment. Strict
 performance failures and rejected runtime fuel/mass updates stop propagation
 before the rejected tick changes position. An envelope `ABORT` event captures

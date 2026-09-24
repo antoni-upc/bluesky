@@ -206,7 +206,9 @@ python tests/research/run_convergence_study.py research/my-route \
 ```
 
 which fails if the Richardson-extrapolated fuel-burn error at 0.05 s exceeds
-5 kg for any aircraft.
+5 kg for any aircraft. All options, the report fields and their
+interpretation are described in
+[`research-plugins.md`](research-plugins.md#timestep-convergence-study).
 
 Use `--validate-only --skip-unit` with the two revalidation runners only when
 the existing outputs were generated from the same declared commit and resource
