@@ -435,3 +435,44 @@ def test_gfs_validation_requires_the_slot_analysis(monkeypatch, analysis, valid,
     else:
         with pytest.raises(ValueError, match='not the 2025-08-15T12 analysis'):
             WindGFS._validate('cached.grb2', slot)
+
+
+def active_provider(monkeypatch):
+    provider = MeteorologyProvider()
+    provider.slot_hours = 1
+    provider.request_bounds = (10.0, 179.0, 11.0, -179.0)
+    start = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr('bluesky.settings.meteo_time_interpolation', False)
+    provider.set_cube(cube(), None, start)
+    return provider, start
+
+
+def test_enabling_interpolation_loads_the_active_slot_successor(monkeypatch):
+    provider, start = active_provider(monkeypatch)
+    loaded = []
+
+    def load(*bounds, slot=None):
+        loaded.append((bounds, slot))
+        provider.set_cube(cube(), None, slot, cube())
+        return True, 'loaded with temporal interpolation'
+
+    monkeypatch.setattr(provider, 'load', load, raising=False)
+    success, message = provider.configure('INTERPOLATION', 'ON')
+    assert success and 'time_interpolation=True' in message
+    assert loaded == [(provider.request_bounds, start)]
+    assert provider.next_cube is not None
+    assert bs.settings.meteo_time_interpolation
+
+
+def test_unavailable_successor_keeps_interpolation_off_and_current_weather(monkeypatch):
+    provider, _ = active_provider(monkeypatch)
+    current = provider.cube
+
+    def load(*bounds, slot=None):
+        raise FileNotFoundError('next slot missing')
+
+    monkeypatch.setattr(provider, 'load', load, raising=False)
+    success, message = provider.configure('INTERPOLATION', 'ON')
+    assert not success and 'next slot missing' in message
+    assert not bs.settings.meteo_time_interpolation
+    assert provider.cube is current and provider.next_cube is None
