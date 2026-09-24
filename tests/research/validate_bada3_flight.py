@@ -169,16 +169,16 @@ def validate_direct(path):
         if row.get('performance_miss_count') != '0':
             errors.append(f'{acid} has a nonzero performance miss count')
         try:
-            altitude = float(row['geometric_alt_m'])
+            altitude = float(row['pressure_alt_m'])
             maximum = float(row['maximum_altitude_m'])
             if not all(map(math.isfinite, (altitude, maximum))):
-                errors.append(f'{acid} has non-finite altitude evidence')
+                errors.append(f'{acid} has non-finite pressure-altitude evidence')
             if acid == 'B3DR' and not altitude > maximum:
-                errors.append('B3DR REPORT altitude is not above its runtime maximum')
+                errors.append('B3DR REPORT pressure altitude is not above its runtime maximum')
             if acid == 'B3DE' and not altitude <= maximum:
-                errors.append('B3DE rollback did not preserve altitude below its runtime maximum')
+                errors.append('B3DE rollback did not preserve pressure altitude below its runtime maximum')
         except (KeyError, TypeError, ValueError):
-            errors.append(f'{acid} lacks numeric direct-state altitude evidence')
+            errors.append(f'{acid} lacks numeric direct-state pressure-altitude evidence')
     if len(events) == 3:
         rejected = events[1]
         requested, applied = rejected.get('requested', {}), rejected.get('applied', {})

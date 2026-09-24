@@ -223,7 +223,7 @@ def evaluate_mass(value, bounds, checks):
 
 
 def evaluate_flight(cas, mach, altitude, bounds, checks):
-    """Evaluate longitudinal state against operating-point BADA bounds."""
+    """Evaluate BADA bounds with pressure altitude in metres."""
     values = np.asarray((cas, mach, altitude), dtype=float)
     if not np.all(np.isfinite(values)) or cas < 0.0 or mach < 0.0:
         return EnvelopeResult(

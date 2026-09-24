@@ -79,12 +79,12 @@ def validate(path, abort=False, direct=False):
         if enforce.get('envelope_status') != 'VALID':
             errors.append('DENF preserved state is not sampled as VALID')
         try:
-            if float(report.get('geometric_alt_m', 0)) <= float(report.get('maximum_altitude_m', 'inf')):
-                errors.append('DRPT altitude is not above its sampled maximum')
-            if float(enforce.get('geometric_alt_m', 'inf')) > float(enforce.get('maximum_altitude_m', 0)):
-                errors.append('DENF rollback did not preserve an altitude below maximum')
+            if float(report.get('pressure_alt_m', 0)) <= float(report.get('maximum_altitude_m', 'inf')):
+                errors.append('DRPT pressure altitude is not above its sampled maximum')
+            if float(enforce.get('pressure_alt_m', 'inf')) > float(enforce.get('maximum_altitude_m', 0)):
+                errors.append('DENF rollback did not preserve pressure altitude below maximum')
         except ValueError:
-            errors.append('direct-state altitude evidence is not numeric')
+            errors.append('direct-state pressure-altitude evidence is not numeric')
         fail(errors)
         return f'VALID: {len(rows)} samples, REPORT accepted and ENFORCE rolled back direct MOVE'
 
