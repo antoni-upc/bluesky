@@ -331,7 +331,7 @@ def test_gfs_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
     target = tmp_path / 'weather.grb2'
     target.write_bytes(b'cached')
     monkeypatch.setattr(provider, '_location', lambda ignored: ('url', target))
-    monkeypatch.setattr(provider, '_validate', lambda path: None)
+    monkeypatch.setattr(provider, '_validate', lambda path, slot: None)
     monkeypatch.setattr('bluesky.plugins.windgfs.atomic_download',
                         lambda *args: pytest.fail('cache hit opened the network'))
     assert provider._fetch(slot) == target
@@ -404,3 +404,34 @@ def test_regional_grid_keeps_its_unrepresented_longitude_gap():
     _, _, sample = weather.interpolate(np.zeros(3), np.array([15.0, 5.0, 200.0]),
                                        np.full(3, 5000.0))
     assert sample.valid.tolist() == [True, False, False]
+
+
+class FakeGrib:
+    def __init__(self, analysis, valid):
+        self.message = type('Message', (), {'analDate': analysis, 'validDate': valid})()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def select(self, **ignored):
+        return [self.message]
+
+
+@pytest.mark.parametrize(('analysis', 'valid', 'accepted'), [
+    (datetime(2025, 8, 15, 12), datetime(2025, 8, 15, 12), True),
+    (datetime(2025, 8, 15, 6), datetime(2025, 8, 15, 6), False),
+    (datetime(2025, 8, 15, 12), datetime(2025, 8, 15, 15), False)])
+def test_gfs_validation_requires_the_slot_analysis(monkeypatch, analysis, valid, accepted):
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, 'pygrib', types.SimpleNamespace(
+        open=lambda path: FakeGrib(analysis, valid)))
+    slot = datetime(2025, 8, 15, 12, tzinfo=timezone.utc)
+    if accepted:
+        WindGFS._validate('cached.grb2', slot)
+    else:
+        with pytest.raises(ValueError, match='not the 2025-08-15T12 analysis'):
+            WindGFS._validate('cached.grb2', slot)

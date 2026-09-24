@@ -165,7 +165,11 @@ The default source is the `AWS` URL layout. The implementation also supports the
 `NCEI` historical-analysis layout and a custom base URL, but availability is an
 external property that can vary by date and archive organisation. Inspect the
 resolved URL with `--dry-run` and verify the required cycles before selecting a
-source for a reproducible run. Valid files in `cache/weather/gfs` are reused.
+source for a reproducible run. A cached file is reused only when every
+pressure-level message is the requested analysis (analysis and valid time
+equal to the slot); otherwise it is removed and downloaded again. A regular
+global grid is treated as periodic in longitude, so points between its last
+and first meridians interpolate normally.
 
 Validate the downloaded 12Z and 18Z files at the scenario test point:
 
