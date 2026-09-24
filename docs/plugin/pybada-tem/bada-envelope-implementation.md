@@ -148,11 +148,16 @@ requested and applied speed and altitude. Direct `MOVE` and creation checks are
 transactional.
 
 `ALTITUDE_MAX` is a pressure-altitude bound. Current-state checks compare it
-with `traf.pressure_alt`. Guidance altitude targets remain geometric; the
-plugin samples pressure at the target altitude to check them and finds a
-geometric target at the ceiling when enforcement is needed. Recorder event
-`altitude_m` values remain geometric requests and applied targets, while
-`maximum_altitude_m` records the pressure-altitude ceiling.
+with `traf.pressure_alt`. Guidance altitude targets remain geometric. For a
+target altitude the plugin samples the atmosphere there and re-evaluates the
+ceiling at that temperature and at the target's Mach under the captured speed
+selection: the same Mach, the same CAS, or the resolution TAS. Mass and
+configuration stay at the current state, so the target ceiling is conservative
+for a climbing, fuel-burning aircraft. The target's pressure altitude is
+checked against that ceiling, and enforcement finds the geometric altitude at
+it. Recorder event `altitude_m` values remain geometric requests and applied
+targets, while `maximum_altitude_m` records the current-state
+pressure-altitude ceiling.
 
 ### ROC and ROD
 

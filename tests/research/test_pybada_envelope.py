@@ -471,6 +471,47 @@ def test_ceiling_without_atmosphere_hook_uses_geometric_altitude(monkeypatch):
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
 
 
+
+class TemperatureCeilingModel(FakeFlightModel):
+    """Ceiling of 9,500 m in air colder than 240 K, otherwise 20,000 m."""
+
+    def __init__(self):
+        self.calls = []
+
+    def bluesky_envelope(self, **state):
+        self.calls.append(state)
+        bounds = super().bluesky_envelope(**state)
+        bounds['maximum_altitude'] = 9_500.0 if state['temperature'] < 240.0 else 20_000.0
+        return bounds
+
+
+@pytest.mark.parametrize(('selected', 'expected_mach'), [
+    (0.78, 0.78), (120.0, None)])
+def test_guidance_ceiling_is_evaluated_at_the_target_state(monkeypatch, selected, expected_mach):
+    traffic(monkeypatch)
+    bs.traf.selspd[:] = selected
+    perf = make_perf(('REPORT', 'OFF'))
+    model = TemperatureCeilingModel()
+    perf.models[0] = model
+    perf.envelope_checks[0] = (EnvelopeCheck.ALTITUDE_MAX,)
+    # The current state (268 K) allows 20,000 m; the ISA target at 9,800 m
+    # (224.45 K) allows only 9,500 m, so the target itself is infeasible.
+    result, bounds, _, _ = perf.evaluate_envelope(0, altitude=9_800.0)
+    assert result.failed_checks == (EnvelopeCheck.ALTITUDE_MAX,)
+    assert bounds.maximum_altitude == 9_500.0
+    target = model.calls[-1]
+    pressure, _, temperature = (float(value[0]) for value in vatmos(np.array([9_800.0])))
+    assert target['temperature'] == pytest.approx(temperature)
+    assert target['pressure'] == pytest.approx(pressure)
+    if expected_mach is None:
+        from bluesky.tools.aero import vcas2mach
+        expected_mach = float(vcas2mach(selected, target['h']))
+    assert target['mach'] == pytest.approx(expected_mach, rel=1e-12)
+    # Recorded bounds and current-state checks keep the current ceiling.
+    assert perf.flight_bounds(0).maximum_altitude == 20_000.0
+    assert perf.evaluate_envelope(0)[0].status == EnvelopeStatus.VALID
+
+
 @requires_atmosphere
 def test_weather_ceiling_limits_geometric_target_at_pressure_boundary(monkeypatch):
     traffic(monkeypatch)
