@@ -12,6 +12,7 @@ import numpy as np
 import bluesky as bs
 from bluesky import stack
 from bluesky.plugins.meteo import MeteorologyProvider, WeatherCube
+from bluesky.plugins.meteo.download import probe_writable
 
 
 bs.settings.set_variable_defaults(era5_cache_path='', era5_region='region', era5_pressure_levels=[
@@ -44,9 +45,7 @@ class WindECMWF(MeteorologyProvider):
         self.cache = (Path(configured).expanduser() if configured else
                       cache_root / 'weather' / 'era5')
         self.cache.mkdir(parents=True, exist_ok=True)
-        probe = self.cache / '.write-capability'
-        probe.write_text('ok', encoding='ascii')
-        probe.unlink()
+        probe_writable(self.cache)
         self.request_bounds = None
 
     @staticmethod
