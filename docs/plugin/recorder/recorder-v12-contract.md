@@ -125,7 +125,7 @@ counts; `1` denotes a dimensionless numerical quantity.
 | 60 | `evaluation_speed_target_tas_m_s` | m/s    | Active conflict-resolution TAS target.                                                                                 |
 | 61 | `model_rocd_m_s`                  | m/s    | Raw model ROCD before geometric-altitude propagation correction and final energy allocation.                           |
 | 62 | `energy_share_factor`             | 1      | Model energy-share factor.                                                                                             |
-| 63 | `energy_allocation_policy`        | -      | Applied energy-allocation policy.                                                                                      |
+| 63 | `energy_allocation_policy`        | -      | Applied allocation: `SPEED_PRIORITY`, `VERTICAL_PRIORITY`, or `JOINT` for TEM rows.                                    |
 | 64 | `propulsion_bank_angle_deg`       | deg    | Effective bank angle supplied to propulsion/performance evaluation.                                                    |
 | 65 | `propulsion_load_factor`          | 1      | Load factor supplied to propulsion/performance evaluation.                                                             |
 | 66 | `envelope_policy`                 | -      | Effective per-aircraft `OFF`, `REPORT`, `ENFORCE`, or `ABORT` policy.                                                  |
