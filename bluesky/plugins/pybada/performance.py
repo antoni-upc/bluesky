@@ -885,10 +885,11 @@ class PyBadaTEM(PerfBase):
         return (0.0 if abs(delta_alt) <= deadband else
                 float(np.sign(delta_alt) * abs(selected_vs)))
 
-    def _evaluate(self, idx, configuration_mode=None, speed_intent=None):
+    def _evaluate(self, idx, configuration_mode=None, speed_intent=None, tas=None):
         """Evaluate the pyBADA API through one observable failure boundary."""
         ac = self.models[idx]
-        h, tas, mass = bs.traf.pressure_alt[idx], bs.traf.tas[idx], self.mass[idx]
+        h, mass = bs.traf.pressure_alt[idx], self.mass[idx]
+        tas = bs.traf.tas[idx] if tas is None else float(tas)
         phase = self._phase(idx)
         speed_request = getattr(bs.traf, 'speed_request', None)
         requested_acceleration = (0.0 if speed_request is None else
@@ -929,6 +930,63 @@ class PyBadaTEM(PerfBase):
             return f'{abs(float(value)):.2f}' if np.isfinite(value) else 'unknown'
         except (TypeError, ValueError):
             return 'unknown'
+
+    @staticmethod
+    def _pending_speed_targets(traffic, idx, target_tas):
+        """TAS of the speeds guidance may select next.
+
+        These are the current target, the next waypoint speed (CAS or Mach)
+        and the next turn speed (CAS), converted as guidance converts them.
+        """
+        targets = [float(target_tas)]
+        actwp = getattr(traffic, 'actwp', None)
+        if actwp is None:
+            return targets
+        index = slice(idx, idx + 1)
+        altitude = np.asarray(traffic.alt, dtype=float)[index]
+        convert = getattr(traffic, 'applied_tas', None)
+        for speed, mach in ((actwp.nextspd[idx], True), (actwp.nextturnspd[idx], False)):
+            if not speed > 0:
+                continue
+            selected = np.array([float(speed)])
+            isa = (aero.vcasormach2tas(selected, altitude) if mach else
+                   aero.vcas2tas(selected, altitude))
+            tas = isa if convert is None else convert(isa, selected, index, mach=mach)
+            targets.append(float(np.asarray(tas).reshape(-1)[0]))
+        return targets
+
+    def _capability_over_speed_change(self, idx, traffic, policy, state, intent, up, down):
+        """Weaker of the current and pending-target capabilities (option A+).
+
+        Drag and thrust bounds change with speed, so the capability at the
+        current speed can overstate what is left near the target. One extra
+        evaluation at the most distant slower and faster pending target is
+        used; a failed auxiliary evaluation keeps the current-state value.
+        """
+        tas = state['tas']
+        targets = self._pending_speed_targets(
+            traffic, idx, getattr(traffic, 'speed_request', None).target_tas[idx]
+            if getattr(traffic, 'speed_request', None) is not None else tas)
+        slower = [v for v in targets if 0.0 < v < tas - 0.5]
+        faster = [v for v in targets if v > tas + 0.5]
+        for target, direction in ((min(slower, default=None), 'down'),
+                                  (max(faster, default=None), 'up')):
+            if target is None:
+                continue
+            try:
+                evaluated = self._evaluate(idx, speed_intent=intent, tas=target)
+                target_up, target_down = acceleration_capability(
+                    policy, self.axmax[idx], **dict(
+                        state, tas=target, drag=evaluated.drag,
+                        idle_thrust=evaluated.idle_thrust,
+                        maximum_thrust=evaluated.maximum_thrust))
+            except EvaluationError:
+                continue
+            if direction == 'down':
+                down = max(down, target_down)
+            else:
+                up = min(up, target_up)
+        return up, down
 
     def update_dynamics(self, traffic, dt):
         speed_handled = np.zeros(traffic.ntraf, dtype=bool)
@@ -1099,9 +1157,12 @@ class PyBadaTEM(PerfBase):
                     required, limited, reason = (
                         allocation.required_thrust, allocation.limited, allocation.reason)
                     if hasattr(self, 'acceleration_capability_up'):
-                        (self.acceleration_capability_up[idx],
-                         self.acceleration_capability_down[idx]) = acceleration_capability(
+                        up, down = acceleration_capability(
                             energy_policy, self.axmax[idx], **allocation_state)
+                        (self.acceleration_capability_up[idx],
+                         self.acceleration_capability_down[idx]) = \
+                            self._capability_over_speed_change(
+                                idx, traffic, energy_policy, allocation_state, intent, up, down)
                     proposed_tas = tas + acceleration * dt
                     reaches_target = abs(proposed_tas - target_tas) <= 1e-10
                     if reaches_target:

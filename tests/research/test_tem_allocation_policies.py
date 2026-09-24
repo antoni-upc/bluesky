@@ -239,3 +239,36 @@ def test_guidance_rate_holds_through_the_last_metre_of_capture(monkeypatch, poli
     balance(traf, perf)
     perf.update_dynamics(traf, 0.2)
     assert traf.vs[0] == pytest.approx(0.5 / 0.2)
+
+
+def test_capability_uses_the_weaker_deceleration_at_the_pending_target(monkeypatch):
+    # Drag grows with TAS^2, so idle deceleration is weaker at the 150 m/s
+    # target than at the current 200 m/s; guidance must plan with the weaker.
+    from tests.research.test_numerical_corrections import ConsistentModel, configure
+
+    class QuadraticDrag(ConsistentModel):
+        def bluesky_energy(self, **state):
+            values = super().bluesky_energy(**state)
+            values['drag'] = 10_000.0 * (state['tas'] / 200.0) ** 2
+            return values
+
+    traf, _, perf = configure(monkeypatch, target=150.0, delta_alt=0.0)
+    perf.models = [QuadraticDrag(maximum=70_000.0)]
+    perf.axmax = np.array([2.0])
+    perf.energy_policy = np.array([AllocationPolicy.SPEED.value], dtype='U24')
+    perf.joint_weight_acceleration = perf.joint_weight_vertical = np.full(1, np.nan)
+    perf.acceleration_capability_up = perf.acceleration_capability_down = np.full(1, np.nan)
+    perf.update_dynamics(traf, 0.5)
+    at_target = 10_000.0 * (150.0 / 200.0) ** 2 / 60_000.0
+    assert perf.acceleration_limits()[1][0] == pytest.approx(at_target)
+    assert at_target < 10_000.0 / 60_000.0
+
+    def fail(*args, tas=None, **kwargs):
+        if tas is not None:
+            raise EvaluationError('auxiliary evaluation unavailable')
+        return original(*args, **kwargs)
+
+    original = perf._evaluate
+    monkeypatch.setattr(perf, '_evaluate', fail)
+    perf.update_dynamics(traf, 0.5)
+    assert perf.acceleration_limits()[1][0] == pytest.approx(10_000.0 / 60_000.0)
