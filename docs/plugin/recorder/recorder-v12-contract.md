@@ -144,7 +144,7 @@ counts; `1` denotes a dimensionless numerical quantity.
 | 79 | `maximum_cas_m_s`                 | m/s    | Evaluated maximum CAS bound.                                                                                           |
 | 80 | `minimum_mach`                    | 1      | Evaluated minimum Mach bound.                                                                                          |
 | 81 | `maximum_mach`                    | 1      | Evaluated maximum Mach bound.                                                                                          |
-| 82 | `maximum_altitude_m`              | m      | Model-returned pressure-altitude ceiling; compare with `pressure_alt_m`, not `geometric_alt_m`.                        |
+| 82 | `maximum_altitude_m`              | m      | Current-state pressure-altitude ceiling; compare with `pressure_alt_m`, not `geometric_alt_m`.                         |
 | 83 | `minimum_rocd_m_s`                | m/s    | Evaluated signed minimum vertical-rate bound.                                                                          |
 | 84 | `maximum_rocd_m_s`                | m/s    | Evaluated signed maximum vertical-rate bound.                                                                          |
 | 85 | `envelope_lateral_configuration`  | -      | Configuration used for lateral bounds.                                                                                 |
