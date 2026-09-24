@@ -24,11 +24,6 @@ def _true(row, field):
     return row.get(field, '').lower() == 'true'
 
 
-def _temperature_factor(row):
-    isa_temperature = 288.15 - 0.0065 * _number(row, 'pressure_alt_m')
-    return isa_temperature / _number(row, 'temperature_k')
-
-
 def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
     path = Path(path)
     with path.open(newline='', encoding='utf-8') as stream:
@@ -90,8 +85,7 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
         tas = _number(row, 'tas_m_s')
         mass = _number(row, 'mass_kg')
         requested_power = (tas * _number(row, 'requested_acceleration_m_s2') +
-                           G0 * _number(row, 'requested_vertical_rate_m_s') /
-                           _temperature_factor(row))
+                           G0 * _number(row, 'requested_vertical_rate_m_s'))
         idle_power = ((_number(row, 'idle_thrust_n') - _number(row, 'drag_n')) *
                       tas / mass)
         if idle_power - requested_power > 10.0:
@@ -127,13 +121,12 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
         mass = _number(previous, 'mass_kg')
         available_power = ((_number(current, 'thrust_n') -
                             _number(current, 'drag_n')) * tas / mass)
-        temperature_factor = _temperature_factor(current)
         requested_power = (
             tas * _number(current, 'requested_acceleration_m_s2') +
-            G0 * _number(current, 'requested_vertical_rate_m_s') / temperature_factor)
+            G0 * _number(current, 'requested_vertical_rate_m_s'))
         allocated_power = (
             tas * _number(current, 'applied_acceleration_m_s2') +
-            G0 * _number(current, 'applied_vertical_rate_m_s') / temperature_factor)
+            G0 * _number(current, 'applied_vertical_rate_m_s'))
         residuals.append(abs(available_power - allocated_power))
         idle_power = ((_number(current, 'idle_thrust_n') -
                        _number(current, 'drag_n')) * tas / mass)

@@ -72,11 +72,9 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
         mass = _number(previous, 'mass_kg')
         excess_specific_power = ((_number(current, 'thrust_n') -
                                   _number(current, 'drag_n')) * tas / mass)
-        isa_temperature = 288.15 - 0.0065 * _number(current, 'pressure_alt_m')
-        temperature_factor = isa_temperature / _number(current, 'temperature_k')
         allocated_specific_power = (
             tas * _number(current, 'applied_acceleration_m_s2') +
-            G0 * _number(current, 'applied_vertical_rate_m_s') / temperature_factor)
+            G0 * _number(current, 'applied_vertical_rate_m_s'))
         residuals.append(abs(excess_specific_power - allocated_specific_power))
         observed_ax = (_number(current, 'tas_m_s') -
                        _number(previous, 'tas_m_s')) / dt

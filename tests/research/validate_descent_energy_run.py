@@ -92,11 +92,9 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
         mass = _number(previous, 'mass_kg')
         specific_power = ((_number(current, 'thrust_n') -
                            _number(current, 'drag_n')) * tas / mass)
-        isa_temperature = 288.15 - 0.0065 * _number(current, 'pressure_alt_m')
-        temperature_factor = isa_temperature / _number(current, 'temperature_k')
         allocated_power = (
             tas * _number(current, 'applied_acceleration_m_s2') +
-            G0 * _number(current, 'applied_vertical_rate_m_s') / temperature_factor)
+            G0 * _number(current, 'applied_vertical_rate_m_s'))
         residuals.append(abs(specific_power - allocated_power))
         if specific_power >= 0.0 or allocated_power >= 0.0:
             errors.append('deceleration/descent sample does not have negative specific power')
