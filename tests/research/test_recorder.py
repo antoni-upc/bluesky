@@ -226,3 +226,43 @@ def test_abort_event_auto_finalizes_evidence_before_return(tmp_path, monkeypatch
     assert metadata['event_total'] == 1
     assert metadata['reason_totals'] == {'MASS_MAX': 1}
     assert metadata['quality_status'] == 'ABORTED'
+
+
+def test_recorder_reuses_its_flight_bounds_for_lateral_bounds(tmp_path, monkeypatch):
+    values = np.array([1.0])
+    calls = {'flight': 0, 'lateral': []}
+
+    def flight_bounds(idx):
+        calls['flight'] += 1
+        return SimpleNamespace(configuration='AP', minimum_cas=60.0, maximum_cas=180.0,
+                               minimum_mach=0.2, maximum_mach=0.8, maximum_altitude=12000.0)
+
+    def lateral_bounds(idx, configuration=None):
+        calls['lateral'].append(configuration)
+        return SimpleNamespace(configuration=configuration, minimum_load_factor=-1.0,
+                               maximum_load_factor=2.0, maximum_bank_angle_deg=60.0,
+                               high_lift_id=1.0, landing_gear='LGUP',
+                               minimum_limit_name='n3', maximum_limit_name='n1')
+
+    traffic = SimpleNamespace(
+        id=['TST1'], type=['A320'], lat=values, lon=values, alt=values, pressure_alt=values,
+        tas=values, cas=values, M=values, vs=values, hdg=values, trk=values,
+        Temp=np.array([280.0]), p=np.array([90000.0]), rho=np.array([1.1]),
+        windnorth=values, windeast=values, atmos_source=['ISA'], atmos_valid=np.array([True]),
+        atmos_dataset_time=[''], atmos_fallback_reason=[''],
+        perf=SimpleNamespace(family='4', version='4.2', thrust=values, rated_thrust=values,
+                             drag=values, fuelflow=values, mass=np.array([60000.0]),
+                             dyn_mode=np.array([1]), invalid=np.array([False]),
+                             failure_count=np.array([0]), flight_bounds=flight_bounds,
+                             lateral_bounds=lateral_bounds))
+    monkeypatch.setattr(bs, 'traf', traffic)
+    monkeypatch.setattr(bs, 'sim', SimpleNamespace(
+        simt=1.0, simdt=0.05, utc=datetime(2026, 1, 1, tzinfo=timezone.utc)))
+    monkeypatch.setattr('bluesky.plugins.recorder.streaming.stack.get_scenname', lambda: 'memo')
+    recorder = StreamingRecorder()
+    recorder.start(tmp_path / 'samples.csv')
+    recorder.sample()
+    # One flight-bounds evaluation per sample, reused for the lateral bounds;
+    # the finalisation snapshot at stop() evaluates its own bounds once.
+    assert calls == {'flight': 1, 'lateral': ['AP']}
+    recorder.stop()
