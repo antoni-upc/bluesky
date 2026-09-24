@@ -1,6 +1,6 @@
 # Research-plugin documentation map
 
-This branch keeps eight substantive maintained plugin documents plus this index.
+This branch keeps six substantive maintained plugin documents plus this index.
 Historical session notes and implementation plans are intentionally excluded;
 Git history preserves their provenance without presenting them as current
 guidance.
@@ -12,8 +12,6 @@ guidance.
 | Implement or consume recorder output                      | [`recorder-v12-contract.md`](../recorder/recorder-v12-contract.md)                |
 | Review PyBADA envelopes and validation gates              | [`bada-envelope-implementation.md`](../pybada-tem/bada-envelope-implementation.md) |
 | Execute scenarios and interpret evidence                  | [`reproducibility-matrix.md`](reproducibility-matrix.md)                          |
-| Review unresolved model questions                         | [`research-modeling-open-issues.md`](research-modeling-open-issues.md)            |
-| Review explicitly deferred plugin work                    | [`plugin-future-work.md`](plugin-future-work.md)                                  |
 | Prepare ERA5/GFS cache data                               | [`README-weather.md`](../nwp-meteo/README-weather.md)                             |
 
 `../../../research-run.example.json` is a schema-valid template, not an active local

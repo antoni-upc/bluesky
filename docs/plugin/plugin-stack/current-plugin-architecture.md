@@ -178,9 +178,7 @@ The implementation and its gates do not by themselves establish observed-flight
 accuracy, arbitrary-aircraft coverage, generic non-clean terminal operation,
 phase-aware Mach-limit selection, high-altitude feasibility, or equivalence
 between different atmosphere and performance models. Route geometry remains a
-BlueSky guidance result rather than independent trajectory truth. Durable open
-questions are listed in
-[`research-modeling-open-issues.md`](research-modeling-open-issues.md).
+BlueSky guidance result rather than independent trajectory truth.
 
 ## Branch architecture
 
@@ -206,5 +204,3 @@ plugin-disabled OpenAP/ISA baseline.
   envelope behaviour and licensed scope.
 - [`reproducibility-matrix.md`](reproducibility-matrix.md): scenarios,
   comparison semantics, and validation.
-- [`research-modeling-open-issues.md`](research-modeling-open-issues.md):
-  deliberately unresolved questions.

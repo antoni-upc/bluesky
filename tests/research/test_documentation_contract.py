@@ -10,8 +10,6 @@ ACTIVE_DOCS = tuple(DOCS / name for name in (
     'plugin-stack/research-plugins.md',
     'plugin-stack/current-plugin-architecture.md',
     'plugin-stack/reproducibility-matrix.md',
-    'plugin-stack/research-modeling-open-issues.md',
-    'plugin-stack/plugin-future-work.md',
     'plugin-stack/documentation-inventory.md')) + (
         RECORDER_DOC, PYBADA_DOC, WEATHER_DOC)
 RETIRED_TOPOLOGY = ('research/reproducibility', 'docs/research-consolidation')
