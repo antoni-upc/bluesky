@@ -37,7 +37,7 @@ def validate(cache, start, end, point):
             current += timedelta(hours=6)
             continue
         try:
-            provider._validate(path)
+            provider._validate(path, current)
             cube = provider._read(path, current)
             north, east, sample = cube.interpolate([point[0]], [point[1]], [point[2]])
             if not bool(sample.valid[0]):

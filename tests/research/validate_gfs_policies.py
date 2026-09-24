@@ -25,7 +25,7 @@ def provider(strict=False):
             raise FileNotFoundError(f'intentionally unavailable test slot: {path}')
         if not path.is_file():
             raise FileNotFoundError(f'not in cache: {path}')
-        result._validate(path)
+        result._validate(path, slot)
         return path
 
     result._fetch = cached_fetch

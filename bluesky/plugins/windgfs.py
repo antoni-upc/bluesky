@@ -1,6 +1,6 @@
 """GFS atmosphere/wind provider backed by shared validated interpolation."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -65,19 +65,29 @@ class WindGFS(MeteorologyProvider):
         return base.rstrip('/') + '/' + remote, self.cache / name
 
     @staticmethod
-    def _validate(path):
+    def _validate(path, slot):
+        """Require every pressure-level message to be the slot's own analysis."""
         import pygrib
+        expected = (slot.astimezone(timezone.utc).replace(tzinfo=None)
+                    if slot.tzinfo is not None else slot)
         with pygrib.open(str(path)) as grib:
             for name in ('u', 'v', 't', 'gh'):
-                if not grib.select(shortName=name, typeOfLevel='isobaricInhPa'):
+                messages = grib.select(shortName=name, typeOfLevel='isobaricInhPa')
+                if not messages:
                     raise ValueError(f'Missing GFS {name} pressure-level messages')
+                for message in messages:
+                    if message.analDate != expected or message.validDate != expected:
+                        raise ValueError(
+                            f'GFS {name} message is analysis {message.analDate:%Y-%m-%dT%H} '
+                            f'valid {message.validDate:%Y-%m-%dT%H}, not the '
+                            f'{expected:%Y-%m-%dT%H} analysis')
 
     def _fetch(self, slot):
         import requests
         url, target = self._location(slot)
         if target.exists():
             try:
-                self._validate(target)
+                self._validate(target, slot)
                 return target
             except (OSError, ValueError, RuntimeError):
                 stack.echo(f'GFS: cached file is invalid; removing {target}')
@@ -85,7 +95,8 @@ class WindGFS(MeteorologyProvider):
         stack.echo(
             f'GFS: not in cache; downloading slot={slot.isoformat()} '
             f'source={bs.settings.windgfs_source} url={url} to {target}')
-        result = atomic_download(requests.Session(), url, target, self._validate)
+        result = atomic_download(requests.Session(), url, target,
+                                 lambda path: self._validate(path, slot))
         stack.echo(f'GFS: download validated and cached at {target}')
         return result
 

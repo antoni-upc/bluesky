@@ -76,7 +76,7 @@ def test_manifest_gfs_grib_is_readable_and_valid(run_manifest):
     path = Path(run_manifest['external_resources'][config['dataset_id']]['path']).expanduser()
     assert path.is_file(), f'GFS GRIB is unavailable: {path}'
     slot = datetime.fromisoformat(run_manifest['experiment']['simulation_utc'])
-    WindGFS._validate(path)
+    WindGFS._validate(path, slot)
     cube = object.__new__(WindGFS)._read(path, slot)
     assert cube.source == 'GFS'
     assert cube.dataset_time == slot.isoformat()
