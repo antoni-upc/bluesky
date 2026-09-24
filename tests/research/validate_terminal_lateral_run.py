@@ -6,6 +6,8 @@ import csv
 import json
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 CONFIG = {
     'TO': {'hlid': 3.0, 'gear': 'LGUP'},
@@ -62,8 +64,7 @@ def _check_metadata(metadata, expected, errors):
 def validate(path, abort=None):
     rows, events, metadata = _load(path)
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     latest = {row.get('acid'): row for row in rows}
 
     if abort:

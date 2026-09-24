@@ -8,9 +8,10 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 G0 = 9.80665
 RD = 287.05287
-SUPPORTED_SCHEMAS = {'samples-v11'}
 NUMERIC_ATMOS = ('temperature_k', 'pressure_pa', 'density_kg_m3',
                  'wind_north_m_s', 'wind_east_m_s', 'pressure_alt_m',
                  'tas_m_s', 'cas_m_s', 'mach')
@@ -50,9 +51,7 @@ def validate(path, family='4', source='ERA5', scenario=None,
     by_acid = defaultdict(list)
     for row in rows:
         by_acid[row.get('acid')].append(row)
-    schema = metadata.get('schema_version')
-    if schema not in SUPPORTED_SCHEMAS:
-        errors.append(f'metadata schema {schema!r} is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != scenario:
         errors.append(f'metadata scenario is {metadata.get("scenario")!r}, expected {scenario!r}')
     if metadata.get('rows') not in (None, len(rows)):

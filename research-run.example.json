@@ -35,7 +35,7 @@
     },
     "recorder": {
       "enabled": true,
-      "schema_version": "samples-v11",
+      "schema_version": "samples-v12",
       "interval_s": 0.1,
       "output": "output/era5-tem-envelope.csv"
     }

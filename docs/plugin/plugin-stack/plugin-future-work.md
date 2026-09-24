@@ -3,13 +3,13 @@
 This backlog is technical integration scope. It contains no campaign result or
 paper claim.
 
-## Next schema baseline
+## Active schema baseline
 
-`samples-v11` remains frozen as the only supported baseline. The next schema
-change is `samples-v12`, reserved for an explicit recorded speed-law field and
-scenario generation that preserves source `CLB_CAS`, `CLB_MACH`, `DES_MACH`,
-and `DES_CAS` intent instead of emitting CAS at every waypoint. No v12 field is
-to be added under the v11 name.
+`samples-v12` is the only supported baseline. It records the speed law and
+original CAS, Mach, or conflict-resolution TAS target for each evaluation.
+Campaign tooling must preserve the v12 contract. Speed-intent scenarios built
+from external source trajectories are kept outside the repository; the
+repository covers the speed-intent path with portable unit tests only.
 
 ## Model and integration work
 

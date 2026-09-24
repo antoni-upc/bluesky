@@ -11,6 +11,8 @@ import json
 import math
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 G0 = 9.80665
 EXPECTED_DT = {'dt100': 0.10, 'dt050': 0.05, 'dt020': 0.02}
@@ -47,8 +49,7 @@ def _load(path, family, label):
     expected_aircraft = {'3': 'A320__', '4': 'A320-232'}[family]
     expected_acid = f'B{family}CV'
     expected_scenario = f'pybada-convergence-bada{family}-{label}'
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append(f'{label}: metadata schema is not samples-v11')
+    require_schema(metadata, errors, f'{label}: metadata')
     if metadata.get('scenario') != expected_scenario:
         errors.append(f'{label}: scenario is {metadata.get("scenario")!r}')
     if metadata.get('sample_intervals_s') != [0.1]:

@@ -8,6 +8,8 @@ from collections import defaultdict
 from pathlib import Path
 import sys
 
+from tests.research.schema_compat import require_schema
+
 
 ACIDS = {'ERNV', 'OFNV', 'ERNO', 'OFNO'}
 PAIRS = (('ERNV', 'OFNV'), ('ERNO', 'OFNO'))
@@ -29,8 +31,7 @@ def validate(path):
               path.with_suffix('.events.jsonl').read_text(encoding='utf-8').splitlines()]
     metadata = json.loads(path.with_suffix('.metadata.json').read_text(encoding='utf-8'))
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != 'pybada-route-speed-gui':
         errors.append('metadata scenario is not pybada-route-speed-gui')
     if metadata.get('event_total') != len(events):

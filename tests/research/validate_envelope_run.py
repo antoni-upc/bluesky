@@ -5,6 +5,8 @@ import csv
 import json
 from pathlib import Path
 
+from tests.research.schema_compat import SCHEMA_VERSION
+
 
 class EvidenceValidator:
     def __init__(self):
@@ -113,8 +115,8 @@ def validate_normal(csv_path):
                     'MASSE event counter is not 1')
 
     metadata = check.read_json(csv_path.with_suffix('.metadata.json'))
-    check.check(metadata.get('schema_version') == 'samples-v11',
-                'metadata schema is not samples-v11')
+    check.check(metadata.get('schema_version') == SCHEMA_VERSION,
+                f'metadata schema is not {SCHEMA_VERSION}')
     check.check(metadata.get('event_total') == 3, 'metadata event_total is not 3')
     check.check(metadata.get('reason_totals') == {'MASS_MAX': 3},
                 'metadata reason totals are not three MASS_MAX events')

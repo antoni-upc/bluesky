@@ -3,10 +3,11 @@ import json
 
 import pytest
 
+from tests.research.schema_compat import SCHEMA_VERSION
 from tests.research.validate_era5_tem_run import validate
 
 
-def _evidence(tmp_path, schema='samples-v11', source='ERA5', family='4'):
+def _evidence(tmp_path, schema=SCHEMA_VERSION, source='ERA5', family='4'):
     scenario = ('era5-tem-envelope' if source == 'ERA5' and family == '4'
                 else f'{source.lower()}-tem-envelope-bada{family}')
     acids = ({'3': ('E3ER', 'E3EO'), '4': ('ERAR', 'ERAO')}[family]
@@ -57,7 +58,7 @@ def _evidence(tmp_path, schema='samples-v11', source='ERA5', family='4'):
     return path, scenario, acids
 
 
-def test_weather_tem_validator_accepts_v11(tmp_path):
+def test_weather_tem_validator_accepts_v12(tmp_path):
     path, scenario, acids = _evidence(tmp_path)
     result = validate(path, '4', 'ERA5', scenario, *acids)
     assert result.startswith('VALID:')
@@ -76,7 +77,7 @@ def test_weather_tem_validator_rejects_pre_v11_schema(tmp_path, schema):
     path, scenario, acids = _evidence(tmp_path, schema=schema)
     result = validate(path, '4', 'ERA5', scenario, *acids)
     assert result.startswith('INVALID')
-    assert 'not samples-v11' in result
+    assert f'not {SCHEMA_VERSION}' in result
 
 
 def test_weather_tem_validator_rejects_fallback(tmp_path):

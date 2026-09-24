@@ -14,7 +14,7 @@ import bluesky as bs
 from bluesky import stack
 
 
-SCHEMA_VERSION = 'samples-v11'
+SCHEMA_VERSION = 'samples-v12'
 FIELDS = (
     'schema_version', 'run_id', 'sim_time_s', 'sample_interval_s', 'sim_utc', 'acid', 'actype',
     'lat_deg', 'lon_deg', 'geometric_alt_m', 'pressure_alt_m', 'tas_m_s',
@@ -35,6 +35,8 @@ FIELDS = (
     'evaluation_temperature_k',
     'evaluation_pressure_alt_m',
     'evaluation_timestep_s',
+    'evaluation_speed_evolution', 'evaluation_speed_target_cas_m_s',
+    'evaluation_speed_target_mach', 'evaluation_speed_target_tas_m_s',
     'model_rocd_m_s',
     'energy_share_factor', 'energy_allocation_policy',
     'propulsion_bank_angle_deg', 'propulsion_load_factor',
@@ -64,6 +66,9 @@ UNITS = {
     'evaluation_temperature_k': 'K',
     'evaluation_pressure_alt_m': 'm',
     'evaluation_timestep_s': 's',
+    'evaluation_speed_target_cas_m_s': 'm/s',
+    'evaluation_speed_target_mach': '1',
+    'evaluation_speed_target_tas_m_s': 'm/s',
     'model_rocd_m_s': 'm/s',
     'energy_share_factor': '1',
     'propulsion_bank_angle_deg': 'deg', 'propulsion_load_factor': '1',
@@ -244,6 +249,10 @@ class StreamingRecorder:
                 'evaluation_temperature_k': perf_value('evaluation_temperature'),
                 'evaluation_pressure_alt_m': perf_value('evaluation_pressure_alt'),
                 'evaluation_timestep_s': perf_value('evaluation_timestep'),
+                'evaluation_speed_evolution': perf_value('evaluation_speed_evolution'),
+                'evaluation_speed_target_cas_m_s': perf_value('evaluation_speed_target_cas'),
+                'evaluation_speed_target_mach': perf_value('evaluation_speed_target_mach'),
+                'evaluation_speed_target_tas_m_s': perf_value('evaluation_speed_target_tas'),
                 'model_rocd_m_s': perf_value('model_rocd'),
                 'energy_share_factor': perf_value('energy_share_factor'),
                 'energy_allocation_policy': perf_value('energy_allocation_policy'),

@@ -5,6 +5,8 @@ import csv
 import json
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def fail(errors):
     if errors:
@@ -41,8 +43,7 @@ def validate(path, abort=False, direct=False):
         errors.append(f'metadata unavailable: {exc}')
         metadata = {}
 
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('schema is not samples-v11')
+    require_schema(metadata, errors)
     if abort:
         if len(events) != 1:
             errors.append(f'expected 1 ABORT event, got {len(events)}')

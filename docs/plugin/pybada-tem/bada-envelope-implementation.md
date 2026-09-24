@@ -197,7 +197,7 @@ requested values, applied values, and continuation.
 The recorder is optional and does not influence envelope or simulation
 behaviour. When active it writes:
 
-- `run.csv` using the exact active schema `samples-v11`;
+- `run.csv` using the exact active schema `samples-v12`;
 - synchronously flushed `run.events.jsonl`;
 - `run.metadata.json` with effective policy/checks, event and reason totals,
   and sticky `VALID`, `DEGRADED`, or `ABORTED` quality status.

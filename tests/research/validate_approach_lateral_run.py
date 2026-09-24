@@ -6,6 +6,8 @@ import csv
 import json
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def _load(path):
     path = Path(path)
@@ -64,8 +66,7 @@ def _check_effective_metadata(metadata, acids, errors):
 def validate(path, abort=False):
     rows, events, metadata = _load(path)
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     expected_scenario = ('pybada-envelope-approach-abort' if abort
                          else 'pybada-envelope-approach')
     if metadata.get('scenario') != expected_scenario:

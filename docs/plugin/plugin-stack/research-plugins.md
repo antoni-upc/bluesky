@@ -9,10 +9,10 @@ For diagrams of the current components, per-tick call order, lifecycle, and
 ownership boundary with original BlueSky, start with
 [`current-plugin-architecture.md`](current-plugin-architecture.md).
 
-The sole active recorder contract is `samples-v11`. Its exact column order,
+The sole active recorder contract is `samples-v12`. Its exact column order,
 units, missing values, metadata, event stream, lifecycle, and exports are
 defined in
-[`recorder-v11-contract.md`](../recorder/recorder-v11-contract.md). The contract
+[`recorder-v12-contract.md`](../recorder/recorder-v12-contract.md). The contract
 includes the pre-propagation TEM evaluation state and raw model ROCD. Every
 other sample-schema value is rejected by active manifests and validators.
 
@@ -112,7 +112,10 @@ interval and records both timestamps and the blend fraction as provenance.
   CAS or Mach representation using BlueSky's current CAS/Mach threshold;
   altitude alone never switches the law. A conflict-resolution-owned TAS
   target selects `constTAS`. `SPDSCHED CONSCAS` explicitly forces `constCAS`.
-  Dynamics and vertical-envelope evaluation always receive the same choice.
+  Dynamics and vertical-envelope evaluation receive the same captured choice.
+  The recorder stores the active law and exactly one original CAS, Mach, or
+  resolution-owned TAS target in the v12 evaluation fields. Initial `DIRECT`
+  activation preserves raw Mach for PyBADA route guidance.
 - `BADACONFIG acid CRUISE|PYBADA` either fixes the addressed aircraft at BADA
   configuration `CR` or delegates configuration selection to pyBADA using
   BlueSky intent and the current operating state. The default is `PYBADA`.
@@ -202,7 +205,7 @@ actual full revision and local resources before running a gate.
 Generated CSV is authoritative; metadata uses the matching versioned JSON
 schema. Optional Excel, KML, and plots must be derived from the finalised CSV and
 do not alter it. See the
-[v11 recorder contract](../recorder/recorder-v11-contract.md) for the exact
+[v12 recorder contract](../recorder/recorder-v12-contract.md) for the exact
 artefact interface.
 
 Every recorder-produced TEM CSV must also pass the aligned numerical audit:
@@ -214,7 +217,7 @@ python tests/research/validate_numerical_run.py output/run.csv \
 
 The matrix and PyBADA revalidation runners invoke this automatically and fail
 when the audit fails. The audit checks geometric point-mass balance and
-one-step TAS, altitude, and mass updates against the v11 evaluation state; it
+one-step TAS, altitude, and mass updates against the v12 evaluation state; it
 does not establish observed-flight accuracy.
 
 A simulation in HOLD has not thereby completed its experiment. Strict
@@ -233,6 +236,6 @@ described in
 Generated
 values and pass/fail status remain with the local manifest and evidence set.
 
-At the default one-second interval, a `samples-v11` CSV writes 3,600 rows per
+At the default one-second interval, a `samples-v12` CSV writes 3,600 rows per
 aircraft-hour. Measure the average row length in the produced CSV and multiply
 by 3,600 and the aircraft count to estimate storage before a long experiment.

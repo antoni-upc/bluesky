@@ -16,5 +16,5 @@
 00:00:04.00>ECHO TEST ACTION Commanding +10000 fpm. Expect one ABORTED ROC_MAX event followed by HOLD.
 00:00:04.10>VS VABT 10000
 # BlueSky ramps VS. At the dynamic MCMB boundary PYBADATEM flushes CSV,
-# JSONL, and samples-v11 metadata synchronously before placing simulation in HOLD.
+# JSONL, and samples-v12 metadata synchronously before placing simulation in HOLD.
 00:00:20.00>ECHO TEST ERROR Expected ROC_MAX ABORT did not place the simulation in HOLD.

@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 FINITE = ('sim_time_s', 'geometric_alt_m', 'tas_m_s', 'cas_m_s', 'mach',
           'vertical_speed_m_s', 'temperature_k', 'pressure_pa', 'density_kg_m3',
@@ -125,8 +127,7 @@ def validate(path, terminal=False, abort=False, terminal_abort=False):
     check_finite(rows, events, metadata, errors)
     if not raw.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     suffix = ('-terminal-abort' if terminal_abort else '-terminal' if terminal else
               '-lateral-abort' if abort else '-lateral')
     scenario = f'pybada3-envelope{suffix}'

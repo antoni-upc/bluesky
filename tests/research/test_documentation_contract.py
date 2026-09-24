@@ -3,7 +3,7 @@ import re
 
 
 DOCS = Path('docs/plugin')
-RECORDER_DOC = DOCS / 'recorder/recorder-v11-contract.md'
+RECORDER_DOC = DOCS / 'recorder/recorder-v12-contract.md'
 WEATHER_DOC = DOCS / 'nwp-meteo/README-weather.md'
 PYBADA_DOC = DOCS / 'pybada-tem/bada-envelope-implementation.md'
 ACTIVE_DOCS = tuple(DOCS / name for name in (
@@ -15,10 +15,10 @@ ACTIVE_DOCS = tuple(DOCS / name for name in (
     'plugin-stack/documentation-inventory.md')) + (
         RECORDER_DOC, PYBADA_DOC, WEATHER_DOC)
 RETIRED_TOPOLOGY = ('research/reproducibility', 'docs/research-consolidation')
-OLD_SCHEMAS = ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10')
+OLD_SCHEMAS = ('samples-v7', 'samples-v8', 'samples-v9', 'samples-v10', 'samples-v11')
 
 
-def test_active_documentation_uses_only_v11_and_current_topology():
+def test_active_documentation_uses_only_v12_and_current_topology():
     errors = []
     for path in ACTIVE_DOCS:
         text = path.read_text(encoding='utf-8')

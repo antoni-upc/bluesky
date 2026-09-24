@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from tests.research.schema_compat import SCHEMA_VERSION
 from tests.research.validate_horizontal_acceleration_run import validate
 
 
@@ -29,7 +30,7 @@ def _evidence(tmp_path, force_error=0.0):
             if force_error and acid == 'B4AK' and second == 5:
                 thrust += previous_mass * force_error
             rows.append({
-                'schema_version': 'samples-v11', 'sim_time_s': second,
+                'schema_version': SCHEMA_VERSION, 'sim_time_s': second,
                 'acid': acid, 'tas_m_s': tas, 'vertical_speed_m_s': 0.0,
                 'performance_model': 'PYBADATEM-BADA4',
                 'performance_aircraft': 'A320-232', 'performance_dummy': False,
@@ -41,7 +42,7 @@ def _evidence(tmp_path, force_error=0.0):
         writer.writeheader()
         writer.writerows(rows)
     path.with_suffix('.metadata.json').write_text(json.dumps({
-        'schema_version': 'samples-v11',
+        'schema_version': SCHEMA_VERSION,
         'scenario': 'pybada-acceleration-bada4',
         'sample_intervals_s': [1.0]}), encoding='utf-8')
     return path
@@ -52,13 +53,13 @@ def test_horizontal_acceleration_validator_accepts_balanced_evidence(tmp_path):
     assert result.startswith('VALID:')
 
 
-def test_horizontal_acceleration_validator_accepts_v11(tmp_path):
+def test_horizontal_acceleration_validator_accepts_v12(tmp_path):
     path = _evidence(tmp_path)
     assert validate(path, '4').startswith('VALID:')
 
 
 @pytest.mark.parametrize('schema', ['samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'])
-def test_horizontal_acceleration_validator_rejects_pre_v11_schema(tmp_path, schema):
+def test_horizontal_acceleration_validator_rejects_pre_v12_schema(tmp_path, schema):
     path = _evidence(tmp_path)
     metadata_path = path.with_suffix('.metadata.json')
     metadata = json.loads(metadata_path.read_text())
@@ -66,7 +67,7 @@ def test_horizontal_acceleration_validator_rejects_pre_v11_schema(tmp_path, sche
     metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
     result = validate(path, '4')
     assert result.startswith('INVALID evidence:')
-    assert 'not samples-v11' in result
+    assert f'not {SCHEMA_VERSION}' in result
 
 
 def test_horizontal_acceleration_validator_rejects_force_mismatch(tmp_path):

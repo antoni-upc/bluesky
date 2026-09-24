@@ -9,7 +9,7 @@ guidance.
 |-----------------------------------------------------------|-----------------------------------------------------------------------------------|
 | Install and operate the plugins                           | [`research-plugins.md`](research-plugins.md)                                      |
 | Understand host hooks, lifecycle, ownership, and branches | [`current-plugin-architecture.md`](current-plugin-architecture.md)                |
-| Implement or consume recorder output                      | [`recorder-v11-contract.md`](../recorder/recorder-v11-contract.md)                |
+| Implement or consume recorder output                      | [`recorder-v12-contract.md`](../recorder/recorder-v12-contract.md)                |
 | Review PyBADA envelopes and validation gates              | [`bada-envelope-implementation.md`](../pybada-tem/bada-envelope-implementation.md) |
 | Execute scenarios and interpret evidence                  | [`reproducibility-matrix.md`](reproducibility-matrix.md)                          |
 | Review unresolved model questions                         | [`research-modeling-open-issues.md`](research-modeling-open-issues.md)            |

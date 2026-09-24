@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 AIRCRAFT = {'B3HR': 'REPORT', 'B3HE': 'ENFORCE',
             'B3LR': 'REPORT', 'B3LE': 'ENFORCE'}
@@ -61,8 +63,7 @@ def validate(path):
     check_finite_json(metadata, errors, 'metadata')
     if not raw_events.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != 'pybada3-envelope-flight':
         errors.append('metadata scenario is not pybada3-envelope-flight')
     if metadata.get('quality_status') != 'DEGRADED':
@@ -141,8 +142,7 @@ def validate_direct(path):
     check_finite_json(metadata, errors, 'metadata')
     if not raw_events.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != 'pybada3-envelope-direct':
         errors.append('metadata scenario is not pybada3-envelope-direct')
     actions = [(event.get('aircraft'), event.get('action')) for event in events]
@@ -249,8 +249,7 @@ def validate_abort(path):
             errors.append('ABORT request is not above a runtime speed or Mach maximum')
     except (KeyError, TypeError, ValueError):
         errors.append('final sample lacks numeric runtime speed-bound evidence')
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != 'pybada3-envelope-flight-abort':
         errors.append('metadata scenario is not pybada3-envelope-flight-abort')
     if metadata.get('event_total') != 1 or metadata.get('quality_status') != 'ABORTED':

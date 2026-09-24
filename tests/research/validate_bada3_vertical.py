@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 EXPECTED = {'B3CR': ('REPORT', 'INFEASIBLE', 'ROC_MAX'),
             'B3CE': ('ENFORCE', 'VALID', 'ROC_MAX'),
@@ -53,8 +55,7 @@ def validate(path, direct=False, abort=False):
     finite(rows, events, metadata, errors)
     if not raw.endswith('\n'):
         errors.append('event ledger is not newline-flushed')
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     suffix = '-abort' if abort else '-direct' if direct else ''
     scenario = f'pybada3-envelope-vertical{suffix}'
     if metadata.get('scenario') != scenario:

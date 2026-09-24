@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check samples-v11 TEM energy, applied motion and fuel against evaluation state.
+"""Check recorder TEM energy, applied motion and fuel against evaluation state.
 
 This tests implemented point-mass consistency, not observed-flight accuracy.
 """
@@ -9,6 +9,8 @@ import hashlib
 import json
 import math
 from pathlib import Path
+
+from tests.research.schema_compat import SCHEMA_VERSION
 
 G = 9.80665
 TOLERANCES = {'energy_w_kg': 1e-7, 'acceleration_m_s2': 1e-9,
@@ -27,7 +29,7 @@ def validate(rows):
         if row.get('dynamics_mode')!='TEM': continue
         samples+=1
         try:
-            if row['schema_version']!='samples-v11': raise ValueError('exact evaluation state requires samples-v11')
+            if row['schema_version']!=SCHEMA_VERSION: raise ValueError(f'exact evaluation state requires {SCHEMA_VERSION}')
             if row['performance_valid']!='True': raise ValueError('invalid performance')
             if row['atmosphere_valid']!='True': raise ValueError('invalid atmosphere')
             t=number(row,'sim_time_s');acid=row['acid']

@@ -8,6 +8,8 @@ from collections import defaultdict
 from pathlib import Path
 import sys
 
+from tests.research.schema_compat import require_schema
+
 
 ACIDS = {'B3RN', 'B3ON', 'B3RF', 'B3OF'}
 PAIRS = (('B3RN', 'B3ON'), ('B3RF', 'B3OF'))
@@ -33,8 +35,7 @@ def validate(path):
     events = [json.loads(line) for line in raw.splitlines() if line.strip()]
     metadata = json.loads(path.with_suffix('.metadata.json').read_text(encoding='utf-8'))
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != 'pybada3-route':
         errors.append('metadata scenario is not pybada3-route')
     if metadata.get('event_total') != len(events):

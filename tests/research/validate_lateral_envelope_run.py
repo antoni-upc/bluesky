@@ -6,6 +6,8 @@ import csv
 import json
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def load(path):
     path = Path(path)
@@ -21,8 +23,7 @@ def load(path):
 def validate(path, abort=False):
     rows, events, metadata = load(path)
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     required = ('bank_angle_deg', 'load_factor', 'minimum_load_factor',
                 'maximum_load_factor', 'maximum_bank_angle_deg',
                 'envelope_lateral_configuration')

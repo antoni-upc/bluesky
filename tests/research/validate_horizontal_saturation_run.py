@@ -8,6 +8,8 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def _number(row, field):
     value = float(row[field])
@@ -34,8 +36,7 @@ def validate(path, family, balance_tolerance=0.04, state_tolerance=0.02):
         'target_tas_m_s', 'requested_acceleration_m_s2',
         'applied_acceleration_m_s2', 'thrust_limited',
         'thrust_limitation_reason', 'speed_capture'}
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != scenario:
         errors.append(f'metadata scenario is not {scenario}')
     if not required_fields.issubset(set(metadata.get('columns', ()))):

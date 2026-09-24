@@ -8,6 +8,8 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def _number(row, field):
     value = float(row[field])
@@ -30,8 +32,7 @@ def validate(path, family):
     expected_aircraft = {'3': 'A320__', '4': 'A320-232'}[family]
     required = {'propulsion_bank_angle_deg', 'propulsion_load_factor', 'drag_n',
                 'thrust_n', 'fuel_flow_kg_s', 'mass_kg'}
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != f'pybada-turn-load-bada{family}':
         errors.append('metadata scenario does not match the requested family')
     if not required.issubset(set(metadata.get('columns', ()))):

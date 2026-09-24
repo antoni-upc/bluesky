@@ -6,6 +6,8 @@ import json
 import argparse
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def validate(path, abort=False):
     path = Path(path)
@@ -16,8 +18,7 @@ def validate(path, abort=False):
     metadata = json.loads(
         path.with_suffix('.metadata.json').read_text(encoding='utf-8'))
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     expected_scenario = ('pybada-envelope-highlift-abort' if abort
                          else 'pybada-envelope-highlift')
     if metadata.get('scenario') != expected_scenario:

@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 G0 = 9.80665
 
@@ -26,8 +28,7 @@ def validate(path, family, power_tolerance=0.75, motion_tolerance=0.08):
     errors = []
     acid = f'B{family}JE'
     expected_aircraft = {'3': 'A320__', '4': 'A320-232'}[family]
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != f'pybada-joint-energy-bada{family}':
         errors.append('metadata scenario is incorrect')
     if metadata.get('sample_intervals_s') != [0.05]:

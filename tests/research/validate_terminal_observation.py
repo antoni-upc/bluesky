@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import sys
 
+from tests.research.schema_compat import require_schema
+
 
 PAIRS = {'takeoff candidate': (('TOB1', 'TOB2'), 'TO'),
          'landing candidate': (('LDB1', 'LDB2'), 'LD')}
@@ -24,8 +26,7 @@ def validate(path):
     events = [line for line in events_path.read_text(encoding='utf-8').splitlines()
               if line.strip()]
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != 'pybada-envelope-terminal-observe':
         errors.append('metadata scenario is not pybada-envelope-terminal-observe')
     if events or metadata.get('event_total') != 0:

@@ -6,6 +6,8 @@ import csv
 import json
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def load(path):
     path = Path(path)
@@ -20,8 +22,7 @@ def load(path):
 def validate(path, abort=False, direct=False):
     rows, events, metadata = load(path)
     errors = []
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if not rows:
         errors.append('no samples were recorded')
     for field in ('minimum_rocd_m_s', 'maximum_rocd_m_s'):

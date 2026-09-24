@@ -4,6 +4,8 @@ import datetime as dt
 import math
 import re
 
+from tests.research.schema_compat import SCHEMA_VERSION as SAMPLES_SCHEMA_VERSION
+
 
 SCHEMA_VERSION = "research-run-v2"
 PROFILES = {
@@ -124,8 +126,8 @@ def validate_manifest(manifest):
     if not isinstance(enabled, bool):
         raise ManifestError("recorder.enabled must be boolean")
     if enabled:
-        if recorder.get("schema_version") != "samples-v11":
-            raise ManifestError("enabled recorder must declare samples-v11")
+        if recorder.get("schema_version") != SAMPLES_SCHEMA_VERSION:
+            raise ManifestError(f"enabled recorder must declare {SAMPLES_SCHEMA_VERSION}")
         _positive_number(recorder.get("interval_s"), "recorder.interval_s")
 
     expected_performance, expected_atmosphere, expected_recorder = PROFILES[profile]

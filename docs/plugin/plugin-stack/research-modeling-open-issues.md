@@ -22,11 +22,13 @@ conflict resolution owns the TAS channel. Dynamics and vertical bounds receive
 the same choice. This is a nominal ESF selection, not replay of a transient
 optimiser.
 
-The current scenario-generation layer can lose source climb/descent CAS and
-Mach phase intent by emitting CAS at every waypoint. Preserving `CLB_CAS`,
-`CLB_MACH`, `DES_MACH`, and `DES_CAS` requires the planned `samples-v12`
-speed-law field and scenario-generation work; it must not be added under the
-v11 schema name.
+The v12 runtime records the active law and target representation. The
+remaining scientific issue for source-trajectory comparisons is that waypoint
+endpoints do not reproduce a source's continuous climb, acceleration, and
+configuration transitions. BlueSky allocates energy to speed first and
+altitude second, and the plugin does not plan approach configuration or gear;
+both are recorded trajectory limitations rather than defects in the speed
+law.
 
 ## Non-clean BADA configuration management
 

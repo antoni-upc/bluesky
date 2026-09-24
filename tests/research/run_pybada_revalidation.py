@@ -9,6 +9,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from tests.research.schema_compat import SCHEMA_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = sys.executable
@@ -100,8 +102,8 @@ def validate_generic(scenario):
     with path.open(newline='', encoding='utf-8') as stream:
         rows = list(csv.DictReader(stream))
     metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
-    if metadata.get('schema_version') != 'samples-v11':
-        raise RuntimeError(f'{scenario}: schema is not samples-v11')
+    if metadata.get('schema_version') != SCHEMA_VERSION:
+        raise RuntimeError(f'{scenario}: schema is not {SCHEMA_VERSION}')
     if metadata.get('scenario') != scenario:
         raise RuntimeError(f'{scenario}: metadata scenario mismatch')
     if metadata.get('rows') != len(rows) or not rows:

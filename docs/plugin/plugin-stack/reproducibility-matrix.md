@@ -36,10 +36,10 @@ historical result does not revalidate a newer commit.
 | Profile or combination   | Performance | Atmosphere  | Recorder | Gate type                                       | Required acceptance                                                                                                      |
 |--------------------------|-------------|-------------|----------|-------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
 | `baseline-recorder-free` | OpenAP      | ISA         | Off      | Dependency-free plus pinned-upstream comparison | Scenario completes normally; plugin-disabled state is byte-identical to the pinned upstream result.                      |
-| `baseline-recorder`      | OpenAP      | ISA         | On       | Dependency-free                                 | External samples are exactly equal to the recorder-free run; recorder artifacts satisfy `samples-v11`.                   |
+| `baseline-recorder`      | OpenAP      | ISA         | On       | Dependency-free                                 | External samples are exactly equal to the recorder-free run; recorder artifacts satisfy `samples-v12`.                   |
 | `meteo-recorder`         | OpenAP      | ERA5        | On       | External weather                                | Applied source, slots, bounds, strict policy, provenance, and recorder/external sample alignment all match the manifest. |
 | `meteo-recorder`         | OpenAP      | GFS         | On       | External weather                                | Same requirements as ERA5, using the selected GFS analysis cycles.                                                       |
-| `pybada-recorder`        | BADA 3      | ISA         | On       | Licensed BADA                                   | Model resolution, force/fuel/mass behavior, envelope behavior, completion, and the v11 numerical audit all pass.         |
+| `pybada-recorder`        | BADA 3      | ISA         | On       | Licensed BADA                                   | Model resolution, force/fuel/mass behavior, envelope behavior, completion, and the v12 numerical audit all pass.         |
 | `pybada-recorder`        | BADA 4      | ISA         | On       | Licensed BADA                                   | Same requirements as BADA 3 for the declared BADA 4 dataset and aircraft.                                                |
 | `combined-recorder`      | BADA 3      | ERA5 or GFS | On       | Licensed BADA plus external weather             | Both component contracts, their interaction validator, normal completion, and the numerical audit pass.                  |
 | `combined-recorder`      | BADA 4      | ERA5 or GFS | On       | Licensed BADA plus external weather             | Same requirements as BADA 3 for the declared BADA 4 dataset and aircraft.                                                |
@@ -106,7 +106,7 @@ Every completed evidence set must satisfy all applicable rules:
 3. The process exits normally and the scenario-specific completion condition is
    reached before its safety HOLD, unless the gate explicitly tests a rejection
    or ABORT transition.
-4. Every recorder CSV and metadata file declares exact `samples-v11`, the
+4. Every recorder CSV and metadata file declares exact `samples-v12`, the
    metadata column list matches the CSV header, and metadata row/event totals
    match their files.
 5. Intended atmosphere sources and dataset times are present; unexpected

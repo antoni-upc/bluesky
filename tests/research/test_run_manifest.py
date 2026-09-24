@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from tests.research.schema_compat import SCHEMA_VERSION
 from tests.research.run_manifest import ManifestError, PROFILES, validate_manifest
 
 
@@ -22,7 +23,7 @@ def manifest(profile="combined-recorder"):
         }
     recorder = {"enabled": recorder_enabled}
     if recorder_enabled:
-        recorder.update({"schema_version": "samples-v11", "interval_s": 1.0})
+        recorder.update({"schema_version": SCHEMA_VERSION, "interval_s": 1.0})
     document = {
         "schema_version": "research-run-v2",
         "revision": {
@@ -65,7 +66,7 @@ def test_all_five_profiles_are_valid(profile):
     (("experiment", "duration_s"), 120.1, "whole number"),
     (("configuration", "performance", "strict"), False, "strict=true"),
     (("configuration", "atmosphere", "bounds"), [45, -5, 40, 5], "outside"),
-    (("configuration", "recorder", "schema_version"), "samples-v9", "samples-v11"),
+    (("configuration", "recorder", "schema_version"), "samples-v9", SCHEMA_VERSION),
 ])
 def test_invalid_provenance_and_configuration_are_rejected(path, value, message):
     document = manifest()

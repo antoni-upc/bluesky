@@ -8,6 +8,8 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
+from tests.research.schema_compat import require_schema
+
 
 def _number(row, field):
     value = float(row[field])
@@ -25,8 +27,7 @@ def validate(path, family, acceleration_threshold=0.05, balance_tolerance=0.03):
     scenario = f'pybada-acceleration-bada{family}'
     expected_model = f'PYBADATEM-BADA{family}'
     expected_aircraft = {'3': 'A320__', '4': 'A320-232'}[family]
-    if metadata.get('schema_version') != 'samples-v11':
-        errors.append('metadata schema is not samples-v11')
+    require_schema(metadata, errors)
     if metadata.get('scenario') != scenario:
         errors.append(f'metadata scenario is not {scenario}')
     intervals = metadata.get('sample_intervals_s')

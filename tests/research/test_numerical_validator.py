@@ -1,9 +1,10 @@
 import pytest
+from tests.research.schema_compat import SCHEMA_VERSION
 from tests.research.validate_numerical_run import validate,G
 
 
 def sample():
-    return {'schema_version':'samples-v11','dynamics_mode':'TEM','performance_valid':'True',
+    return {'schema_version':SCHEMA_VERSION,'dynamics_mode':'TEM','performance_valid':'True',
         'atmosphere_valid':'True','acid':'T1','sim_time_s':'1','evaluation_timestep_s':'1',
         'evaluation_tas_m_s':'100','evaluation_mass_kg':'1000','evaluation_alt_m':'1000',
         'tas_m_s':'100.5','mass_kg':'999.5','geometric_alt_m':str(1000+50/G),
@@ -24,7 +25,7 @@ def test_uses_evaluation_state_not_post_step_airdata():
     ('mass_kg','1000','mass_kg'),
     ('maximum_thrust_n','900','above maximum'),
     ('evaluation_tas_m_s','','could not convert'),
-    ('schema_version','samples-v10','samples-v11')])
+    ('schema_version','samples-v10',SCHEMA_VERSION)])
 def test_rejects_independent_energy_snap_mass_bound_and_alignment_errors(field,value,reason):
     row=sample();row[field]=value;result=validate([row]);assert not result['passed']
     assert any(reason in error for error in result['errors'])

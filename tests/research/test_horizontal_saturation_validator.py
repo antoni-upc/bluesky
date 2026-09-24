@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from tests.research.schema_compat import SCHEMA_VERSION
 from tests.research.validate_horizontal_saturation_run import validate
 
 
@@ -44,7 +45,7 @@ def _evidence(tmp_path, force_error=0.0):
             fuel = 0.5 + max(feasible, 0.0) * 0.1
             mass -= fuel * dt
             rows.append({
-                'schema_version': 'samples-v11', 'sim_time_s': (index + 1) * dt,
+                'schema_version': SCHEMA_VERSION, 'sim_time_s': (index + 1) * dt,
                 'acid': acid, 'tas_m_s': tas, 'target_tas_m_s': target,
                 'vertical_speed_m_s': 0.0, 'performance_model': 'PYBADATEM-BADA4',
                 'performance_aircraft': 'A320-232', 'performance_dummy': False,
@@ -65,7 +66,7 @@ def _evidence(tmp_path, force_error=0.0):
         writer.writeheader()
         writer.writerows(rows)
     path.with_suffix('.metadata.json').write_text(json.dumps({
-        'schema_version': 'samples-v11', 'scenario': 'pybada-saturation-bada4',
+        'schema_version': SCHEMA_VERSION, 'scenario': 'pybada-saturation-bada4',
         'sample_intervals_s': [0.05], 'columns': list(FIELDS),
         'event_total': 0}), encoding='utf-8')
     return path
@@ -75,13 +76,13 @@ def test_saturation_validator_accepts_applied_motion_and_capture(tmp_path):
     assert validate(_evidence(tmp_path), '4').startswith('VALID:')
 
 
-def test_saturation_validator_accepts_v11(tmp_path):
+def test_saturation_validator_accepts_v12(tmp_path):
     path = _evidence(tmp_path)
     assert validate(path, '4').startswith('VALID:')
 
 
 @pytest.mark.parametrize('schema', ['samples-v7', 'samples-v8', 'samples-v9', 'samples-v10'])
-def test_saturation_validator_rejects_pre_v11(tmp_path, schema):
+def test_saturation_validator_rejects_pre_v12(tmp_path, schema):
     path = _evidence(tmp_path)
     metadata_path = path.with_suffix('.metadata.json')
     metadata = json.loads(metadata_path.read_text())
@@ -89,7 +90,7 @@ def test_saturation_validator_rejects_pre_v11(tmp_path, schema):
     metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
     result = validate(path, '4')
     assert result.startswith('INVALID evidence:')
-    assert 'not samples-v11' in result
+    assert f'not {SCHEMA_VERSION}' in result
 
 
 def test_saturation_validator_rejects_applied_force_mismatch(tmp_path):

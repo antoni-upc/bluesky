@@ -8,7 +8,7 @@ minimal coexisting hooks added to BlueSky, and plugin-owned behaviour. The
 validation protocol and claim boundaries are maintained in
 [`reproducibility-matrix.md`](reproducibility-matrix.md).
 
-Dependency-free checks, exact-v11 validation, licensed BADA gates,
+Dependency-free checks, exact-v12 validation, licensed BADA gates,
 weather/TEM gates, and a plugin-disabled comparison are implemented. Tests that
 require licensed BADA data or external weather resources remain separately
 marked and require a validated local run manifest. A gate's result is current
@@ -131,7 +131,7 @@ flowchart LR
 | Atmosphere             | ISA initialization and airdata            | ERA5/GFS temperature, pressure, density, wind and provenance | Implemented; synthetic and external-resource gates available                                 |
 | Weather time           | Simulation UTC                            | Exact provider slots and opt-in interpolation                | ERA5 hourly; GFS six-hourly                                                                  |
 | Invalid weather        | ISA remains available                     | Strict abort or explicit interactive ISA fallback            | Implemented; no extrapolation                                                                |
-| Evidence               | Simulation state                          | Versioned streaming CSV, metadata, quality events            | `samples-v11`, bounded memory                                                                |
+| Evidence               | Simulation state                          | Versioned streaming CSV, metadata, quality events            | `samples-v12`, bounded memory                                                                |
 
 ## Lifecycle map
 
@@ -200,7 +200,7 @@ plugin-disabled OpenAP/ISA baseline.
 
 - [`research-plugins.md`](research-plugins.md): operator-facing setup, commands,
   and validation.
-- [`recorder-v11-contract.md`](../recorder/recorder-v11-contract.md): exact CSV,
+- [`recorder-v12-contract.md`](../recorder/recorder-v12-contract.md): exact CSV,
   event, metadata, and export contract.
 - [`bada-envelope-implementation.md`](../pybada-tem/bada-envelope-implementation.md):
   envelope behaviour and licensed scope.
