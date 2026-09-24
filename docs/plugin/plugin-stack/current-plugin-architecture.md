@@ -103,10 +103,18 @@ maximum thrust plus requested/applied acceleration and limitation state are
 retained per aircraft. In KINEMATIC mode, strict operation rejects an
 adapter-reported infeasible horizontal thrust request by holding the simulation
 without terminating BlueSky. In TEM mode, ordinary saturation does not by
-itself hold a strict run: the adapter performs thrust-feasible speed-priority
-allocation. It attempts the requested acceleration first, reduces the vertical
-response towards level flight when necessary, and then clips acceleration to the
-remaining thrust-feasible interval. Evaluation failures still hold a strict
+itself hold a strict run: the adapter allocates the thrust-feasible specific
+excess power between acceleration and vertical rate,
+`a + (g0/V) w = (Thr - D)/m`, under a per-aircraft policy (`TEMPOLICY`). The
+default `SPEED_PRIORITY` attempts the requested acceleration first, uses the
+model's rated-thrust vertical rate but never a faster one than guidance asks,
+reduces the vertical response towards level flight when necessary, and then
+clips acceleration to the remaining thrust-feasible interval.
+`VERTICAL_PRIORITY` tracks the guidance vertical rate first and keeps speed
+above the envelope's minimum TAS; `JOINT` minimises weighted squared errors of
+both. The same allocation also reports the acceleration and deceleration each
+aircraft can deliver, which guidance uses for speed-change anticipation and
+RTA instead of the generic `axmax`. Evaluation failures still hold a strict
 run. Applied thrust drives both fuel flow and the recorded one-step response:
 
 ```mermaid

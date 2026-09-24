@@ -107,7 +107,18 @@ interval and records both timestamps and the blend fraction as provenance.
   it reports `ALL`; `MAX` and `MAXS` are accepted as aliases for `BOUNDS`.
   In `TEM` mode, BlueSky still supplies selected-speed and waypoint intent,
   while pyBADA owns the applied speed/vertical response, thrust, and fuel
-  through the speed-priority allocation.
+  through the selected energy allocation.
+- `TEMPOLICY [acid] [SPEED|VERTICAL|JOINT] [w_accel w_vertical]` selects how a
+  TEM aircraft divides specific excess power, `a + (g0/V) w = (Thr - D)/m`,
+  between acceleration `a` and geometric vertical rate `w`. `SPEED` (the
+  default, recorded as `SPEED_PRIORITY`) tracks speed first and climbs or
+  descends at the model's rated-thrust rate, but never faster than guidance
+  asks. `VERTICAL` (`VERTICAL_PRIORITY`) tracks the guidance vertical rate first
+  and keeps speed at or above the envelope's minimum TAS. `JOINT` minimises
+  `w_accel (a - a_req)^2 + w_vertical (w - w_ref)^2` with `a` in m/s2 and `w`
+  in m/s; both weights are required and positive, so there is no implicit
+  default. Guidance plans speed changes and RTA with the acceleration and
+  deceleration the selected policy delivers, not BlueSky's generic `axmax`.
 - `SPDSCHED ICAO` is the default. ESF follows each aircraft's live selected
   CAS or Mach representation using BlueSky's current CAS/Mach threshold;
   altitude alone never switches the law. A conflict-resolution-owned TAS
