@@ -375,3 +375,32 @@ def test_era5_fetch_reuses_valid_cached_file(monkeypatch, tmp_path):
     monkeypatch.setattr(provider, '_read_validated',
                         lambda path, ignored, area: sentinel)
     assert provider._fetch(slot, bounds) is sentinel
+
+
+def global_cube(longitude):
+    altitude, latitude = np.array([0.0, 10_000.0]), np.array([-10.0, 10.0])
+    longitude = np.asarray(longitude, dtype=float)
+    temperature = np.broadcast_to(250.0 + np.arange(longitude.size, dtype=float),
+                                  (2, 2, longitude.size)).copy()
+    constant = np.ones_like(temperature)
+    return WeatherCube(altitude, latitude, longitude, constant, constant, temperature,
+                       50_000.0 * constant, 'SYNTHETIC', '2026-01-01T00:00:00+00:00')
+
+
+def test_regular_global_grid_interpolates_across_every_longitude_gap():
+    weather = global_cube([0.0, 90.0, 180.0, 270.0])
+    queries = np.array([45.0, 135.0, 315.0, -45.0, 359.0, 0.0])
+    _, _, sample = weather.interpolate(np.zeros(6), queries, np.full(6, 5000.0))
+    assert sample.valid.all()
+    # Temperatures are 250, 251, 252, 253 K at 0, 90, 180, 270 deg.
+    np.testing.assert_allclose(sample.temperature,
+                               [250.5, 251.5, 251.5, 251.5, 253.0 - 3.0 * 89.0 / 90.0, 250.0])
+    assert weather.longitude.tolist() == [0.0, 90.0, 180.0, 270.0]
+    assert weather.temperature.shape == (2, 2, 4)
+
+
+def test_regional_grid_keeps_its_unrepresented_longitude_gap():
+    weather = global_cube([10.0, 20.0, 30.0])
+    _, _, sample = weather.interpolate(np.zeros(3), np.array([15.0, 5.0, 200.0]),
+                                       np.full(3, 5000.0))
+    assert sample.valid.tolist() == [True, False, False]

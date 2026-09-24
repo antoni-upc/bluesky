@@ -25,17 +25,23 @@ def _axis(name, values):
 
 
 def _longitude_axis(values):
-    """Order a circular longitude axis across its largest unrepresented gap."""
+    """Order a circular longitude axis across its largest unrepresented gap.
+
+    A regular grid whose wrap-around spacing equals its interior spacing covers
+    the whole circle and has no unrepresented gap; it is reported as periodic.
+    """
     wrapped = (np.asarray(values, dtype=float) + 360.0) % 360.0
     sorted_values, order = _axis('longitude', wrapped)
     gaps = np.concatenate((np.diff(sorted_values),
                            [sorted_values[0] + 360.0 - sorted_values[-1]]))
+    if np.allclose(gaps, gaps[0], rtol=1e-6, atol=0.0):
+        return sorted_values, order, True
     start = (int(np.argmax(gaps)) + 1) % len(sorted_values)
     if start == 0:
-        return sorted_values, order
+        return sorted_values, order, False
     axis = np.concatenate((sorted_values[start:], sorted_values[:start] + 360.0))
     permutation = np.concatenate((order[start:], order[:start]))
-    return axis, permutation
+    return axis, permutation, False
 
 
 @dataclass
@@ -84,7 +90,7 @@ class WeatherCube:
     def __post_init__(self):
         self.altitude, iz = _axis('altitude', self.altitude)
         self.latitude, iy = _axis('latitude', self.latitude)
-        self.longitude, ix = _longitude_axis(self.longitude)
+        self.longitude, ix, periodic = _longitude_axis(self.longitude)
         shape = (len(iz), len(iy), len(ix))
         fields = []
         for name in ('east_wind', 'north_wind', 'temperature', 'pressure'):
@@ -98,7 +104,13 @@ class WeatherCube:
             setattr(self, name, value)
         if np.any(self.temperature <= 0.0) or np.any(self.pressure <= 0.0):
             raise GridValidationError('temperature and pressure must be positive')
-        axes = (self.altitude, self.latitude, self.longitude)
+        longitude = self.longitude
+        if periodic:
+            # Close the circle between the last and first columns for interpolation
+            # only; the public axis and fields keep one column per longitude.
+            longitude = np.append(longitude, longitude[0] + 360.0)
+            fields = [np.concatenate((value, value[:, :, :1]), axis=2) for value in fields]
+        axes = (self.altitude, self.latitude, longitude)
         self._interpolators = [RegularGridInterpolator(axes, value,
             bounds_error=False, fill_value=np.nan) for value in fields]
 
