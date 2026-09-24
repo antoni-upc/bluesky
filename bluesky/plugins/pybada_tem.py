@@ -312,7 +312,8 @@ def perfstatus(acid=None, view=None):
                 f'{value_text(getattr(flight, "maximum_cas", None), 1)} m/s  '
                 f'Mach={value_text(getattr(flight, "minimum_mach", None), 3)}..'
                 f'{value_text(getattr(flight, "maximum_mach", None), 3)}  '
-                f'alt_max={altitude_text(getattr(flight, "maximum_altitude", None))}',
+                f'alt_max={altitude_text(getattr(flight, "maximum_altitude", None))} '
+                '(pressure altitude)',
                 f'  Vertical: ROC_MAX={value_text(getattr(vertical, "maximum_rocd", None), 2)} m/s  '
                 f'ROD_MAX={value_text(rod_max, 2)} m/s',
                 f'  Lateral: {lateral_source}  '

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import bluesky as bs
+from bluesky.tools.aero import vatmos
 from bluesky.plugins.pybada.envelope import (
     EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile, EnvelopeResult,
     EnvelopeStatus, FlightBounds, LateralBounds, VerticalBounds,
@@ -12,6 +13,13 @@ from bluesky.plugins.pybada.envelope import (
 from bluesky.plugins.pybada.performance import PyBadaTEM
 from bluesky.plugins.pybada.model import EvaluationError
 from bluesky.traffic.quality import quality_events as neutral_quality_events
+
+try:
+    from bluesky.traffic.atmosphere import pressure_altitude
+except ImportError:  # PyBADA branch without the NWP atmosphere hook
+    pressure_altitude = None
+requires_atmosphere = pytest.mark.skipif(
+    pressure_altitude is None, reason='requires the NWP atmosphere hook')
 
 
 def test_pybada_publishes_to_the_neutral_quality_signal():
@@ -252,6 +260,8 @@ def test_lateral_evaluation_uses_selected_bada_bounds():
 def test_lateral_guidance_report_and_enforce_are_isolated(monkeypatch):
     traffic(monkeypatch)
     monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    events = []
+    monkeypatch.setattr(neutral_quality_events, 'emit', events.append)
     bs.traf.swhdgsel[:] = True
     bs.traf.ap.bankdef[:] = np.radians(75.0)
     perf = make_perf(('REPORT', 'ENFORCE'))
@@ -263,12 +273,37 @@ def test_lateral_guidance_report_and_enforce_are_isolated(monkeypatch):
     assert np.degrees(bs.traf.ap.bankdef).tolist() == pytest.approx([75.0, 60.0])
     # Status describes the state evaluated before guidance is limited.
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'INFEASIBLE']
-    assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'ACCEPTED']
+    assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
     assert perf.envelope_event_count.tolist() == [1, 1]
+    assert [(event.aircraft, event.action) for event in events] == [
+        ('A1', 'ACCEPTED'), ('A2', 'LIMITED')]
+    assert events[1].requested['bank_angle_deg'] == pytest.approx(75.0)
+    assert events[1].applied['bank_angle_deg'] == pytest.approx(60.0)
+    assert events[1].requested['load_factor'] > events[1].applied['load_factor']
     perf.limits(np.array([120.0, 120.0]), np.zeros(2),
                 np.array([3000.0, 3000.0]), np.zeros(2))
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
     assert perf.envelope_event_count.tolist() == [1, 1]
+    assert len(events) == 2
+
+
+def test_abort_policy_change_publishes_persistent_violation(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    events = []
+    monkeypatch.setattr(neutral_quality_events, 'emit', events.append)
+    perf = make_perf(('REPORT',))
+
+    assert perf.assign_mass(0, 90_000.0)[0]
+    assert perf.configure_envelope(0, policy=EnvelopePolicy.ABORT)[0]
+
+    assert [(event.reason, event.action, event.continuation) for event in events] == [
+        ('MASS_MAX', 'ACCEPTED', 'CONTINUE'),
+        ('MASS_MAX', 'ABORTED', 'STOP')]
+    assert perf.envelope_event_count[0] == 2
+    assert perf.envelope_last_action[0] == 'ABORTED'
+    assert perf.configure_envelope(0, policy=EnvelopePolicy.ABORT)[0]
+    assert len(events) == 2
 
 
 def test_vertical_guidance_report_and_enforce_are_isolated(monkeypatch):
@@ -305,12 +340,12 @@ def test_enforce_recovers_current_vertical_overshoot_as_a_limit(monkeypatch):
         np.array([0.0, 3000.0]), np.zeros(2))
     assert applied_vs[0] == 8.0
     assert perf.envelope_status[0] == 'INFEASIBLE'
-    assert perf.envelope_last_action[0] == 'ACCEPTED'
+    assert perf.envelope_last_action[0] == 'LIMITED'
     assert perf.envelope_last_reason[0] == 'ROD_MAX'
     assert perf.envelope_event_count[0] == 1
     assert ('requested={direction=DESCENT,vertical_rate_magnitude_m_s=20.00}'
             in messages[0])
-    assert ('applied={direction=DESCENT,vertical_rate_magnitude_m_s=20.00}'
+    assert ('applied={direction=DESCENT,vertical_rate_magnitude_m_s=8.00}'
             in messages[0])
     # A changed request does not change actual vertical speed. Only a later
     # evaluation of a recovered state may clear the current-state finding.
@@ -375,7 +410,9 @@ def test_guidance_report_and_enforce_are_per_aircraft_and_atomic(monkeypatch):
     applied_v, _, applied_h = perf.limits(
         requested_v, np.zeros(2), requested_h, np.zeros(2))
     np.testing.assert_allclose(applied_v, [250.0, 200.0])
-    np.testing.assert_allclose(applied_h, [12_000.0, 10_000.0])
+    assert applied_h[0] == 12_000.0
+    assert applied_h[1] == pytest.approx(10_000.0, abs=2.0)
+    assert perf._pressure_altitude_at(1, applied_h[1]) <= 10_000.0
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
     assert perf.envelope_event_count.tolist() == [1, 1]
     assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
@@ -389,6 +426,116 @@ def test_guidance_report_and_enforce_are_per_aircraft_and_atomic(monkeypatch):
     # Input guidance arrays are never partially mutated.
     np.testing.assert_allclose(requested_v, [250.0, 250.0])
     np.testing.assert_allclose(requested_h, [12_000.0, 12_000.0])
+
+
+def test_ceiling_checks_current_pressure_altitude_in_both_directions(monkeypatch):
+    traffic(monkeypatch)
+    perf = make_perf(('REPORT', 'REPORT'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    perf.envelope_checks = [(EnvelopeCheck.ALTITUDE_MAX,)] * 2
+    bs.traf.alt[:] = [9900.0, 10100.0]
+    bs.traf.pressure_alt[:] = [10100.0, 9900.0]
+    first, _, _, _ = perf.evaluate_envelope(0)
+    second, _, _, _ = perf.evaluate_envelope(1)
+    assert first.failed_checks == (EnvelopeCheck.ALTITUDE_MAX,)
+    assert second.status == EnvelopeStatus.VALID
+
+
+def test_direct_state_ceiling_policy_uses_pressure_altitude(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    perf.envelope_checks = [(EnvelopeCheck.ALTITUDE_MAX,)] * 2
+    bs.traf.alt[:] = 9900.0
+    bs.traf.pressure_alt[:] = 10100.0
+    accepted, _ = perf.assess_direct_state(0, None)
+    rejected, reason = perf.assess_direct_state(1, None)
+    assert accepted
+    assert not rejected and 'ALTITUDE_MAX' in reason
+
+
+def test_ceiling_without_atmosphere_hook_uses_geometric_altitude(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    monkeypatch.setattr('bluesky.plugins.pybada.performance.pressure_altitude', None)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    perf.envelope_checks = [(EnvelopeCheck.ALTITUDE_MAX,)] * 2
+    bs.traf.wind = SimpleNamespace()
+    assert perf._pressure_altitude_at(1, 10_100.0) == 10_100.0
+    _, _, applied_h = perf.limits(
+        np.array([120.0, 120.0]), np.zeros(2), np.array([10_100.0, 10_100.0]), np.zeros(2))
+    assert applied_h[0] == 10_100.0
+    assert applied_h[1] == pytest.approx(10_000.0, abs=1e-3)
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
+
+
+@requires_atmosphere
+def test_weather_ceiling_limits_geometric_target_at_pressure_boundary(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    perf.envelope_checks = [(EnvelopeCheck.ALTITUDE_MAX,)] * 2
+    bs.traf.alt[:] = 9000.0
+    bs.traf.pressure_alt[:] = pressure_altitude(vatmos(np.array([9200.0]))[0])[0]
+    bs.traf.lat = np.array([41.0, 41.0])
+    bs.traf.lon = np.array([2.0, 2.0])
+
+    def shifted_atmosphere(lat, lon, alt, utc):
+        pressure, density, temperature = vatmos(np.asarray(alt) + 200.0)
+        return SimpleNamespace(pressure=pressure, density=density,
+                               temperature=temperature,
+                               valid=np.ones_like(pressure, dtype=bool))
+
+    bs.traf.wind = SimpleNamespace(get_atmosphere=shifted_atmosphere)
+    requested_h = np.array([9900.0, 9900.0])
+    _, _, applied_h = perf.limits(
+        np.array([120.0, 120.0]), np.zeros(2), requested_h, np.zeros(2))
+    assert applied_h[0] == 9900.0
+    assert applied_h[1] == pytest.approx(9800.0, abs=2.0)
+    assert perf._pressure_altitude_at(1, applied_h[1]) <= 10_000.0
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
+    np.testing.assert_array_equal(requested_h, [9900.0, 9900.0])
+
+
+@requires_atmosphere
+def test_ceiling_does_not_reject_high_geometric_target_below_pressure_ceiling(monkeypatch):
+    traffic(monkeypatch)
+    perf = make_perf(('REPORT', 'OFF'))
+    perf.models[0] = FakeFlightModel()
+    perf.envelope_checks[0] = (EnvelopeCheck.ALTITUDE_MAX,)
+    bs.traf.lat = np.array([41.0, 41.0])
+    bs.traf.lon = np.array([2.0, 2.0])
+
+    def shifted_atmosphere(lat, lon, alt, utc):
+        pressure, density, temperature = vatmos(np.asarray(alt) - 200.0)
+        return SimpleNamespace(pressure=pressure, density=density,
+                               temperature=temperature,
+                               valid=np.ones_like(pressure, dtype=bool))
+
+    bs.traf.wind = SimpleNamespace(get_atmosphere=shifted_atmosphere)
+    result, _, _, _ = perf.evaluate_envelope(0, altitude=10_100.0)
+    assert result.status == EnvelopeStatus.VALID
+
+
+@requires_atmosphere
+def test_ceiling_target_outside_valid_weather_is_unknown(monkeypatch):
+    traffic(monkeypatch)
+    perf = make_perf(('ENFORCE', 'OFF'))
+    perf.models[0] = FakeFlightModel()
+    perf.envelope_checks[0] = (EnvelopeCheck.ALTITUDE_MAX,)
+    bs.traf.lat = np.array([41.0, 41.0])
+    bs.traf.lon = np.array([2.0, 2.0])
+    bs.traf.wind = SimpleNamespace(get_atmosphere=lambda lat, lon, alt, utc:
+        SimpleNamespace(pressure=np.array([np.nan]), density=np.array([np.nan]),
+                        temperature=np.array([np.nan]), valid=np.array([False])))
+    requested_h = np.array([12_000.0, 3000.0])
+    with pytest.raises(RuntimeError, match='guidance envelope unknown'):
+        perf.limits(np.array([120.0, 120.0]), np.zeros(2),
+                    requested_h, np.zeros(2))
+    np.testing.assert_array_equal(requested_h, [12_000.0, 3000.0])
 
 
 def test_unknown_selected_flight_bound_rejects_without_partial_limiting(monkeypatch):

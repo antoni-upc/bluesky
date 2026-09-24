@@ -15,6 +15,24 @@ capture when feasible, and evaluates thrust, drag, fuel flow, and aerodynamic
 configuration. Scenario routes therefore preserve BlueSky guidance intent
 without allowing native propagation to bypass the TEM energy balance.
 
+### Selected-speed representation limit
+
+BlueSky parses a CAS command into m/s and a Mach command into a dimensionless
+number. `SPD` retains that selected representation. `ADDWPT` retains it in the
+route and passes it through later waypoint transitions. BlueSky's built-in
+`DIRECT` operation also runs when an added waypoint first activates a route;
+its usual behavior converts that initial Mach waypoint target to CAS.
+PYBADATEM requests raw Mach retention for that `DIRECT` path so the first leg
+can use `constM`. Native performance models keep BlueSky's conversion.
+
+`CRE` and `MOVE` initialize the selected speed from the computed CAS even when
+their input is Mach. They set the aircraft's physical Mach state, but do not
+establish a Mach selected-speed law. Use `SPD M...` or a Mach waypoint with
+active VNAV speed guidance when a `constM` target is intended. The recorder
+captures the law actually evaluated by PYBADATEM; it cannot recover a lost
+source representation from a CAS value. Existing all-CAS campaign inputs
+therefore continue to evaluate as `constCAS` until those inputs are changed.
+
 The implemented checks are:
 
 - mass: `MASS_MIN`, `MASS_MAX`;
@@ -128,6 +146,13 @@ Bounds are evaluated per aircraft at its current operating point using the
 atmosphere already applied to that aircraft. Guidance enforcement records
 requested and applied speed and altitude. Direct `MOVE` and creation checks are
 transactional.
+
+`ALTITUDE_MAX` is a pressure-altitude bound. Current-state checks compare it
+with `traf.pressure_alt`. Guidance altitude targets remain geometric; the
+plugin samples pressure at the target altitude to check them and finds a
+geometric target at the ceiling when enforcement is needed. Recorder event
+`altitude_m` values remain geometric requests and applied targets, while
+`maximum_altitude_m` records the pressure-altitude ceiling.
 
 ### ROC and ROD
 

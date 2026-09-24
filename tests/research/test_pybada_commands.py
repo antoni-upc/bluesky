@@ -117,6 +117,7 @@ def test_perfstatus_reports_bada4_lateral_configuration_observation(monkeypatch)
     assert 'DLM=nf3/nf1  load=0.00..2.00' in message
     assert 'alt=3048.0 m (10000 ft/FL100)' in message
     assert 'alt_max=12000.0 m (39370 ft/FL394)' in message
+    assert '(pressure altitude)' in message
 
     success, current = perfstatus('B42', 'CURRENT')
     assert success and 'CURRENT' in current and 'BOUNDS' not in current

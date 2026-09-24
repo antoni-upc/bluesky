@@ -125,6 +125,95 @@ class FakeAtmosphere:
         return cas
 
 
+@pytest.mark.parametrize(('evolution', 'share'), [
+    ('constCAS', 0.6), ('constM', 0.8)])
+@pytest.mark.parametrize('phase', ['Climb', 'Descent'])
+@pytest.mark.parametrize('family', ['3', '4'])
+def test_esf_model_split_is_independent_of_speed_request(
+        monkeypatch, evolution, share, phase, family):
+    """The model's ESF proposal is a speed-law result, not speed capture."""
+    class FlightEnvelope:
+        @staticmethod
+        def CL(**kwargs):
+            return 0.5
+
+        @staticmethod
+        def CD(**kwargs):
+            return 0.03
+
+        @staticmethod
+        def D(**kwargs):
+            return 20000.0
+
+        @staticmethod
+        def getAeroConfig(**kwargs):
+            return 0, 'LGUP'
+
+        @staticmethod
+        def Thrust(*, rating, **kwargs):
+            return {'MCMB': 80000.0, 'LIDL': 10000.0}[rating]
+
+        @staticmethod
+        def ff(**kwargs):
+            return 0.5
+
+    class Aircraft:
+        flightEnvelope = FlightEnvelope()
+
+        @staticmethod
+        def Thrust(*, rating, **kwargs):
+            return {'MCMB': 80000.0, 'LIDL': 10000.0}[rating]
+
+        @staticmethod
+        def ROCD(thrust, drag, tas, mass, esf, h, dtemp):
+            return (thrust - drag) * tas * esf / (mass * 9.80665)
+
+        @staticmethod
+        def ff(**kwargs):
+            return 0.5
+
+        @staticmethod
+        def ffMin(**kwargs):
+            return 0.1
+
+    class Airplane:
+        @staticmethod
+        def esf(*, flightEvolution, **kwargs):
+            return {'constCAS': 0.6, 'constM': 0.8}[flightEvolution]
+
+    class Bada4Aircraft:
+        flightEnvelope = FlightEnvelope()
+
+        @staticmethod
+        def esf(*, flightEvolution, **kwargs):
+            return Airplane.esf(flightEvolution=flightEvolution)
+
+        @staticmethod
+        def ROCD(*, T, D, v, mass, ESF, **kwargs):
+            return (T - D) * v * ESF / (mass * 9.80665)
+
+    monkeypatch.setattr(BadaModelAdapter, '_atmosphere', staticmethod(
+        lambda h, tas, temperature: (
+            SimpleNamespace(tas2Cas=lambda **kwargs: kwargs['tas']),
+            0.0, 1.0, 1.0, 1.0, 0.5)))
+    monkeypatch.setattr('bluesky.plugins.pybada.model.import_module',
+                        lambda name: SimpleNamespace(Airplane=Airplane))
+    adapter = BadaModelAdapter(Aircraft() if family == '3' else Bada4Aircraft(), family)
+    result = EnergyResult(**adapter.bluesky_energy(
+        h=3000.0, tas=200.0, mass=60000.0, temperature=270.0,
+        pressure=70000.0, phase=phase, schedule='ICAO',
+        configuration_mode='CRUISE', speed_evolution=evolution,
+        requested_acceleration=2.0, requested_vertical_rate=5.0)).validate()
+    power = (result.thrust - result.drag) * 200.0 / 60000.0
+    assert result.allocation_policy == 'BADA_ESF'
+    assert result.esf == pytest.approx(share)
+    assert result.idle_thrust <= result.thrust <= result.maximum_thrust
+    assert result.applied_acceleration == pytest.approx(power * (1.0 - share) / 200.0)
+    assert 9.80665 * result.applied_vertical_rate == pytest.approx(power * share)
+    assert result.requested_acceleration == 2.0
+    assert result.applied_acceleration != pytest.approx(2.0)
+
+
 class FakeBada3Envelope:
     def getConfig(self, **kwargs):
         return 'CR'
@@ -580,6 +669,13 @@ def test_packaged_esf_uses_explicit_speed_intent(family, height, evolution):
     for phase in ['Climb', 'Descent']:
         result = EnergyResult(**model.bluesky_energy(phase=phase, **state)).validate()
         assert result.esf == pytest.approx(expected)
+        assert result.allocation_policy == 'BADA_ESF'
+        assert result.idle_thrust <= result.thrust <= result.maximum_thrust
+        specific_power = (result.thrust - result.drag) * state['tas'] / state['mass']
+        assert result.applied_acceleration == pytest.approx(
+            (result.thrust - result.drag) * (1.0 - result.esf) / state['mass'])
+        assert state['tas'] * result.applied_acceleration + 9.80665 * result.applied_vertical_rate == pytest.approx(
+            specific_power, abs=1e-8)
     bounds = model.bluesky_vertical_envelope(**state)
     assert bounds['maximum_rocd'] == pytest.approx(model.bluesky_energy(phase='Climb', **state)['rocd'])
     assert bounds['minimum_rocd'] == pytest.approx(model.bluesky_energy(phase='Descent', **state)['rocd'])

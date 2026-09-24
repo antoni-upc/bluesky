@@ -94,6 +94,7 @@ def test_tem_updates_once_and_depletes_mass(monkeypatch):
     assert vertical_handled.tolist() == [True]
     assert traf.tas[0] == pytest.approx(200.0)
     assert traf.vs[0] == pytest.approx(5.0)
+    assert perf.energy_allocation_policy[0] == 'SPEED_PRIORITY'
     assert perf.mass[0] == pytest.approx(59999.5)
     assert perf.failure_count[0] == 0
 
@@ -108,6 +109,7 @@ def test_kinematic_computes_performance_without_driving_motion(monkeypatch):
     assert vertical_handled.tolist() == [False]
     assert traf.tas[0] == pytest.approx(200.0)
     assert traf.vs[0] == pytest.approx(0.0)
+    assert perf.energy_allocation_policy[0] == 'BADA_ESF'
     assert perf.thrust[0] == pytest.approx(12000.0)
     assert perf.rated_thrust[0] == pytest.approx(14000.0)
     assert perf.drag[0] == pytest.approx(10000.0)
@@ -416,6 +418,69 @@ def test_speed_mode_override_resolution_and_live_selection(monkeypatch):
     assert perf._speed_evolution(0) == 'constTAS'
     perf.schedule = 'CONSCAS'
     assert perf._speed_evolution(0) == 'constCAS'
+
+
+@pytest.mark.parametrize(('selected', 'schedule', 'resolved', 'law', 'target'), [
+    (150.0, 'ICAO', False, 'constCAS', 'target_cas'),
+    (.78, 'ICAO', False, 'constM', 'target_mach'),
+    (.78, 'CONSCAS', False, 'constCAS', 'target_mach'),
+    (.78, 'ICAO', True, 'constTAS', 'target_tas'),
+])
+def test_captured_speed_intent_has_one_original_target(
+        monkeypatch, selected, schedule, resolved, law, target):
+    traf = traffic()
+    traf.selspd[0] = selected
+    traf.cr = SimpleNamespace(tasactive=np.array([resolved]))
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(FakeModel())
+    perf.schedule = schedule
+    intent = perf._capture_speed_intent(0)
+    assert intent.evolution == law
+    values = {name: getattr(intent, name) for name in
+              ('target_cas', 'target_mach', 'target_tas')}
+    assert {name for name, value in values.items() if np.isfinite(value)} == {target}
+    assert values[target] == pytest.approx(traf.aporasas.tas[0] if resolved else selected)
+
+
+def test_captured_law_is_shared_with_energy_and_vertical_bounds(monkeypatch):
+    class IntentModel(FakeModel):
+        def bluesky_energy(self, **state):
+            self.energy_law = state['speed_evolution']
+            return super().bluesky_energy(**state)
+
+        def bluesky_vertical_envelope(self, **state):
+            self.vertical_law = state['speed_evolution']
+            return dict(minimum_rocd=-5., maximum_rocd=5.)
+
+    traf = traffic()
+    traf.selspd[0] = .78
+    monkeypatch.setattr(bs, 'traf', traf)
+    model = IntentModel()
+    perf = performance(model)
+    intent = perf._capture_speed_intent(0)
+    perf._evaluate(0, speed_intent=intent)
+    traf.selspd[0] = 150.0
+    perf.vertical_bounds(0, speed_intent=intent)
+    assert model.energy_law == model.vertical_law == 'constM'
+
+
+def test_failed_evaluation_clears_recorded_speed_intent(monkeypatch):
+    traf = traffic()
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = performance(FakeModel())
+    perf.evaluation_speed_evolution = np.array([''], dtype='U8')
+    perf.evaluation_speed_target_cas = np.array([np.nan])
+    perf.evaluation_speed_target_mach = np.array([np.nan])
+    perf.evaluation_speed_target_tas = np.array([np.nan])
+    perf.update_dynamics(traf, 1.0)
+    assert perf.evaluation_speed_evolution[0] == 'constCAS'
+    assert perf.evaluation_speed_target_cas[0] == 150.0
+    perf.models[0] = FakeModel(fail=True)
+    perf.update_dynamics(traf, 1.0)
+    assert perf.evaluation_speed_evolution[0] == ''
+    assert all(np.isnan(getattr(perf, name)[0]) for name in (
+        'evaluation_speed_target_cas', 'evaluation_speed_target_mach',
+        'evaluation_speed_target_tas'))
 
 
 def test_speed_mode_uses_current_host_threshold(monkeypatch):

@@ -1,12 +1,16 @@
 """BlueSky performance implementation for longitudinal/vertical TEM."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 import bluesky as bs
 from bluesky.traffic.performance.perfbase import PerfBase
 from bluesky.traffic.dynamics import SpeedStepRequest, SpeedStepResult
+try:
+    from bluesky.traffic.atmosphere import pressure_altitude
+except ImportError:  # Without the NWP atmosphere hook, Traffic uses geometric altitude.
+    pressure_altitude = None
 from bluesky.tools import aero
 from bluesky.tools.aero import g0
 from .model import (EnergyResult, EvaluationError, ModelStore, ModelUnavailable,
@@ -26,10 +30,19 @@ bs.settings.set_variable_defaults(
     pybada_envelope_checks=[], pybada_configuration_mode='PYBADA')
 
 
+@dataclass(frozen=True)
+class SpeedIntent:
+    evolution: str
+    target_cas: float = np.nan
+    target_mach: float = np.nan
+    target_tas: float = np.nan
+
+
 class PyBadaTEM(PerfBase):
     """One authoritative BADA 3/4 integration with native lateral guidance."""
 
     requires_synced_direct_state = True
+    preserves_direct_mach = True
 
     def __init__(self):
         super().__init__()
@@ -66,6 +79,10 @@ class PyBadaTEM(PerfBase):
             self.evaluation_temperature = np.array([])
             self.evaluation_pressure_alt = np.array([])
             self.evaluation_timestep = np.array([])
+            self.evaluation_speed_evolution = np.array([], dtype='U8')
+            self.evaluation_speed_target_cas = np.array([])
+            self.evaluation_speed_target_mach = np.array([])
+            self.evaluation_speed_target_tas = np.array([])
             self.model_rocd = np.array([])
             self.energy_share_factor = np.array([])
             self.energy_allocation_policy = np.array([], dtype='U24')
@@ -134,6 +151,10 @@ class PyBadaTEM(PerfBase):
 
     def create(self, n):
         super().create(n)
+        self.evaluation_speed_evolution[-n:] = ''
+        self.evaluation_speed_target_cas[-n:] = np.nan
+        self.evaluation_speed_target_mach[-n:] = np.nan
+        self.evaluation_speed_target_tas[-n:] = np.nan
         self.dyn_mode[-n:] = 1
         self.bada_configuration_mode[-n:] = parse_configuration_mode(
             bs.settings.pybada_configuration_mode).value
@@ -221,18 +242,45 @@ class PyBadaTEM(PerfBase):
                 else parse_configuration_mode(values[idx]).value)
 
     def _speed_evolution(self, idx):
-        """Match host CAS/Mach interpretation, independently of altitude."""
-        if self.schedule == 'CONSCAS':
-            return 'constCAS'
-        # Conflict resolution supplies a resolved TAS target rather than the
-        # autopilot's selected CAS/Mach. It must not inherit that stale mode.
+        return self._capture_speed_intent(idx).evolution
+
+    def _capture_speed_intent(self, idx):
+        """Snapshot the evaluated law and original target representation."""
         active = getattr(getattr(bs.traf, 'cr', None), 'tasactive', None)
-        if active is not None and active[idx]:
-            return 'constTAS'
+        if self.schedule != 'CONSCAS' and active is not None and active[idx]:
+            target = float(bs.traf.aporasas.tas[idx])
+            if not np.isfinite(target) or target <= 0:
+                raise EvaluationError('Resolved TAS target must be finite and positive')
+            return SpeedIntent('constTAS', target_tas=target)
         selected = float(bs.traf.selspd[idx])
         if not np.isfinite(selected) or selected <= 0:
             raise EvaluationError('Selected CAS/Mach speed must be finite and positive')
-        return 'constM' if 0.1 < selected < aero.casmach_thr else 'constCAS'
+        if 0.1 < selected < aero.casmach_thr:
+            return SpeedIntent('constCAS' if self.schedule == 'CONSCAS' else 'constM',
+                               target_mach=selected)
+        return SpeedIntent('constCAS', target_cas=selected)
+
+    def _record_speed_intent(self, idx, intent):
+        if hasattr(self, 'evaluation_speed_evolution'):
+            self.evaluation_speed_evolution[idx] = intent.evolution
+            self.evaluation_speed_target_cas[idx] = intent.target_cas
+            self.evaluation_speed_target_mach[idx] = intent.target_mach
+            self.evaluation_speed_target_tas[idx] = intent.target_tas
+
+    def _clear_speed_intent(self, idx):
+        if hasattr(self, 'evaluation_speed_evolution'):
+            self.evaluation_speed_evolution[idx] = ''
+            self.evaluation_speed_target_cas[idx] = np.nan
+            self.evaluation_speed_target_mach[idx] = np.nan
+            self.evaluation_speed_target_tas[idx] = np.nan
+
+    def _evaluation_intent(self, idx, override=None):
+        if override is not None:
+            return override
+        active = getattr(self, '_active_speed_intent', None)
+        if active is not None and active[0] == idx:
+            return active[1]
+        return self._capture_speed_intent(idx)
 
     @staticmethod
     def _call_configuration_aware(function, configuration_mode, **kwargs):
@@ -260,8 +308,60 @@ class PyBadaTEM(PerfBase):
             return FlightBounds('', None, None, None, None, None,
                                 reason=f'envelope evaluation failed: {exc}')
 
+    @staticmethod
+    def _pressure_altitude_at(idx, geometric_altitude):
+        """Use the same atmosphere source as Traffic at a geometric target."""
+        altitude = float(geometric_altitude)
+        if altitude == float(bs.traf.alt[idx]):
+            return float(bs.traf.pressure_alt[idx])
+        if not np.isfinite(altitude):
+            return np.nan
+        if pressure_altitude is None:
+            return altitude
+        pressure = float(aero.vatmos(np.array([altitude]))[0][0])
+        get_atmosphere = getattr(getattr(bs.traf, 'wind', None), 'get_atmosphere', None)
+        if get_atmosphere is not None:
+            sample = get_atmosphere(
+                np.array([float(bs.traf.lat[idx])]),
+                np.array([float(bs.traf.lon[idx])]),
+                np.array([altitude]), getattr(bs.sim, 'utc', None))
+            if sample is not None:
+                valid = np.asarray(sample.valid).reshape(-1)
+                values = [np.asarray(field, dtype=float).reshape(-1)
+                          for field in (sample.temperature, sample.pressure, sample.density)]
+                if (valid.size != 1 or any(value.size != 1 for value in values)
+                        or not bool(valid[0]) or not all(np.isfinite(value[0]) and value[0] > 0
+                                                         for value in values)):
+                    return np.nan
+                pressure = float(values[1][0])
+        return float(pressure_altitude(np.array([pressure]))[0])
+
+    def _geometric_ceiling(self, idx, ceiling, requested_altitude):
+        """Find a geometric target at the pressure-altitude ceiling."""
+        upper = float(requested_altitude)
+        lower = min(float(bs.traf.alt[idx]), upper)
+        lower_pressure_alt = self._pressure_altitude_at(idx, lower)
+        if not np.isfinite(lower_pressure_alt):
+            raise RuntimeError('ceiling conversion requires valid atmosphere at the lower altitude')
+        if lower_pressure_alt > ceiling:
+            cube = getattr(getattr(bs.traf, 'wind', None), 'cube', None)
+            lower = float(cube.altitude[0]) if cube is not None else -1000.0
+            lower_pressure_alt = self._pressure_altitude_at(idx, lower)
+            if not np.isfinite(lower_pressure_alt) or lower_pressure_alt > ceiling:
+                raise RuntimeError('ceiling conversion has no valid altitude below the ceiling')
+        for _ in range(32):
+            midpoint = (lower + upper) / 2.0
+            midpoint_pressure_alt = self._pressure_altitude_at(idx, midpoint)
+            if not np.isfinite(midpoint_pressure_alt):
+                raise RuntimeError('ceiling conversion requires valid atmosphere')
+            if midpoint_pressure_alt <= ceiling:
+                lower = midpoint
+            else:
+                upper = midpoint
+        return lower
+
     def vertical_bounds(self, idx, *, mass=None, tas=None, model=None,
-                        configuration_mode=None):
+                        configuration_mode=None, speed_intent=None):
         model = model or self.models[idx]
         try:
             values = self._call_configuration_aware(model.bluesky_vertical_envelope,
@@ -270,7 +370,8 @@ class PyBadaTEM(PerfBase):
                 tas=float(bs.traf.tas[idx] if tas is None else tas),
                 mass=float(self.mass[idx] if mass is None else mass),
                 temperature=float(bs.traf.Temp[idx]), pressure=float(bs.traf.p[idx]),
-                schedule=self.schedule, speed_evolution=self._speed_evolution(idx))
+                schedule=self.schedule, speed_evolution=(
+                    self._evaluation_intent(idx, speed_intent)).evolution)
             return VerticalBounds(**values)
         except Exception as exc:
             return VerticalBounds(None, None,
@@ -342,12 +443,15 @@ class PyBadaTEM(PerfBase):
         bank = ((self.effective_bank_angle(idx) if bank_angle is None else float(bank_angle))
                 if set(checks).intersection(lateral_checks) else 0.0)
         load = 1.0 / np.cos(np.radians(abs(bank))) if abs(bank) < 90.0 else np.inf
+        flight_altitude = (float(bs.traf.pressure_alt[idx]) if altitude is None or
+                           EnvelopeCheck.ALTITUDE_MAX not in checks else
+                           self._pressure_altitude_at(idx, altitude))
         return combine_results(
             evaluate_mass(candidate_mass, mbounds, checks),
             evaluate_flight(
                 bs.traf.cas[idx] if cas is None else cas,
                 bs.traf.M[idx] if mach is None else mach,
-                bs.traf.alt[idx] if altitude is None else altitude,
+                flight_altitude,
                 fbounds, checks),
             evaluate_vertical((getattr(bs.traf, 'vs', np.zeros(len(bs.traf.id)))[idx]
                                if vertical_rate is None else vertical_rate),
@@ -446,7 +550,7 @@ class PyBadaTEM(PerfBase):
         self.envelope_active_reason[idx] = ','.join(filter(None, reasons))
 
     def _set_result(self, idx, result, policy, action, requested=None, applied=None,
-                    source='state', contributes=True):
+                    source='state', contributes=True, publish=True):
         if source == 'mass':
             reason_array = self.envelope_mass_reason
             failed_list = self.envelope_mass_failed_checks
@@ -485,8 +589,15 @@ class PyBadaTEM(PerfBase):
             self.envelope_guidance_infeasible[idx] = (
                 contributes and result.status == EnvelopeStatus.INFEASIBLE)
         self._refresh_envelope_status(idx)
-        if (result.status != EnvelopeStatus.VALID and previous_reason != result.reason
-                and (source == 'attempt' or result.reason not in other_active_reasons)):
+        # A terminal action must be published even when its reason was already
+        # reported under a policy that allowed the aircraft to continue.
+        abort_transition = (action == EnvelopeAction.ABORTED and
+                            self.envelope_last_action[idx] != EnvelopeAction.ABORTED.value)
+        if (publish and result.status != EnvelopeStatus.VALID
+                and (previous_reason != result.reason or abort_transition)
+                and (source == 'attempt' or result.reason not in other_active_reasons
+                     or (source == 'guidance' and action == EnvelopeAction.LIMITED)
+                     or action == EnvelopeAction.ABORTED)):
             self._emit_event(idx, result.reason, action, requested, applied)
 
     def _clear_envelope_sources(self, idx):
@@ -633,7 +744,7 @@ class PyBadaTEM(PerfBase):
                            f'{self._bound_text(bounds.maximum_cas)} m/s, '
                            f'Mach bounds={self._bound_text(bounds.minimum_mach)}..'
                            f'{self._bound_text(bounds.maximum_mach)}, '
-                           f'altitude max={self._bound_text(bounds.maximum_altitude)} m, '
+                           f'pressure-altitude max={self._bound_text(bounds.maximum_altitude)} m, '
                            f'vertical bounds=ROC_MAX '
                            f'{self._bound_text(vertical.maximum_rocd)} m/s, ROD_MAX '
                            f'{self._bound_text_abs(vertical.minimum_rocd)} m/s; '
@@ -651,7 +762,7 @@ class PyBadaTEM(PerfBase):
             bs.sim.hold()
         return True, ''
 
-    def _evaluate(self, idx, configuration_mode=None):
+    def _evaluate(self, idx, configuration_mode=None, speed_intent=None):
         """Evaluate the pyBADA API through one observable failure boundary."""
         ac = self.models[idx]
         h, tas, mass = bs.traf.pressure_alt[idx], bs.traf.tas[idx], self.mass[idx]
@@ -672,7 +783,8 @@ class PyBadaTEM(PerfBase):
                     self._configuration_mode(idx, configuration_mode),
                     h=h, tas=tas, mass=mass,
                     temperature=bs.traf.Temp[idx], pressure=bs.traf.p[idx], phase=phase,
-                    schedule=self.schedule, speed_evolution=self._speed_evolution(idx),
+                    schedule=self.schedule, speed_evolution=(
+                        self._evaluation_intent(idx, speed_intent)).evolution,
                     requested_acceleration=requested_acceleration,
                     requested_vertical_rate=requested_vertical_rate,
                     propulsion_bank_angle=propulsion_bank_angle,
@@ -701,6 +813,11 @@ class PyBadaTEM(PerfBase):
     def update_dynamics(self, traffic, dt):
         speed_handled = np.zeros(traffic.ntraf, dtype=bool)
         vertical_handled = np.zeros(traffic.ntraf, dtype=bool)
+        if hasattr(self, 'evaluation_speed_evolution'):
+            self.evaluation_speed_evolution[:] = ''
+            self.evaluation_speed_target_cas[:] = np.nan
+            self.evaluation_speed_target_mach[:] = np.nan
+            self.evaluation_speed_target_tas[:] = np.nan
         request = getattr(traffic, 'speed_request', None)
         if request is None:
             current_tas = np.asarray(traffic.tas, dtype=float).copy()
@@ -718,7 +835,10 @@ class PyBadaTEM(PerfBase):
         for idx in range(traffic.ntraf):
             must_hold = False
             try:
-                result = self._evaluate(idx)
+                intent = self._capture_speed_intent(idx)
+                self._active_speed_intent = (idx, intent)
+                result = self._evaluate(idx, speed_intent=intent)
+                self._record_speed_intent(idx, intent)
                 if hasattr(self, 'evaluation_tas'):
                     self.evaluation_tas[idx] = traffic.tas[idx]
                     self.evaluation_alt[idx] = traffic.alt[idx]
@@ -778,7 +898,8 @@ class PyBadaTEM(PerfBase):
                             check for check in self.envelope_checks[idx]
                             if check in {EnvelopeCheck.ROC_MAX, EnvelopeCheck.ROD_MAX})
                         vertical = self.vertical_bounds(
-                            idx, mass=self.mass[idx], tas=traffic.tas[idx])
+                            idx, mass=self.mass[idx], tas=traffic.tas[idx],
+                            speed_intent=intent)
                         if policy == EnvelopePolicy.ENFORCE:
                             enforced_vertical = (vertical, selected_vertical)
                         vertical_result = evaluate_vertical(
@@ -881,6 +1002,7 @@ class PyBadaTEM(PerfBase):
                     vertical_handled[idx] = True
                 self.invalid[idx] = False
             except (ModelUnavailable, EvaluationError) as exc:
+                self._clear_speed_intent(idx)
                 self.invalid[idx] = True
                 self.failure_count[idx] += 1
                 self.thrust[idx] = self.rated_thrust[idx] = self.drag[idx] = self.fuelflow[idx] = np.nan
@@ -907,6 +1029,8 @@ class PyBadaTEM(PerfBase):
                     bs.sim.hold()
                     # A strict failure stops propagation without terminating the BlueSky process.
                     break
+            finally:
+                self._active_speed_intent = None
         traffic.speed_result = SpeedStepResult(
             request=request,
             applied_acceleration=applied_acceleration,
@@ -959,6 +1083,8 @@ class PyBadaTEM(PerfBase):
                             current_result.status == EnvelopeStatus.INFEASIBLE
                             else EnvelopeAction.ACCEPTED)
             recorded_state = current_result
+            # ENFORCE records the current finding, then publishes the applied
+            # guidance limit with its requested and applied values below.
             self._set_result(idx, recorded_state, policy, state_action,
                              {'cas_m_s': float(bs.traf.cas[idx]),
                               'mach': float(bs.traf.M[idx]),
@@ -972,7 +1098,7 @@ class PyBadaTEM(PerfBase):
                               'vertical_rate_m_s': float(bs.traf.vs[idx]),
                               'bank_angle_deg': requested_bank,
                               'load_factor': requested_load},
-                             source='state')
+                             source='state', publish=policy != EnvelopePolicy.ENFORCE)
             if state_action == EnvelopeAction.ABORTED:
                 bs.sim.hold()
                 break
@@ -987,8 +1113,10 @@ class PyBadaTEM(PerfBase):
                         applied_v[idx] = max(applied_v[idx], bounds.minimum_tas)
                     if failed.intersection({EnvelopeCheck.HIGH_SPEED, EnvelopeCheck.MACH_MAX}):
                         applied_v[idx] = min(applied_v[idx], bounds.maximum_tas)
-                    if EnvelopeCheck.ALTITUDE_MAX in failed:
-                        applied_h[idx] = min(applied_h[idx], bounds.maximum_altitude)
+                    if EnvelopeCheck.ALTITUDE_MAX in result.failed_checks:
+                        applied_h[idx] = min(
+                            applied_h[idx], self._geometric_ceiling(
+                                idx, bounds.maximum_altitude, applied_h[idx]))
                     if EnvelopeCheck.ROC_MAX in failed:
                         requested_signed_vs = min(requested_signed_vs,
                                                   vertical.maximum_rocd)
