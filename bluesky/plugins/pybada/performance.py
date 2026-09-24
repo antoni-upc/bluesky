@@ -14,7 +14,9 @@ except ImportError:  # Without the NWP atmosphere hook, Traffic uses geometric a
 from bluesky.tools import aero
 from bluesky.tools.aero import g0
 from .model import (EnergyResult, EvaluationError, ModelStore, ModelUnavailable,
-                    parse_configuration_mode, allocate_speed_priority)
+                    parse_configuration_mode)
+from .allocation import (AllocationPolicy, JointWeights, acceleration_capability,
+                         allocate_energy, parse_allocation_policy)
 from .envelope import (EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile,
                        EnvelopeResult, EnvelopeStatus, FlightBounds, QualityEvent,
                        LateralBounds, VerticalBounds, combine_results, evaluate_flight,
@@ -86,6 +88,13 @@ class PyBadaTEM(PerfBase):
             self.model_rocd = np.array([])
             self.energy_share_factor = np.array([])
             self.energy_allocation_policy = np.array([], dtype='U24')
+            # Selected allocation policy, JOINT weights and the resulting
+            # guidance acceleration capability [m/s2] of the last TEM step.
+            self.energy_policy = np.array([], dtype='U24')
+            self.joint_weight_acceleration = np.array([])
+            self.joint_weight_vertical = np.array([])
+            self.acceleration_capability_up = np.array([])
+            self.acceleration_capability_down = np.array([])
             self.propulsion_bank_angle = np.array([])
             self.propulsion_load_factor = np.array([])
             self.mass_override = np.array([], dtype=bool)
@@ -156,6 +165,11 @@ class PyBadaTEM(PerfBase):
         self.evaluation_speed_target_mach[-n:] = np.nan
         self.evaluation_speed_target_tas[-n:] = np.nan
         self.dyn_mode[-n:] = 1
+        self.energy_policy[-n:] = AllocationPolicy.SPEED.value
+        self.joint_weight_acceleration[-n:] = np.nan
+        self.joint_weight_vertical[-n:] = np.nan
+        self.acceleration_capability_up[-n:] = np.nan
+        self.acceleration_capability_down[-n:] = np.nan
         self.bada_configuration_mode[-n:] = parse_configuration_mode(
             bs.settings.pybada_configuration_mode).value
         if self.store is None:
@@ -701,6 +715,55 @@ class PyBadaTEM(PerfBase):
                 bs.sim.hold()
         return True, ''
 
+    def configure_energy_policy(self, idx, policy, weights=None):
+        """Select one aircraft's TEM allocation policy; JOINT needs explicit weights."""
+        policy = parse_allocation_policy(policy)
+        if policy == AllocationPolicy.JOINT:
+            if weights is None:
+                raise ValueError('JOINT requires acceleration and vertical weights')
+            weights = JointWeights(*(float(value) for value in weights))
+            try:
+                weights.validate()
+            except EvaluationError as exc:
+                raise ValueError(str(exc)) from exc
+            self.joint_weight_acceleration[idx] = weights.acceleration
+            self.joint_weight_vertical[idx] = weights.vertical
+        elif weights is not None:
+            raise ValueError(f'{policy.value} takes no weights')
+        else:
+            self.joint_weight_acceleration[idx] = self.joint_weight_vertical[idx] = np.nan
+        self.energy_policy[idx] = policy.value
+        return policy
+
+    def energy_policy_text(self, idx):
+        policy = str(self.energy_policy[idx])
+        if policy != AllocationPolicy.JOINT.value:
+            return policy
+        return (f'{policy} (weights acceleration={self.joint_weight_acceleration[idx]:g}, '
+                f'vertical={self.joint_weight_vertical[idx]:g})')
+
+    def _joint_weights(self, idx):
+        if not hasattr(self, 'joint_weight_acceleration'):
+            return None
+        weights = (self.joint_weight_acceleration[idx], self.joint_weight_vertical[idx])
+        return JointWeights(*weights) if np.all(np.isfinite(weights)) else None
+
+    def acceleration_limits(self):
+        """Guidance acceleration and deceleration magnitudes [m/s2] per aircraft.
+
+        TEM aircraft report what their allocation policy delivered for the
+        native request in the last step; others keep the native axmax.
+        """
+        native = np.asarray(self.axmax, dtype=float)
+        if not hasattr(self, 'acceleration_capability_up'):
+            return native, native
+        tem = (np.asarray(self.dyn_mode) == 1) & ~np.asarray(self.invalid, dtype=bool)
+        up = np.asarray(self.acceleration_capability_up, dtype=float)
+        down = np.asarray(self.acceleration_capability_down, dtype=float)
+        known = tem & np.isfinite(up) & np.isfinite(down)
+        return (np.where(known, np.maximum(up, 0.0), native),
+                np.where(known, np.maximum(-down, 0.0), native))
+
     def configure_bada_configuration(self, idx, mode):
         """Change one aircraft's BADA configuration source transactionally."""
         new_mode = parse_configuration_mode(mode)
@@ -810,6 +873,18 @@ class PyBadaTEM(PerfBase):
             bs.sim.hold()
         return True, ''
 
+    @staticmethod
+    def _guidance_vertical_rate(idx, deadband=1.0):
+        """Signed vertical rate guidance asks for towards its target altitude.
+
+        The recorded request ignores the last metre; allocation passes
+        deadband=0 so the guidance limit also holds through altitude capture.
+        """
+        delta_alt = bs.traf.aporasas.alt[idx] - bs.traf.alt[idx]
+        selected_vs = getattr(bs.traf.aporasas, 'vs', np.zeros(bs.traf.ntraf))[idx]
+        return (0.0 if abs(delta_alt) <= deadband else
+                float(np.sign(delta_alt) * abs(selected_vs)))
+
     def _evaluate(self, idx, configuration_mode=None, speed_intent=None):
         """Evaluate the pyBADA API through one observable failure boundary."""
         ac = self.models[idx]
@@ -818,10 +893,7 @@ class PyBadaTEM(PerfBase):
         speed_request = getattr(bs.traf, 'speed_request', None)
         requested_acceleration = (0.0 if speed_request is None else
                                   float(speed_request.requested_acceleration[idx]))
-        delta_alt = bs.traf.aporasas.alt[idx] - bs.traf.alt[idx]
-        selected_vs = getattr(bs.traf.aporasas, 'vs', np.zeros(bs.traf.ntraf))[idx]
-        requested_vertical_rate = (0.0 if abs(delta_alt) <= 1.0 else
-                                   float(np.sign(delta_alt) * abs(selected_vs)))
+        requested_vertical_rate = self._guidance_vertical_rate(idx)
         try:
             propulsion_bank_angle, load_factor = self.propulsion_turn_state(idx)
             # Adapter-friendly hook used by dependency-free fakes and future
@@ -929,8 +1001,20 @@ class PyBadaTEM(PerfBase):
                     enforced_vertical = None
                     target_tas = request.target_tas[idx]
                     delta_alt = traffic.aporasas.alt[idx] - traffic.alt[idx]
-                    candidate_vs = result.applied_vertical_rate
-                    # Capture a boundary approached by the model's signed rate.
+                    energy_policy = parse_allocation_policy(
+                        self.energy_policy[idx] if hasattr(self, 'energy_policy')
+                        else AllocationPolicy.SPEED)
+                    guidance_vs = self._guidance_vertical_rate(idx, deadband=0.0)
+                    if energy_policy == AllocationPolicy.SPEED:
+                        # The model's rate at rated thrust, never faster than
+                        # guidance asks; a slower model rate is kept.
+                        candidate_vs = result.applied_vertical_rate
+                        if candidate_vs * guidance_vs > 0:
+                            candidate_vs = np.sign(candidate_vs) * min(
+                                abs(candidate_vs), abs(guidance_vs))
+                    else:
+                        candidate_vs = guidance_vs
+                    # Capture a boundary approached by the reference rate.
                     # Do not reverse an infeasible climb/descent merely to chase it.
                     if candidate_vs * delta_alt > 0:
                         candidate_vs = np.sign(candidate_vs) * min(
@@ -995,11 +1079,29 @@ class PyBadaTEM(PerfBase):
                             low_w = max(low_w, bounds.minimum_rocd)
                         if EnvelopeCheck.ROC_MAX in checks:
                             high_w = min(high_w, bounds.maximum_rocd)
-                    thrust, acceleration, candidate_vs, required, limited, reason = allocate_speed_priority(
-                        tas=tas, mass=mass, drag=result.drag,
-                        idle_thrust=result.idle_thrust, maximum_thrust=result.maximum_thrust,
-                        requested_acceleration=desired_a, preferred_vertical_rate=candidate_vs,
-                        minimum_vertical_rate=low_w, maximum_vertical_rate=high_w)
+                    minimum_acceleration = -np.inf
+                    if energy_policy != AllocationPolicy.SPEED:
+                        # Vertical-led policies must not trade speed below the
+                        # envelope's minimum TAS.
+                        floor_tas = getattr(self.flight_bounds(idx), 'minimum_tas', None)
+                        if floor_tas is not None and np.isfinite(floor_tas):
+                            minimum_acceleration = (float(floor_tas) - tas) / dt
+                    allocation_state = dict(
+                        tas=tas, mass=mass, drag=result.drag, idle_thrust=result.idle_thrust,
+                        maximum_thrust=result.maximum_thrust,
+                        reference_vertical_rate=candidate_vs, minimum_vertical_rate=low_w,
+                        maximum_vertical_rate=high_w, minimum_acceleration=minimum_acceleration,
+                        weights=self._joint_weights(idx))
+                    allocation = allocate_energy(energy_policy, requested_acceleration=desired_a,
+                                                 **allocation_state)
+                    thrust, acceleration, candidate_vs = (
+                        allocation.thrust, allocation.acceleration, allocation.vertical_rate)
+                    required, limited, reason = (
+                        allocation.required_thrust, allocation.limited, allocation.reason)
+                    if hasattr(self, 'acceleration_capability_up'):
+                        (self.acceleration_capability_up[idx],
+                         self.acceleration_capability_down[idx]) = acceleration_capability(
+                            energy_policy, self.axmax[idx], **allocation_state)
                     proposed_tas = tas + acceleration * dt
                     reaches_target = abs(proposed_tas - target_tas) <= 1e-10
                     if reaches_target:
@@ -1015,7 +1117,8 @@ class PyBadaTEM(PerfBase):
                             pressure=float(traffic.p[idx]), phase=self._phase(idx), thrust=thrust)
                     result = replace(result, thrust=thrust, required_thrust=required,
                         fuel_flow=float(fuel), applied_acceleration=acceleration,
-                        applied_vertical_rate=candidate_vs, allocation_policy='SPEED_PRIORITY',
+                        applied_vertical_rate=candidate_vs,
+                        allocation_policy=energy_policy.value,
                         thrust_limited=limited, limitation_reason=reason).validate()
                     if not np.isfinite(proposed_tas) or proposed_tas <= 0:
                         raise EvaluationError('TEM response produces non-positive TAS')
@@ -1064,6 +1167,9 @@ class PyBadaTEM(PerfBase):
                     self.applied_vertical_rate[idx] = np.nan
                     self.energy_share_factor[idx] = np.nan
                     self.energy_allocation_policy[idx] = ''
+                    if hasattr(self, 'acceleration_capability_up'):
+                        self.acceleration_capability_up[idx] = np.nan
+                        self.acceleration_capability_down[idx] = np.nan
                     self.propulsion_bank_angle[idx] = np.nan
                     self.propulsion_load_factor[idx] = np.nan
                     if hasattr(self, 'speed_capture'):
