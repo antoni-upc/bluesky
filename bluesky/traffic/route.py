@@ -12,6 +12,13 @@ from bluesky import stack
 from bluesky.stack.cmdparser import Command, command, commandgroup
 
 
+def _direct_speed_target(selected, altitude, performance):
+    """Keep Mach units when the selected model evaluates route speed intent."""
+    if selected < 2.0 and not getattr(performance, 'preserves_direct_mach', False):
+        return mach2cas(selected, altitude)
+    return selected
+
+
 
 class Route(Base):
     """
@@ -1074,10 +1081,7 @@ class Route(Base):
                 alt = acrte.wpalt[wpidx]
 
             # Check for valid Mach or CAS
-            if acrte.wpspd[wpidx] <2.0:
-                cas = mach2cas(acrte.wpspd[wpidx], alt)
-            else:
-                cas = acrte.wpspd[wpidx]
+            cas = _direct_speed_target(acrte.wpspd[wpidx], alt, bs.traf.perf)
 
             # Save it for next leg
             bs.traf.actwp.nextspd[acidx] = cas
