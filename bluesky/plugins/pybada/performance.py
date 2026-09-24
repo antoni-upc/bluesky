@@ -7,7 +7,10 @@ import numpy as np
 import bluesky as bs
 from bluesky.traffic.performance.perfbase import PerfBase
 from bluesky.traffic.dynamics import SpeedStepRequest, SpeedStepResult
-from bluesky.traffic.atmosphere import pressure_altitude
+try:
+    from bluesky.traffic.atmosphere import pressure_altitude
+except ImportError:  # Without the NWP atmosphere hook, Traffic uses geometric altitude.
+    pressure_altitude = None
 from bluesky.tools import aero
 from bluesky.tools.aero import g0
 from .model import (EnergyResult, EvaluationError, ModelStore, ModelUnavailable,
@@ -313,10 +316,12 @@ class PyBadaTEM(PerfBase):
             return float(bs.traf.pressure_alt[idx])
         if not np.isfinite(altitude):
             return np.nan
+        if pressure_altitude is None:
+            return altitude
         pressure = float(aero.vatmos(np.array([altitude]))[0][0])
-        wind = getattr(bs.traf, 'wind', None)
-        if wind is not None:
-            sample = wind.get_atmosphere(
+        get_atmosphere = getattr(getattr(bs.traf, 'wind', None), 'get_atmosphere', None)
+        if get_atmosphere is not None:
+            sample = get_atmosphere(
                 np.array([float(bs.traf.lat[idx])]),
                 np.array([float(bs.traf.lon[idx])]),
                 np.array([altitude]), getattr(bs.sim, 'utc', None))

@@ -5,7 +5,6 @@ import pytest
 
 import bluesky as bs
 from bluesky.tools.aero import vatmos
-from bluesky.traffic.atmosphere import pressure_altitude
 from bluesky.plugins.pybada.envelope import (
     EnvelopeAction, EnvelopeCheck, EnvelopePolicy, EnvelopeProfile, EnvelopeResult,
     EnvelopeStatus, FlightBounds, LateralBounds, VerticalBounds,
@@ -14,6 +13,13 @@ from bluesky.plugins.pybada.envelope import (
 from bluesky.plugins.pybada.performance import PyBadaTEM
 from bluesky.plugins.pybada.model import EvaluationError
 from bluesky.traffic.quality import quality_events as neutral_quality_events
+
+try:
+    from bluesky.traffic.atmosphere import pressure_altitude
+except ImportError:  # PyBADA branch without the NWP atmosphere hook
+    pressure_altitude = None
+requires_atmosphere = pytest.mark.skipif(
+    pressure_altitude is None, reason='requires the NWP atmosphere hook')
 
 
 def test_pybada_publishes_to_the_neutral_quality_signal():
@@ -406,7 +412,7 @@ def test_guidance_report_and_enforce_are_per_aircraft_and_atomic(monkeypatch):
     np.testing.assert_allclose(applied_v, [250.0, 200.0])
     assert applied_h[0] == 12_000.0
     assert applied_h[1] == pytest.approx(10_000.0, abs=2.0)
-    assert pressure_altitude(vatmos(np.array([applied_h[1]]))[0])[0] <= 10_000.0
+    assert perf._pressure_altitude_at(1, applied_h[1]) <= 10_000.0
     assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
     assert perf.envelope_event_count.tolist() == [1, 1]
     assert perf.envelope_last_action.tolist() == ['ACCEPTED', 'LIMITED']
@@ -449,6 +455,23 @@ def test_direct_state_ceiling_policy_uses_pressure_altitude(monkeypatch):
     assert not rejected and 'ALTITUDE_MAX' in reason
 
 
+def test_ceiling_without_atmosphere_hook_uses_geometric_altitude(monkeypatch):
+    traffic(monkeypatch)
+    monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
+    monkeypatch.setattr('bluesky.plugins.pybada.performance.pressure_altitude', None)
+    perf = make_perf(('REPORT', 'ENFORCE'))
+    perf.models = [FakeFlightModel(), FakeFlightModel()]
+    perf.envelope_checks = [(EnvelopeCheck.ALTITUDE_MAX,)] * 2
+    bs.traf.wind = SimpleNamespace()
+    assert perf._pressure_altitude_at(1, 10_100.0) == 10_100.0
+    _, _, applied_h = perf.limits(
+        np.array([120.0, 120.0]), np.zeros(2), np.array([10_100.0, 10_100.0]), np.zeros(2))
+    assert applied_h[0] == 10_100.0
+    assert applied_h[1] == pytest.approx(10_000.0, abs=1e-3)
+    assert perf.envelope_status.tolist() == ['INFEASIBLE', 'VALID']
+
+
+@requires_atmosphere
 def test_weather_ceiling_limits_geometric_target_at_pressure_boundary(monkeypatch):
     traffic(monkeypatch)
     monkeypatch.setattr('bluesky.stack.echo', lambda message: None)
@@ -477,6 +500,7 @@ def test_weather_ceiling_limits_geometric_target_at_pressure_boundary(monkeypatc
     np.testing.assert_array_equal(requested_h, [9900.0, 9900.0])
 
 
+@requires_atmosphere
 def test_ceiling_does_not_reject_high_geometric_target_below_pressure_ceiling(monkeypatch):
     traffic(monkeypatch)
     perf = make_perf(('REPORT', 'OFF'))
@@ -496,6 +520,7 @@ def test_ceiling_does_not_reject_high_geometric_target_below_pressure_ceiling(mo
     assert result.status == EnvelopeStatus.VALID
 
 
+@requires_atmosphere
 def test_ceiling_target_outside_valid_weather_is_unknown(monkeypatch):
     traffic(monkeypatch)
     perf = make_perf(('ENFORCE', 'OFF'))
