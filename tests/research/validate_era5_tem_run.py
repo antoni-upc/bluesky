@@ -134,11 +134,10 @@ def validate(path, family='4', source='ERA5', scenario=None,
             specific_power = ((_number(current, 'thrust_n') -
                                _number(current, 'drag_n')) * tas /
                               _number(previous, 'mass_kg'))
-            isa_temperature = 288.15 - 0.0065 * _number(current, 'pressure_alt_m')
-            temperature_factor = isa_temperature / _number(current, 'temperature_k')
+            # The recorded vertical rate is geometric, so the TEM balance
+            # (T - D) V / m = V dV/dt + g0 dh/dt needs no temperature correction.
             allocated_power = (tas * _number(current, 'applied_acceleration_m_s2') +
-                               G0 * _number(current, 'applied_vertical_rate_m_s') /
-                               temperature_factor)
+                               G0 * _number(current, 'applied_vertical_rate_m_s'))
             max_power_residual = max(max_power_residual,
                                      abs(specific_power - allocated_power))
     report = {row['sim_time_s']: row for row in by_acid[report_acid]}

@@ -103,3 +103,23 @@ def test_weather_tem_validator_checks_applied_energy(tmp_path):
         writer.writerows(rows)
     result = validate(path, '4', 'ERA5', scenario, *acids)
     assert 'maximum total-energy residual' in result
+
+
+def test_weather_tem_energy_uses_the_geometric_vertical_rate(tmp_path):
+    path, scenario, acids = _evidence(tmp_path)
+    rows = list(csv.DictReader(path.open(newline='', encoding='utf-8')))
+    # A 5 m/s geometric climb in the fixture's 280 K air, 10.7 K warmer than
+    # ISA at its 2900 m pressure altitude. Thrust closes the geometric balance
+    # exactly; scaling the rate by T / T_isa would leave about 1.9 W/kg, above
+    # the 0.75 W/kg tolerance.
+    for row in rows:
+        mass = float(row['mass_kg']) + 0.5
+        row['applied_vertical_rate_m_s'] = '5.0'
+        row['thrust_n'] = str(10000.0 + mass * 9.80665 * 5.0 / 140.0)
+        row['maximum_thrust_n'] = '40000.0'
+    with path.open('w', newline='', encoding='utf-8') as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0])
+        writer.writeheader()
+        writer.writerows(rows)
+    result = validate(path, '4', 'ERA5', scenario, *acids)
+    assert result.startswith('VALID:'), result
