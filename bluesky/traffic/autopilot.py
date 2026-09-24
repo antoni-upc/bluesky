@@ -384,7 +384,8 @@ class Autopilot(Entity, replaceable=True):
         turntasdiff   = np.maximum(0.,(bs.traf.tas - turntas)*(turntas>0.0))
 
         # t = (v1-v0)/a ; x = v0*t+1/2*a*t*t => dx = (v1*v1-v0*v0)/ (2a)
-        dxturnspdchg = distaccel(turntas,bs.traf.tas, bs.traf.perf.axmax)
+        accel, decel = bs.traf.perf.acceleration_limits()
+        dxturnspdchg = distaccel(turntas,bs.traf.tas, decel)
 
         # Decelerate or accelerate for next required speed because of speed constraint or RTA speed
         # Note that because nextspd comes from the stack, and can be either a mach number or
@@ -392,7 +393,7 @@ class Autopilot(Entity, replaceable=True):
         # once the altitude is known.
         nexttas = vcasormach2tas(bs.traf.actwp.nextspd, bs.traf.alt)
 #
-        dxspdconchg = distaccel(bs.traf.tas, nexttas, bs.traf.perf.axmax)
+        dxspdconchg = distaccel(bs.traf.tas, nexttas, np.where(nexttas > bs.traf.tas, accel, decel))
 
         qdrturn, dist2turn = geo.qdrdist(bs.traf.lat, bs.traf.lon,
                                         bs.traf.actwp.nextturnlat, bs.traf.actwp.nextturnlon)
@@ -639,8 +640,10 @@ class Autopilot(Entity, replaceable=True):
 
         deltime = torta-bs.sim.simt # Remaining time to next RTA [s] in simtime
         if deltime>0: # Still possible?
+            accel, decel = bs.traf.perf.acceleration_limits()
+            speedup = bs.traf.gs[idx] * deltime < xtorta
             gsrta = calcvrta(bs.traf.gs[idx], xtorta,
-                             deltime, bs.traf.perf.axmax[idx])
+                             deltime, (accel if speedup else decel)[idx])
 
             # Subtract tail wind speed vector
             tailwind = (bs.traf.windnorth[idx]*bs.traf.gsnorth[idx] + bs.traf.windeast[idx]*bs.traf.gseast[idx]) / \

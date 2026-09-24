@@ -160,3 +160,29 @@ def test_mass_fundamental_rejection_names_aircraft_and_preserved_state(monkeypat
     assert 'AC1:' in message
     assert 'finite and positive' in message
     assert 'preserved=61000.0 kg' in message
+
+
+def test_tempolicy_selects_policies_and_requires_joint_weights(monkeypatch):
+    import numpy as np
+    from bluesky.plugins.pybada import PyBadaTEM
+    from bluesky.plugins.pybada_tem import tempolicy
+    traf = SimpleNamespace(id=['A1', 'A2'])
+    traf.id2idx = lambda acid: traf.id.index(acid) if acid in traf.id else -1
+    monkeypatch.setattr(bs, 'traf', traf)
+    perf = object.__new__(PyBadaTEM)
+    perf.energy_policy = np.array(['SPEED_PRIORITY'] * 2, dtype='U24')
+    perf.joint_weight_acceleration = np.full(2, np.nan)
+    perf.joint_weight_vertical = np.full(2, np.nan)
+    monkeypatch.setattr('bluesky.plugins.pybada_tem.PyBadaTEM.implinstance', lambda: perf)
+    assert tempolicy('A1', 'VERTICAL') == (True, 'A1: VERTICAL_PRIORITY')
+    success, message = tempolicy('A2', 'JOINT')
+    assert not success and 'requires acceleration and vertical weights' in message
+    assert not tempolicy('A2', 'JOINT', 1.0)[0]
+    assert not tempolicy('A2', 'JOINT', 1.0, 0.0)[0]
+    assert perf.energy_policy[1] == 'SPEED_PRIORITY'
+    assert tempolicy('A2', 'JOINT', 1.0, 0.04) == (
+        True, 'A2: JOINT (weights acceleration=1, vertical=0.04)')
+    assert tempolicy() == (True, 'A1: VERTICAL_PRIORITY\n'
+                                 'A2: JOINT (weights acceleration=1, vertical=0.04)')
+    assert tempolicy('A2', 'SPEED')[0]
+    assert np.isnan(perf.joint_weight_acceleration[1])

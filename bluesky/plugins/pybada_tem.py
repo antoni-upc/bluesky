@@ -116,6 +116,35 @@ def badaconfig(acid=None, mode=None):
                   f'{value.value}')
 
 
+@stack.command(name='TEMPOLICY', annotations='[txt],[txt],[float],[float]')
+def tempolicy(acid=None, policy=None, weight_acceleration=None, weight_vertical=None):
+    """TEMPOLICY [acid] [SPEED|VERTICAL|JOINT] [w_accel w_vertical] selects TEM energy allocation.
+
+    SPEED gives speed tracking priority and never climbs or descends faster
+    than guidance; VERTICAL tracks the guidance vertical rate first; JOINT
+    minimises w_accel*(a - a_req)^2 + w_vertical*(w - w_ref)^2 with a in m/s2
+    and w in m/s and needs both weights.
+    """
+    perf = PyBadaTEM.implinstance()
+    if acid is None:
+        if not bs.traf.id:
+            return True, 'TEMPOLICY: no aircraft'
+        return True, '\n'.join(f'{name}: {perf.energy_policy_text(idx)}'
+                               for idx, name in enumerate(bs.traf.id))
+    idx = bs.traf.id2idx(acid)
+    if idx < 0:
+        return False, f'Aircraft {acid} not found'
+    if policy is not None:
+        given = (weight_acceleration, weight_vertical)
+        if (given[0] is None) != (given[1] is None):
+            return False, 'TEMPOLICY needs both weights: acceleration and vertical'
+        try:
+            perf.configure_energy_policy(idx, policy, None if given[0] is None else given)
+        except ValueError as exc:
+            return False, f'TEMPOLICY {exc}'
+    return True, f'{bs.traf.id[idx]}: {perf.energy_policy_text(idx)}'
+
+
 @stack.command(name='SPDSCHED')
 def spdsched(schedule: str = ''):
     perf = PyBadaTEM.implinstance()
@@ -282,7 +311,8 @@ def perfstatus(acid=None, view=None):
         dynamics_mode = _DYNAMICS_NAMES.get(int(array_value(perf, 'dyn_mode', 0)), 'unknown')
         lines = [f'Performance on {bs.traf.id[idx]} {resolution.resolved}:',
                  f'Model: BADA {perf.version} ({resolution.method})  '
-                 f'Dynamics: {dynamics_mode}  Configuration mode: {mode}']
+                 f'Dynamics: {dynamics_mode}  Configuration mode: {mode}  '
+                 f'Energy policy: {perf.energy_policy_text(idx) if hasattr(perf, "energy_policy") else "SPEED_PRIORITY"}']
         if selected_view in ('CURRENT', 'ALL'):
             lines.extend((
                 'CURRENT',

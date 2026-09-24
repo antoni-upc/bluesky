@@ -53,6 +53,14 @@ class PerfBase(Entity, replaceable=True):
         self.vsmax[-n:] = 1e6
 
 
+    def acceleration_limits(self):
+        """Acceleration and deceleration magnitudes [m/s2] guidance plans with.
+
+        Performance models with state-dependent capability override this; the
+        default keeps BlueSky's single axmax for both directions.
+        """
+        return self.axmax, self.axmax
+
     @timed_function(name="performance", dt=settings.performance_dt, hook="preupdate")
     def update(self, dt=settings.performance_dt):
         """implement this method"""
