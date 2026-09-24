@@ -198,7 +198,11 @@ class StreamingRecorder:
             bounds = perf_impl.bounds(idx) if hasattr(perf_impl, 'bounds') else None
             flight_bounds = perf_impl.flight_bounds(idx) if hasattr(perf_impl, 'flight_bounds') else None
             vertical_bounds = perf_impl.vertical_bounds(idx) if hasattr(perf_impl, 'vertical_bounds') else None
-            lateral_bounds = perf_impl.lateral_bounds(idx) if hasattr(perf_impl, 'lateral_bounds') else None
+            # Lateral bounds depend on the flight-bounds configuration; pass the
+            # one just evaluated instead of letting the model evaluate it again.
+            lateral_bounds = (None if not hasattr(perf_impl, 'lateral_bounds') else
+                              perf_impl.lateral_bounds(idx) if flight_bounds is None else
+                              perf_impl.lateral_bounds(idx, configuration=flight_bounds.configuration))
             bank_angle = perf_impl.effective_bank_angle(idx) if hasattr(perf_impl, 'effective_bank_angle') else None
             load_factor = (None if bank_angle is None or abs(bank_angle) >= 90.0 else
                            1.0 / np.cos(np.radians(abs(bank_angle))))
