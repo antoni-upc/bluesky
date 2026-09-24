@@ -183,15 +183,18 @@ def allocate_energy(policy, *, tas, mass, drag, idle_thrust, maximum_thrust,
             minimum_vertical_rate=minimum_vertical_rate,
             maximum_vertical_rate=maximum_vertical_rate)
         return Allocation(thrust, acceleration, vertical, required, limited, reason)
-    arguments = (tas, mass, drag, idle_thrust, maximum_thrust, requested_acceleration,
-                 float(np.clip(reference_vertical_rate, minimum_vertical_rate,
-                               maximum_vertical_rate)),
-                 minimum_vertical_rate, maximum_vertical_rate, minimum_acceleration)
     if policy == AllocationPolicy.VERTICAL:
-        return _vertical_priority(*arguments)
+        return _vertical_priority(
+            tas, mass, drag, idle_thrust, maximum_thrust, requested_acceleration,
+            float(np.clip(reference_vertical_rate, minimum_vertical_rate, maximum_vertical_rate)),
+            minimum_vertical_rate, maximum_vertical_rate, minimum_acceleration)
     if weights is None:
         raise EvaluationError('JOINT allocation requires explicit weights')
-    return _joint(*arguments, weights)
+    # The reference may lie outside the interval (e.g. the guidance rate near an
+    # altitude capture); the optimum then sits on the interval bound.
+    return _joint(tas, mass, drag, idle_thrust, maximum_thrust, requested_acceleration,
+                  float(reference_vertical_rate), minimum_vertical_rate, maximum_vertical_rate,
+                  minimum_acceleration, weights)
 
 
 def acceleration_capability(policy, request_magnitude, **state):
