@@ -1,6 +1,6 @@
 """Exact sample-schema policy for the active research baseline."""
 
-SCHEMA_VERSION = "samples-v11"
+SCHEMA_VERSION = "samples-v12"
 
 
 def require_schema(metadata, errors, label="metadata"):
