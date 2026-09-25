@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -490,3 +491,46 @@ def test_cache_probe_does_not_collide_with_a_concurrent_start(monkeypatch, tmp_p
     provider = object.__new__(provider_class)
     provider_class.__init__(provider)
     assert sorted(path.name for path in tmp_path.iterdir()) == ['.write-capability']
+
+
+def reentrant_traffic(monkeypatch, provider, utc):
+    """Traffic whose atmosphere update resamples the provider, as Traffic does."""
+    calls = []
+
+    def update_atmosphere():
+        calls.append(True)
+        provider.get_atmosphere([10.5], [179.5], [500.0], utc)
+
+    monkeypatch.setattr(bs, 'traf', SimpleNamespace(update_atmosphere=update_atmosphere),
+                        raising=False)
+    return calls
+
+
+def test_strict_expiry_stops_once_instead_of_recursing(monkeypatch):
+    provider, start = active_provider(monkeypatch)
+    monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', False)
+    provider.strict = True
+    later = start + timedelta(hours=1)
+    calls = reentrant_traffic(monkeypatch, provider, later)
+    with pytest.raises(RuntimeError, match='no valid weather for the new time slot'):
+        provider.get_atmosphere([10.5], [179.5], [500.0], later)
+    assert len(calls) == 1 and provider.cube is None
+    assert provider.unavailable_reason.startswith('TIME_SLOT_EXPIRED:')
+
+
+def test_unavailable_next_slot_falls_back_once_instead_of_recursing(monkeypatch):
+    provider, start = active_provider(monkeypatch)
+    monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', True)
+    provider.strict = False
+    later = start + timedelta(hours=1)
+    attempts = []
+
+    def load(*bounds, slot=None):
+        attempts.append(slot)
+        raise FileNotFoundError('slot missing')
+
+    monkeypatch.setattr(provider, 'load', load, raising=False)
+    calls = reentrant_traffic(monkeypatch, provider, later)
+    sample = provider.get_atmosphere([10.5], [179.5], [500.0], later)
+    assert attempts == [later] and len(calls) == 1
+    assert not sample.valid[0] and sample.fallback_reason.startswith('TIME_SLOT_UNAVAILABLE:')
