@@ -113,7 +113,9 @@ class MeteorologyProvider(WindSim):
         if utc is None or getattr(self, 'request_bounds', None) is None:
             return
         slot = self.desired_slot(utc)
-        if slot.isoformat() == self.active_slot:
+        # An expired or unavailable slot is not retried: clear() resamples the
+        # traffic atmosphere, which would otherwise re-enter this method.
+        if slot.isoformat() in (self.active_slot, self.expired_slot):
             return
         if bs.settings.meteo_time_autoupdate:
             self.advance_time_slot(
@@ -217,8 +219,8 @@ class MeteorologyProvider(WindSim):
             return
         reason = f'TIME_SLOT_EXPIRED:{self.active_slot}->{requested_slot.isoformat()}'
         stack.echo(f'{self.source}: automatic time update disabled; {reason}')
-        self.clear(reason)
         self.expired_slot = requested_slot.isoformat()
+        self.clear(reason)
         if self.strict:
             raise RuntimeError(f'{self.source} has no valid weather for the new time slot')
 
@@ -229,6 +231,7 @@ class MeteorologyProvider(WindSim):
         except Exception as exc:
             reason = f'TIME_SLOT_UNAVAILABLE:{requested_slot.isoformat()}:{exc}'
             stack.echo(f'{self.source}: next time slot unavailable; using ISA: {reason}')
+            self.expired_slot = requested_slot.isoformat()
             self.clear(reason)
             if self.strict:
                 raise RuntimeError(
