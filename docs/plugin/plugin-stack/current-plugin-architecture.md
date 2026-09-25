@@ -114,8 +114,12 @@ clips acceleration to the remaining thrust-feasible interval.
 above the envelope's minimum TAS; `JOINT` minimises weighted squared errors of
 both. The same allocation also reports the acceleration and deceleration each
 aircraft can deliver, which guidance uses for speed-change anticipation and
-RTA instead of the generic `axmax`. Evaluation failures still hold a strict
-run. Applied thrust drives both fuel flow and the recorded one-step response:
+RTA instead of the generic `axmax`. With `SPDCONALT WAYPOINT` (default
+`CURRENT`, the original behaviour) that anticipation compares speeds at the
+waypoint's altitude, and CAS/Mach changes switch at the crossover altitude
+rather than at the waypoint; see
+[`research-plugins.md`](research-plugins.md#guidance-settings). Evaluation
+failures still hold a strict run. Applied thrust drives both fuel flow and the recorded one-step response:
 
 ```mermaid
 flowchart LR
@@ -139,7 +143,7 @@ flowchart LR
 | Performance            | Replaceable performance selection         | BADA 3/4 resolution, force/fuel/mass, strict failures        | Implemented; dependency-free and licensed gates available                                    |
 | Envelopes              | No research policy                        | Per-aircraft OFF/REPORT/ENFORCE/ABORT                        | Implemented; BADA 3/4 scenario-specific gates available                                      |
 | Atmosphere             | ISA initialization and airdata            | ERA5/GFS temperature, pressure, density, wind and provenance | Implemented; synthetic and external-resource gates available                                 |
-| Weather time           | Simulation UTC                            | Exact provider slots and opt-in interpolation                | ERA5 hourly; GFS six-hourly                                                                  |
+| Weather time           | Simulation UTC                            | Exact provider slots and opt-in interpolation                | ERA5 hourly; GFS six-hourly; or one held field (`METEOCONFIG HOLD`)                                                                  |
 | Invalid weather        | ISA remains available                     | Strict abort or explicit interactive ISA fallback            | Implemented; no extrapolation                                                                |
 | Evidence               | Simulation state                          | Versioned streaming CSV, metadata, quality events            | `samples-v12`, bounded memory                                                                |
 
