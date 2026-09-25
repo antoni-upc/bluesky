@@ -910,9 +910,12 @@ class PyBadaTEM(PerfBase):
         h, mass = bs.traf.pressure_alt[idx], self.mass[idx]
         tas = bs.traf.tas[idx] if tas is None else float(tas)
         phase = self._phase(idx)
+        # The request is computed once per step; an aircraft created since (and
+        # configured by a command in the same stack batch) has no entry yet.
         speed_request = getattr(bs.traf, 'speed_request', None)
-        requested_acceleration = (0.0 if speed_request is None else
-                                  float(speed_request.requested_acceleration[idx]))
+        requested_acceleration = (
+            0.0 if speed_request is None or idx >= len(speed_request.requested_acceleration)
+            else float(speed_request.requested_acceleration[idx]))
         requested_vertical_rate = self._guidance_vertical_rate(idx)
         try:
             propulsion_bank_angle, load_factor = self.propulsion_turn_state(idx)

@@ -186,3 +186,27 @@ def test_tempolicy_selects_policies_and_requires_joint_weights(monkeypatch):
                                  'A2: JOINT (weights acceleration=1, vertical=0.04)')
     assert tempolicy('A2', 'SPEED')[0]
     assert np.isnan(perf.joint_weight_acceleration[1])
+
+
+def test_evaluation_of_an_aircraft_created_since_the_last_step(monkeypatch):
+    """A command after CRE in the same stack batch (e.g. BADACONFIG) must not index
+    past the speed request computed at the previous step."""
+    import numpy as np
+    from bluesky.plugins.pybada.performance import PyBadaTEM
+
+    class Reached(Exception):
+        pass
+
+    def reached(idx, deadband=1.0):
+        raise Reached  # the line after the speed-request read
+
+    perf = object.__new__(PyBadaTEM)
+    perf.models = [object(), object()]
+    perf.mass = np.array([60000.0, 60000.0])
+    monkeypatch.setattr(PyBadaTEM, '_phase', lambda self, idx: 'Cruise')
+    monkeypatch.setattr(PyBadaTEM, '_guidance_vertical_rate', staticmethod(reached))
+    monkeypatch.setattr(bs, 'traf', SimpleNamespace(
+        pressure_alt=np.array([3000.0, 3000.0]), tas=np.array([150.0, 150.0]),
+        speed_request=SimpleNamespace(requested_acceleration=np.array([0.1]))), raising=False)
+    with pytest.raises(Reached):
+        perf._evaluate(1)
