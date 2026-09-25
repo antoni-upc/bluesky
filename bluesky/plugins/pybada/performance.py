@@ -37,6 +37,20 @@ bs.settings.set_variable_defaults(
     pybada_envelope_checks=[], pybada_configuration_mode='PYBADA')
 
 
+def initial_mass(model):
+    """Mass of a new aircraft before any MASS command: MREF within OEW..MTOW.
+
+    Some datasets give a reference mass above the maximum take-off mass
+    (BADA 4.2 EMB-190LR: MREF 51,800 kg, MTOW 50,300 kg); unclamped, ENFORCE
+    would reject the aircraft at creation for a mass the scenario never set.
+    """
+    mass = float(getattr(model, 'MREF', getattr(model, 'OEW', 60000.0)))
+    bounds = mass_bounds(model)
+    if bounds.known:
+        mass = min(max(mass, bounds.minimum), bounds.maximum)
+    return mass
+
+
 @dataclass(frozen=True)
 class SpeedIntent:
     evolution: str
@@ -204,7 +218,7 @@ class PyBadaTEM(PerfBase):
         self.envelope_dynamics_reason[-n:] = ''
         self.envelope_guidance_infeasible[-n:] = False
         for i in range(len(self.mass) - n, len(self.mass)):
-            self.mass[i] = float(getattr(self.models[i], 'MREF', getattr(self.models[i], 'OEW', 60000.0)))
+            self.mass[i] = initial_mass(self.models[i])
 
     def validate_create(self, actypes):
         """Resolve every requested model before BlueSky creates any aircraft."""

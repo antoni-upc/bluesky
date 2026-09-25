@@ -140,6 +140,12 @@ contradictory values produce `UNKNOWN`. Positive finite mass remains a
 fundamental requirement under every policy. Fuel burn crossing an enabled
 minimum is evaluated as a runtime-derived violation.
 
+A new aircraft starts at the model's reference mass clamped to OEW..MTOW,
+until a `MASS` command sets the scenario value. Some datasets give a
+reference mass above MTOW (BADA 4.2 EMB-190LR: 51,800 kg against 50,300 kg);
+without the clamp, ENFORCE would reject creation for a mass the scenario
+never requested.
+
 ### CAS, Mach, and altitude
 
 Bounds are evaluated per aircraft at its current operating point using the
