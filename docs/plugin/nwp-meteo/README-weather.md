@@ -44,6 +44,7 @@ intended policy.
 | `meteo_below_domain_policy` | `REJECT`           | Use `REJECT` or `ISA` below the cube's vertical domain. `ISA_ANCHORED` is reserved and rejected as unimplemented.                                                       |
 | `meteo_time_autoupdate`     | `True`             | Load the provider slot containing simulation UTC when the current slot expires.                                                                                         |
 | `meteo_time_interpolation`  | `False`            | Also load the following slot and blend the two states over the current interval.                                                                                        |
+| `meteo_time_hold`           | `False`            | Keep the loaded slot for the rest of the run: no expiry and no acquisition. Excludes temporal interpolation.                                                            |
 | `era5_cache_path`           | empty              | ERA5 cache directory; empty selects `cache/weather/era5`.                                                                                                               |
 | `era5_region`               | `region`           | Human-readable cache label containing lowercase letters, numbers, and hyphens.                                                                                          |
 | `era5_pressure_levels`      | 27 standard levels | Exact requested levels: 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 775, 800, 825, 850, 875, 900, 925, 950, 975, and 1000 hPa. |
@@ -58,11 +59,12 @@ directory when necessary and checks write access.
 
 | Command                                        | Behavior                                                                                                                                                            |
 |------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `METEOCONFIG`                                  | Show strict, below-domain, automatic-update, and interpolation policies.                                                                                            |
+| `METEOCONFIG`                                  | Show strict, below-domain, automatic-update, interpolation, and hold policies.                                                                                      |
 | `METEOCONFIG STRICT ON\|OFF`                   | Change strict failure handling on the active provider.                                                                                                              |
 | `METEOCONFIG BELOW REJECT\|ISA`                | Reject samples below the source domain or substitute ISA at the actual aircraft altitude.                                                                           |
 | `METEOCONFIG TIMEUPDATE ON\|OFF`               | Allow or forbid acquisition of a new provider slot during the run.                                                                                                  |
 | `METEOCONFIG INTERPOLATION ON\|OFF`            | Enable or disable temporal interpolation. Enabling it with a cube loaded fetches the successor now; if that fails, it stays off.                                    |
+| `METEOCONFIG HOLD ON\|OFF`                     | Keep the loaded slot for the rest of the run (one fixed field). Refused while temporal interpolation is on, and interpolation is refused while it is on.             |
 | `WINDECMWF lat0,lon0,lat1,lon1`                | Load the ERA5 hourly slot at or before simulation UTC for the requested bounds.                                                                                     |
 | `WINDGFS lat0,lon0,lat1,lon1[,YYYYMMDD,cycle]` | Load the GFS six-hour slot at or before simulation UTC, or an explicit 00, 06, 12, or 18 UTC analysis.                                                              |
 | `METEOSTATUS lat,lon,alt`                      | Inspect the provider result, provenance, wind, temperature, pressure, and density at one point.                                                                     |
@@ -253,6 +255,12 @@ next slot boundary the old dataset expires instead of being used for a new
 time. Strict mode stops the run; interactive mode switches to ISA with a
 `TIME_SLOT_EXPIRED` reason. Pre-caching alone does not disable automatic time
 updates: keep the setting enabled to advance through the prepared files.
+
+`METEOCONFIG HOLD ON` instead keeps the loaded dataset for the whole run, for
+experiments defined on one fixed field. The slot is selected at load time from
+the simulation UTC, so set `DATE` to the field's time before loading, e.g.
+`DATE 20,4,2026,20:00:00` then `WINDECMWF lat0,lon0,lat1,lon1`. Every sample
+keeps that slot's `dataset_time`, and no `TIME_SLOT_EXPIRED` reason occurs.
 
 ## Selected speeds under weather
 
