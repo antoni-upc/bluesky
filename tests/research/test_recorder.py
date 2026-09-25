@@ -132,6 +132,8 @@ def test_recorder_streams_and_resets_without_retaining_rows(tmp_path, monkeypatc
     assert metadata['sample_intervals_s'] == []
     assert metadata['base_timestep_s'] == 0.05
     assert metadata['scenario'] == 'recorder-test'
+    from bluesky.plugins.recorder.streaming import RUN_SETTINGS
+    assert tuple(metadata['run_settings']) == RUN_SETTINGS
     effective = metadata['effective_envelope'][0]
     assert effective['configuration_mode'] == 'CRUISE'
     assert effective['configuration'] == 'CR'
@@ -266,3 +268,16 @@ def test_recorder_reuses_its_flight_bounds_for_lateral_bounds(tmp_path, monkeypa
     # the finalisation snapshot at stop() evaluates its own bounds once.
     assert calls == {'flight': 1, 'lateral': ['AP']}
     recorder.stop()
+
+
+def test_run_settings_snapshot_is_plain_and_null_for_absent_plugins(monkeypatch):
+    from bluesky.plugins.recorder.streaming import RUN_SETTINGS, _run_settings
+    monkeypatch.setattr(bs.settings, 'fms_speed_constraint_altitude', 'WAYPOINT', raising=False)
+    monkeypatch.setattr(bs.settings, 'era5_pressure_levels', (100, 1000), raising=False)
+    monkeypatch.delattr(bs.settings, 'pybada_memoisation', raising=False)
+    snapshot = _run_settings()
+    assert tuple(snapshot) == RUN_SETTINGS
+    assert snapshot['fms_speed_constraint_altitude'] == 'WAYPOINT'
+    assert snapshot['era5_pressure_levels'] == [100, 1000]
+    assert snapshot['pybada_memoisation'] is None
+    json.dumps(snapshot)

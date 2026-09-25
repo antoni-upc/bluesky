@@ -79,6 +79,23 @@ UNITS = {
     'maximum_load_factor': '1', 'maximum_bank_angle_deg': 'deg'}
 
 
+# Settings that change how a run behaves but need not appear in its scenario.
+# Settings of plugins that are not installed are recorded as null.
+RUN_SETTINGS = (
+    'fms_speed_constraint_altitude', 'casmach_threshold',
+    'meteo_strict', 'meteo_below_domain_policy', 'meteo_time_autoupdate',
+    'meteo_time_interpolation', 'meteo_time_hold', 'era5_region', 'era5_pressure_levels',
+    'pybada_strict', 'pybada_speed_schedule', 'pybada_memoisation')
+
+
+def _run_settings():
+    def plain(value):
+        if isinstance(value, (list, tuple)):
+            return [plain(item) for item in value]
+        return value if isinstance(value, (bool, int, float, str)) or value is None else str(value)
+    return {name: plain(getattr(bs.settings, name, None)) for name in RUN_SETTINGS}
+
+
 def _finite(value):
     try:
         return value if np.isfinite(value) else ''
@@ -345,6 +362,7 @@ class StreamingRecorder:
             'csv': str(self.path), 'python': platform.python_version(),
             'base_timestep_s': float(bs.sim.simdt),
             'dependencies': versions,
+            'run_settings': _run_settings(),
             'scenario': stack.get_scenname(),
             'sample_intervals_s': sorted(self.sample_intervals),
             'atmosphere_sources': sources, 'dataset_times': dataset_times,
