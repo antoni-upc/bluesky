@@ -1071,6 +1071,9 @@ class Route(Base):
         bs.traf.ap.ComputeVNAV(acidx, acrte.wptoalt[wpidx], acrte.wpxtoalt[wpidx],\
                                     acrte.wptorta[wpidx],acrte.wpxtorta[wpidx])
 
+        bs.traf.actwp.nextspdalt[acidx] = acrte.wpalt[wpidx]
+        bs.traf.actwp.prevspd[acidx] = -999.  # DIRECT starts a new leg sequence
+
         # If there is a speed specified, process it
         if acrte.wpspd[wpidx]>0.:
             # Set target speed for autopilot
