@@ -10,7 +10,7 @@ from bluesky.plugins.pybada.envelope import (
     EnvelopeStatus, FlightBounds, LateralBounds, VerticalBounds,
     evaluate_flight, evaluate_lateral, evaluate_mass, evaluate_vertical, expand_checks, mass_bounds,
     parse_checks)
-from bluesky.plugins.pybada.performance import PyBadaTEM
+from bluesky.plugins.pybada.performance import PyBadaTEM, initial_mass
 from bluesky.plugins.pybada.model import EvaluationError
 from bluesky.traffic.quality import quality_events as neutral_quality_events
 
@@ -86,6 +86,16 @@ def test_profiles_custom_validation_and_bounds():
         parse_checks(('NOT_A_CHECK',))
     assert mass_bounds(SimpleNamespace(OEW=4.0, MTOW=8.0)).known
     assert not mass_bounds(SimpleNamespace(OEW=9.0, MTOW=8.0)).known
+
+
+def test_initial_mass_is_reference_mass_clamped_to_mass_bounds():
+    # BADA 4.2 EMB-190LR: the reference mass exceeds the maximum take-off mass.
+    assert initial_mass(SimpleNamespace(OEW=27_737.0, MREF=51_800.0, MTOW=50_300.0)) == 50_300.0
+    assert initial_mass(SimpleNamespace(OEW=40_000.0, MREF=30_000.0, MTOW=80_000.0)) == 40_000.0
+    assert initial_mass(SimpleNamespace(OEW=43_700.0, MREF=78_000.0, MTOW=78_000.0)) == 78_000.0
+    assert initial_mass(SimpleNamespace(OEW=40_000.0, MTOW=80_000.0)) == 40_000.0
+    # Unknown bounds keep the unclamped reference mass for the model to report.
+    assert initial_mass(SimpleNamespace(MREF=51_800.0)) == 51_800.0
 
 
 def test_mass_policy_matrix_is_transactional_and_isolated(monkeypatch):
