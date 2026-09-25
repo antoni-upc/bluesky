@@ -212,6 +212,14 @@ pyBADA again. Failures are not stored. Results are therefore unchanged; only
 repeated calls, such as the recorder sampling the state the next step then
 evaluates, are skipped.
 
+The store belongs to the model adapter, which all aircraft of one BADA type
+share, so aircraft in bit-identical states also reuse each other's results.
+In ordinary traffic this almost never happens (mass changes every step), but
+a benchmark built from identical copies of one flight, created at the same
+place and time, evaluates each envelope once for all copies and understates
+the per-aircraft cost. Give benchmark copies distinct states, e.g. staggered
+departures and slightly different masses.
+
 The recorder is optional and does not influence envelope or simulation
 behaviour. When active it writes:
 
