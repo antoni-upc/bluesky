@@ -4,7 +4,7 @@ import numpy as np
 from collections.abc import Collection
 import bluesky as bs
 from bluesky import stack
-from bluesky.tools import geo
+from bluesky.tools import aero, geo
 from bluesky.tools.misc import degto180
 from bluesky.tools.position import txt2pos
 from bluesky.tools.aero import ft, nm, fpm, vcasormach2tas, vcas2tas, tas2cas, cas2tas, g0
@@ -15,7 +15,11 @@ from .route import Route
 from inspect import stack as callstack
 from bluesky.tools.datalog import crelog
 
-bs.settings.set_variable_defaults(fms_dt=10.5)
+# fms_speed_constraint_altitude: altitude at which the next waypoint's CAS/Mach is
+# compared with the current leg's speed to anticipate the speed change.
+# CURRENT (original behaviour) uses the aircraft's altitude; WAYPOINT uses the
+# waypoint's altitude, so a CAS/Mach crossover needs no anticipation.
+bs.settings.set_variable_defaults(fms_dt=10.5, fms_speed_constraint_altitude='CURRENT')
 
 
 class Autopilot(Entity, replaceable=True):
@@ -142,6 +146,7 @@ class Autopilot(Entity, replaceable=True):
             # before getting the new data for the next waypoint
 
             # Get speed for next leg from the waypoint we pass now and set as active spd
+            bs.traf.actwp.prevspd[i] = bs.traf.actwp.spd[i]
             bs.traf.actwp.spd[i]    = bs.traf.actwp.nextspd[i]
             bs.traf.actwp.spdcon[i] = bs.traf.actwp.nextspd[i]
 
@@ -156,6 +161,7 @@ class Autopilot(Entity, replaceable=True):
                     lnavon, flyby, flyturn, turnrad, turnspd, turnhdgr, turnbank,\
                     bs.traf.actwp.next_qdr[i], bs.traf.actwp.swlastwp[i] =      \
                     self.route[i].getnextwp()  # [m] note: xtoalt,nextaltco are in meters
+                bs.traf.actwp.nextspdalt[i] = alt  # [m] <0 when the waypoint has no altitude
 
 
                 bs.traf.actwp.nextturnlat[i], bs.traf.actwp.nextturnlon[i], \
@@ -399,6 +405,8 @@ class Autopilot(Entity, replaceable=True):
                                       bs.traf.actwp.nextspd)
 #
         dxspdconchg = distaccel(bs.traf.tas, nexttas, np.where(nexttas > bs.traf.tas, accel, decel))
+        if speed_constraint_altitude() == 'WAYPOINT':
+            dxspdconchg = waypoint_speed_change_distance(accel, decel, dxspdconchg)
 
         qdrturn, dist2turn = geo.qdrdist(bs.traf.lat, bs.traf.lon,
                                         bs.traf.actwp.nextturnlat, bs.traf.actwp.nextturnlon)
@@ -461,6 +469,11 @@ class Autopilot(Entity, replaceable=True):
                                               justexitedturn))
         
         bs.traf.selspd = np.where(usecruisespd, self.cruisespd, bs.traf.selspd)
+
+        if speed_constraint_altitude() == 'WAYPOINT':
+            handover = np.where(usenextspdcon, bs.traf.actwp.spd, bs.traf.actwp.prevspd)
+            active = bs.traf.swvnavspd * bs.traf.swvnav * bs.traf.swlnav * np.logical_not(useturnspd)
+            bs.traf.selspd = crossover_speed(bs.traf.selspd, handover, bs.traf.alt, active)
 
         # Below crossover altitude: CAS=const, above crossover altitude: Mach = const
         self.tas = bs.traf.applied_tas(vcasormach2tas(bs.traf.selspd, bs.traf.alt),
@@ -904,6 +917,20 @@ class Autopilot(Entity, replaceable=True):
         
 
 
+    @stack.command(name='SPDCONALT')
+    def setspdconalt(self, mode: 'txt' = ''):
+        """ SPDCONALT [CURRENT/WAYPOINT]
+
+            Altitude at which VNAV compares the current leg's CAS/Mach with the
+            next waypoint's to anticipate the speed change (all aircraft).
+            Sets the fms_speed_constraint_altitude setting until changed."""
+        if not mode:
+            return True, f'SPDCONALT is {speed_constraint_altitude()}'
+        if mode.upper() not in ('CURRENT', 'WAYPOINT'):
+            return False, 'SPDCONALT: use CURRENT or WAYPOINT'
+        bs.settings.fms_speed_constraint_altitude = mode.upper()
+        return True, f'SPDCONALT set to {mode.upper()}'
+
     @stack.command(name='SWTOC')
     def setswtoc(self, idx: 'acid', flag: 'bool' = None):
         """ SWTOC acid,[ON/OFF]
@@ -1022,6 +1049,48 @@ def calcvrta(v0, dx, deltime, trafax):
         vtarg = vlst[0]
 
     return vtarg
+
+def speed_constraint_altitude():
+    mode = str(bs.settings.fms_speed_constraint_altitude).upper()
+    if mode not in ('CURRENT', 'WAYPOINT'):
+        raise ValueError(f'fms_speed_constraint_altitude must be CURRENT or WAYPOINT, not {mode}')
+    return mode
+
+
+def waypoint_speed_change_distance(accel, decel, current):
+    """Speed-change anticipation distance with both speeds taken at the waypoint altitude.
+
+    The active leg's CAS/Mach and the next waypoint's CAS/Mach are converted to
+    TAS at the altitude of the waypoint where the change applies, so a CAS/Mach
+    crossover (e.g. 310 kt to M0.78 at FL284) needs no anticipation. The
+    atmosphere is only sampled at the aircraft, so these conversions use ISA.
+    Aircraft without a leg speed, next speed or waypoint altitude keep ``current``.
+    """
+    actwp = bs.traf.actwp
+    known = (actwp.nextspdalt >= 0.0) & (actwp.nextspd > 0.0) & (actwp.spd > 0.0)
+    alt = np.where(known, actwp.nextspdalt, bs.traf.alt)
+    holdtas = vcasormach2tas(np.where(known, actwp.spd, 1.0), alt)
+    nexttas = vcasormach2tas(np.where(known, actwp.nextspd, 1.0), alt)
+    dx = distaccel(holdtas, nexttas, np.where(nexttas > holdtas, accel, decel))
+    return np.where(known, dx, current)
+
+
+def crossover_speed(selected, handover, alt, active):
+    """CAS/Mach crossover between a leg speed and the speed it takes over from.
+
+    Where one of the two is a CAS and the other a Mach number, fly whichever
+    gives the lower TAS at the current altitude, keeping its representation:
+    a 310 kt/M0.78 climb holds 310 kt until M0.78 is reached and a M0.78/300 kt
+    descent holds M0.78 until 300 kt is reached, wherever the aircraft passes
+    the waypoint. Speeds of one type, or a missing speed, are left unchanged.
+    """
+    mach_sel = selected < aero.casmach_thr
+    mach_hand = handover < aero.casmach_thr
+    pair = active & (selected > 0.0) & (handover > 0.0) & (mach_sel != mach_hand)
+    lower = vcasormach2tas(np.where(pair, handover, 1.0), alt) < \
+        vcasormach2tas(np.where(pair, selected, 1.0), alt)
+    return np.where(pair & lower, handover, selected)
+
 
 def distaccel(v0,v1,axabs):
     """Calculate distance travelled during acceleration/deceleration
