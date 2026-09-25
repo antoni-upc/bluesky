@@ -67,13 +67,43 @@ both its path and version; loading the plugin with no traffic may defer that
 selection. Dataset versions are passed through to pyBADA without a
 plugin-maintained allowlist. New aircraft use `TEM` dynamics by default.
 
+### Guidance settings
+
+| Setting                         | Default   | Meaning                                                                                                  |
+|---------------------------------|-----------|----------------------------------------------------------------------------------------------------------|
+| `fms_speed_constraint_altitude` | `CURRENT` | Altitude at which VNAV compares the current leg's CAS/Mach with the next waypoint's to anticipate a speed change. |
+
+Waypoint speeds are FROM-speeds: guidance starts the change before the
+waypoint so the new speed is reached there. With `CURRENT` (original BlueSky
+behaviour) both speeds are converted to TAS at the aircraft's altitude, so a
+climb at 310 kt toward a M0.78 crossover waypoint at FL284 sees M0.78 as a
+436 kt CAS target at 12,000 ft and accelerates towards it from the start of the
+leg. `WAYPOINT` converts both at the waypoint's altitude, where the crossover
+needs almost no change; the same applies to the Mach-to-CAS handover in
+descent. Waypoints without an altitude, and legs without a current or next
+speed, keep the `CURRENT` computation. These conversions use ISA because the
+atmosphere is only sampled at the aircraft.
+
+`WAYPOINT` also switches between CAS and Mach at the crossover altitude rather
+than at the waypoint. When a leg's speed and the speed it takes over from are
+of different types, guidance flies whichever gives the lower TAS at the current
+altitude: a 310 kt/M0.78 climb holds 310 kt until M0.78 is reached, and a
+M0.78/300 kt descent holds M0.78 until 300 kt is reached, even if the aircraft
+passes the waypoint above or below the planned altitude. The selected value
+keeps its CAS or Mach representation, so the performance model's speed law
+follows the same switch.
+
+`SPDCONALT [CURRENT|WAYPOINT]` sets the mode from a scenario. The setting
+applies to every performance model; the default keeps the plugin-disabled
+baseline identical to upstream.
+
 ### Weather settings
 
 The exact weather settings, defaults, accepted values, and command equivalents
 are maintained in
 [`README-weather.md`](../nwp-meteo/README-weather.md#settings-reference).
 They cover `meteo_strict`, `meteo_below_domain_policy`,
-`meteo_time_autoupdate`, `meteo_time_interpolation`, `era5_cache_path`,
+`meteo_time_autoupdate`, `meteo_time_interpolation`, `meteo_time_hold`, `era5_cache_path`,
 `era5_region`, `era5_pressure_levels`, `gfs_cache_path`, `windgfs_source`, and
 `windgfs_url`.
 
@@ -144,7 +174,8 @@ interval and records both timestamps and the blend fraction as provenance.
   bounding box with the command of the same name. `WINDGFS lat0,lon0,lat1,lon1`
   derives its cycle from simulation UTC; append `YYYYMMDD,00|06|12|18` to
   select an explicit, reproducible analysis cycle. `METEOCONFIG` inspects or
-  changes `STRICT`, `BELOW`, `TIMEUPDATE`, and `INTERPOLATION`;
+  changes `STRICT`, `BELOW`, `TIMEUPDATE`, `INTERPOLATION`, and `HOLD` (one
+  fixed field for the whole run);
   `METEOSTATUS lat,lon,alt` inspects one provider sample. Full syntax is in the
   [weather guide](../nwp-meteo/README-weather.md#runtime-commands).
 - `PLUGIN LOAD RESEARCHRECORDER`, then
