@@ -14,7 +14,8 @@ bs.settings.set_variable_defaults(
     meteo_strict=False,
     meteo_below_domain_policy='REJECT',
     meteo_time_autoupdate=True,
-    meteo_time_interpolation=False)
+    meteo_time_interpolation=False,
+    meteo_time_hold=False)
 
 
 BELOW_DOMAIN_POLICIES = {'REJECT', 'ISA', 'ISA_ANCHORED'}
@@ -112,6 +113,8 @@ class MeteorologyProvider(WindSim):
         """
         if utc is None or getattr(self, 'request_bounds', None) is None:
             return
+        if bs.settings.meteo_time_hold and self.cube is not None:
+            return  # HOLD keeps the loaded dataset for the rest of the run
         slot = self.desired_slot(utc)
         # An expired or unavailable slot is not retried: clear() resamples the
         # traffic atmosphere, which would otherwise re-enter this method.
@@ -246,7 +249,8 @@ class MeteorologyProvider(WindSim):
                 f'Meteorology: strict={self.strict} '
                 f'below={self.below_domain_policy} '
                 f'time_autoupdate={bool(bs.settings.meteo_time_autoupdate)} '
-                f'time_interpolation={bool(bs.settings.meteo_time_interpolation)}')
+                f'time_interpolation={bool(bs.settings.meteo_time_interpolation)} '
+                f'time_hold={bool(bs.settings.meteo_time_hold)}')
         option = option.upper()
         if option == 'BELOW':
             try:
@@ -264,7 +268,13 @@ class MeteorologyProvider(WindSim):
             self.strict = enabled
         elif option == 'TIMEUPDATE':
             bs.settings.meteo_time_autoupdate = enabled
+        elif option == 'HOLD':
+            if enabled and bs.settings.meteo_time_interpolation:
+                return False, 'METEOCONFIG HOLD cannot be combined with temporal interpolation'
+            bs.settings.meteo_time_hold = enabled
         elif option == 'INTERPOLATION':
+            if enabled and bs.settings.meteo_time_hold:
+                return False, 'METEOCONFIG INTERPOLATION cannot be combined with HOLD'
             bs.settings.meteo_time_interpolation = enabled
             if not enabled:
                 self.next_cube = None
@@ -282,7 +292,8 @@ class MeteorologyProvider(WindSim):
                     return False, (f'{self.source}: temporal interpolation not enabled; '
                                    f'next slot unavailable: {message}')
         else:
-            return False, 'METEOCONFIG option must be STRICT, BELOW, TIMEUPDATE, or INTERPOLATION'
+            return False, ('METEOCONFIG option must be STRICT, BELOW, TIMEUPDATE, '
+                           'INTERPOLATION, or HOLD')
         return self.configure()
 
     @stack.command(name='METEOSTATUS')

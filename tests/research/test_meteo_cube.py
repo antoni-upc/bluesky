@@ -493,6 +493,43 @@ def test_cache_probe_does_not_collide_with_a_concurrent_start(monkeypatch, tmp_p
     assert sorted(path.name for path in tmp_path.iterdir()) == ['.write-capability']
 
 
+def test_hold_keeps_the_loaded_slot_for_the_rest_of_the_run(monkeypatch):
+    provider, start = active_provider(monkeypatch)
+    monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', True)
+    monkeypatch.setattr('bluesky.settings.meteo_time_hold', True)
+    loaded = []
+    monkeypatch.setattr(provider, 'load', lambda *bounds, slot=None: loaded.append(slot),
+                        raising=False)
+    current = provider.cube
+    provider._ensure_time_slot(start + timedelta(hours=7, minutes=30))
+    sample = provider.get_atmosphere([10.5], [179.5], [500.0], start + timedelta(hours=7))
+    assert loaded == [] and provider.cube is current
+    assert provider.active_slot == start.isoformat() and not provider.expired_slot
+    assert sample.valid[0]
+
+
+def test_hold_off_keeps_the_existing_slot_policy(monkeypatch):
+    provider, start = active_provider(monkeypatch)
+    monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', False)
+    monkeypatch.setattr('bluesky.settings.meteo_time_hold', False)
+    monkeypatch.setattr(provider, 'strict', False)
+    provider._ensure_time_slot(start + timedelta(hours=1))
+    assert provider.expired_slot == (start + timedelta(hours=1)).isoformat()
+
+
+def test_hold_command_and_its_exclusion_with_interpolation(monkeypatch):
+    provider, _ = active_provider(monkeypatch)
+    monkeypatch.setattr('bluesky.settings.meteo_time_hold', False)
+    success, message = provider.configure('HOLD', 'ON')
+    assert success and 'time_hold=True' in message and bs.settings.meteo_time_hold
+    success, message = provider.configure('INTERPOLATION', 'ON')
+    assert not success and 'HOLD' in message and not bs.settings.meteo_time_interpolation
+    assert provider.configure('HOLD', 'OFF')[0] and not bs.settings.meteo_time_hold
+    monkeypatch.setattr('bluesky.settings.meteo_time_interpolation', True)
+    success, message = provider.configure('HOLD', 'ON')
+    assert not success and 'interpolation' in message and not bs.settings.meteo_time_hold
+
+
 def reentrant_traffic(monkeypatch, provider, utc):
     """Traffic whose atmosphere update resamples the provider, as Traffic does."""
     calls = []
@@ -509,6 +546,7 @@ def reentrant_traffic(monkeypatch, provider, utc):
 def test_strict_expiry_stops_once_instead_of_recursing(monkeypatch):
     provider, start = active_provider(monkeypatch)
     monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', False)
+    monkeypatch.setattr('bluesky.settings.meteo_time_hold', False)
     provider.strict = True
     later = start + timedelta(hours=1)
     calls = reentrant_traffic(monkeypatch, provider, later)
@@ -521,6 +559,7 @@ def test_strict_expiry_stops_once_instead_of_recursing(monkeypatch):
 def test_unavailable_next_slot_falls_back_once_instead_of_recursing(monkeypatch):
     provider, start = active_provider(monkeypatch)
     monkeypatch.setattr('bluesky.settings.meteo_time_autoupdate', True)
+    monkeypatch.setattr('bluesky.settings.meteo_time_hold', False)
     provider.strict = False
     later = start + timedelta(hours=1)
     attempts = []
