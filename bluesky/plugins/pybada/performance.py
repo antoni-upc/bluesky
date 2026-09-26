@@ -783,6 +783,19 @@ class PyBadaTEM(PerfBase):
         return (np.where(known, np.maximum(up, 0.0), native),
                 np.where(known, np.maximum(-down, 0.0), native))
 
+    def climb_rate_capability(self):
+        """Rated-thrust climb rate [m/s] from the last evaluation, per aircraft.
+
+        Aircraft without a known positive rated climb rate fall back to the
+        base implementation, so guidance keeps its own climb rate for them.
+        """
+        base = super().climb_rate_capability()
+        if not hasattr(self, 'model_rocd'):
+            return base
+        rocd = np.asarray(self.model_rocd, dtype=float)
+        known = np.isfinite(rocd) & (rocd > 0.0) & ~np.asarray(self.invalid, dtype=bool)
+        return np.where(known, rocd, base)
+
     def configure_bada_configuration(self, idx, mode):
         """Change one aircraft's BADA configuration source transactionally."""
         new_mode = parse_configuration_mode(mode)

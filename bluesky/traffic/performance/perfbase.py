@@ -61,6 +61,15 @@ class PerfBase(Entity, replaceable=True):
         """
         return self.axmax, self.axmax
 
+    def climb_rate_capability(self):
+        """Climb rate [m/s] each aircraft could fly now, for VNAV open climbs.
+
+        The default uses the model's vsmax where it sets a real limit and
+        NaN (unknown, so guidance keeps its own rate) otherwise.
+        """
+        vsmax = np.asarray(self.vsmax, dtype=float)
+        return np.where(vsmax < 1e5, vsmax, np.nan)
+
     @timed_function(name="performance", dt=settings.performance_dt, hook="preupdate")
     def update(self, dt=settings.performance_dt):
         """implement this method"""

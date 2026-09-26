@@ -19,7 +19,11 @@ from bluesky.tools.datalog import crelog
 # compared with the current leg's speed to anticipate the speed change.
 # CURRENT (original behaviour) uses the aircraft's altitude; WAYPOINT uses the
 # waypoint's altitude, so a CAS/Mach crossover needs no anticipation.
-bs.settings.set_variable_defaults(fms_dt=10.5, fms_speed_constraint_altitude='CURRENT')
+# fms_climb_mode: STEEPNESS (original behaviour) climbs along the default VNAV
+# gradient; OPEN climbs at the aircraft's climb capability, as an open climb
+# at climb thrust does, never slower than the gradient needed for the constraint.
+bs.settings.set_variable_defaults(fms_dt=10.5, fms_speed_constraint_altitude='CURRENT',
+                                  fms_climb_mode='STEEPNESS')
 
 
 class Autopilot(Entity, replaceable=True):
@@ -363,6 +367,9 @@ class Autopilot(Entity, replaceable=True):
 
         self.vnavvs  = np.where(self.swvnavvs, bs.traf.actwp.vs, self.vnavvs)
         #was: self.vnavvs  = np.where(self.swvnavvs, self.steepness * bs.traf.gs, self.vnavvs)
+        if climb_mode() == 'OPEN':
+            self.vnavvs = open_climb_rate(self.vnavvs, self.swvnavvs, bs.traf.alt,
+                                          bs.traf.actwp.nextaltco, bs.traf.perf.climb_rate_capability())
 
         # self.vs = np.where(self.swvnavvs, self.vnavvs, self.vsdef * bs.traf.limvs_flag)
         # for VNAV use fixed V/S and change start of descent
@@ -931,6 +938,20 @@ class Autopilot(Entity, replaceable=True):
         bs.settings.fms_speed_constraint_altitude = mode.upper()
         return True, f'SPDCONALT set to {mode.upper()}'
 
+    @stack.command(name='VNAVCLIMB')
+    def setvnavclimb(self, mode: 'txt' = ''):
+        """ VNAVCLIMB [STEEPNESS/OPEN]
+
+            VNAV climb rate for all aircraft: STEEPNESS follows the default
+            climb gradient, OPEN climbs at each aircraft's climb capability.
+            Sets the fms_climb_mode setting until changed."""
+        if not mode:
+            return True, f'VNAVCLIMB is {climb_mode()}'
+        if mode.upper() not in ('STEEPNESS', 'OPEN'):
+            return False, 'VNAVCLIMB: use STEEPNESS or OPEN'
+        bs.settings.fms_climb_mode = mode.upper()
+        return True, f'VNAVCLIMB set to {mode.upper()}'
+
     @stack.command(name='SWTOC')
     def setswtoc(self, idx: 'acid', flag: 'bool' = None):
         """ SWTOC acid,[ON/OFF]
@@ -1073,6 +1094,27 @@ def waypoint_speed_change_distance(accel, decel, current):
     nexttas = vcasormach2tas(np.where(known, actwp.nextspd, 1.0), alt)
     dx = distaccel(holdtas, nexttas, np.where(nexttas > holdtas, accel, decel))
     return np.where(known, dx, current)
+
+
+def climb_mode():
+    mode = str(bs.settings.fms_climb_mode).upper()
+    if mode not in ('STEEPNESS', 'OPEN'):
+        raise ValueError(f'fms_climb_mode must be STEEPNESS or OPEN, not {mode}')
+    return mode
+
+
+def open_climb_rate(vnavvs, active, alt, target_alt, capability):
+    """VNAV climb rate for an open climb.
+
+    While VNAV climbs towards a higher altitude constraint, request the
+    aircraft's climb capability, but never less than the gradient-based rate
+    VNAV computed (which covers reaching the constraint in time). Aircraft
+    with unknown capability, level or descending keep the VNAV rate.
+    """
+    climbing = active & (vnavvs > 0.0) & (alt < target_alt - 0.5)
+    capability = np.asarray(capability, dtype=float)
+    usable = climbing & np.isfinite(capability) & (capability > 0.0)
+    return np.where(usable, np.maximum(vnavvs, np.where(usable, capability, 0.0)), vnavvs)
 
 
 def crossover_speed(selected, handover, alt, active):
