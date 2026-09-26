@@ -72,6 +72,7 @@ plugin-maintained allowlist. New aircraft use `TEM` dynamics by default.
 | Setting                         | Default   | Meaning                                                                                                  |
 |---------------------------------|-----------|----------------------------------------------------------------------------------------------------------|
 | `fms_speed_constraint_altitude` | `CURRENT` | Altitude at which VNAV compares the current leg's CAS/Mach with the next waypoint's to anticipate a speed change. |
+| `fms_climb_mode`                | `STEEPNESS` | VNAV climb rate: the default gradient (`STEEPNESS`) or the aircraft's climb capability (`OPEN`). |
 
 Waypoint speeds are FROM-speeds: guidance starts the change before the
 waypoint so the new speed is reached there. With `CURRENT` (original BlueSky
@@ -96,6 +97,18 @@ follows the same switch.
 `SPDCONALT [CURRENT|WAYPOINT]` sets the mode from a scenario. The setting
 applies to every performance model; the default keeps the plugin-disabled
 baseline identical to upstream.
+
+VNAV climbs towards a higher altitude constraint at the default gradient,
+3,000 ft per 10 NM of ground distance (`STEEPNESS`), or faster if the
+constraint requires it. A TEM aircraft under `SPEED` priority never climbs
+faster than guidance asks, so it then climbs below its rated-thrust rate even
+with thrust to spare. `VNAVCLIMB OPEN` (setting `fms_climb_mode`) requests
+each aircraft's climb capability instead, as an open climb at climb thrust
+does, and never less than the gradient rate: PYBADATEM reports its
+rated-thrust climb rate from the last evaluation, other models their `vsmax`
+limit where they set one; aircraft without a known capability keep the
+gradient. `VNAVCLIMB [STEEPNESS|OPEN]` sets it from a scenario, for all
+aircraft; the default `STEEPNESS` is the original behaviour.
 
 ### Weather settings
 

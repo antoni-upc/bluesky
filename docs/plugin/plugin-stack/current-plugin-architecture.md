@@ -117,7 +117,9 @@ aircraft can deliver, which guidance uses for speed-change anticipation and
 RTA instead of the generic `axmax`. With `SPDCONALT WAYPOINT` (default
 `CURRENT`, the original behaviour) that anticipation compares speeds at the
 waypoint's altitude, and CAS/Mach changes switch at the crossover altitude
-rather than at the waypoint; see
+rather than at the waypoint; with `VNAVCLIMB OPEN` (default `STEEPNESS`)
+VNAV climbs request the aircraft's reported climb capability instead of the
+default gradient; see
 [`research-plugins.md`](research-plugins.md#guidance-settings). Evaluation
 failures still hold a strict run. Applied thrust drives both fuel flow and the recorded one-step response:
 
