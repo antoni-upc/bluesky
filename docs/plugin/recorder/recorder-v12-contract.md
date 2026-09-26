@@ -214,7 +214,7 @@ The finalised JSON object has these top-level keys:
 | `python`             | Python version used by the process.                                                                                   |
 | `base_timestep_s`    | BlueSky base simulation timestep observed at finalization.                                                            |
 | `dependencies`       | Installed versions of `numpy`, `scipy`, `openap`, `pyBADA`, `netCDF4`, and `pygrib`; unavailable packages are `null`. |
-| `run_settings`       | Behaviour-changing settings at finalization (guidance speed-constraint mode, CAS/Mach threshold, weather policy, ERA5 region and levels, PyBADA strictness, schedule, memoisation); `null` when the owning plugin is absent. |
+| `run_settings`       | Behaviour-changing settings at finalization (guidance speed-constraint and climb modes, CAS/Mach threshold, weather policy, ERA5 region and levels, PyBADA strictness, schedule, memoisation); `null` when the owning plugin is absent. |
 | `scenario`           | BlueSky scenario name at finalization.                                                                                |
 | `sample_intervals_s` | Sorted distinct recorder intervals observed while sampling.                                                           |
 | `atmosphere_sources` | Sorted distinct non-empty sources observed in rows.                                                                   |

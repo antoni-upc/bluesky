@@ -82,7 +82,7 @@ UNITS = {
 # Settings that change how a run behaves but need not appear in its scenario.
 # Settings of plugins that are not installed are recorded as null.
 RUN_SETTINGS = (
-    'fms_speed_constraint_altitude', 'casmach_threshold',
+    'fms_speed_constraint_altitude', 'fms_climb_mode', 'casmach_threshold',
     'meteo_strict', 'meteo_below_domain_policy', 'meteo_time_autoupdate',
     'meteo_time_interpolation', 'meteo_time_hold', 'era5_region', 'era5_pressure_levels',
     'pybada_strict', 'pybada_speed_schedule', 'pybada_memoisation')
